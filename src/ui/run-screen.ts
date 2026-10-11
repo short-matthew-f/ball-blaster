@@ -1,8 +1,9 @@
 // Run screen: fixed-step sim driving, hit-stop, aim input, HUD overlay.
 import type { RunResult, RunState, Vec } from '../core/types';
-import { CANCEL_RADIUS, FAST_FORWARD_MULT, MAX_PULL, SIM_DT } from '../core/types';
+import { CANCEL_RADIUS, FAST_FORWARD_MULT, MAX_PULL, SIM_DT, TABLE } from '../core/types';
 import { PALETTE } from '../render/palette';
 import { drawHud, drawWorld } from '../render/renderer';
+import { stageById } from '../core/tuning';
 import { Fx } from '../render/fx';
 import { drawText } from '../render/text';
 import { Buttons, inRect } from './widgets';
@@ -30,6 +31,7 @@ export class RunScreen implements Screen {
   start(state: RunState): void {
     this.state = state;
     this.fx.clear();
+    this.fx.bossName = stageById(state.stage).boss.name;
     this.acc = 0;
     this.ff = false;
     this.overTimer = 0;
@@ -129,9 +131,14 @@ export class RunScreen implements Screen {
     if (!main) return;
     const len = Math.hypot(pull.x, pull.y);
     const bx = Math.round(main.x), by = Math.round(main.y);
+    const ty = Math.max(32, by - 15);
+    const tx = Math.max(TABLE.x + 13, Math.min(TABLE.x + TABLE.w - 24, bx));
     if (len <= CANCEL_RADIUS) {
       ctx.fillStyle = P['3'];
       for (let a = 0; a < 8; a++) ctx.fillRect(Math.round(bx + Math.cos(a * 0.785) * 8), Math.round(by + Math.sin(a * 0.785) * 8), 1, 1);
+      ctx.globalAlpha = 0.5;
+      drawText(ctx, 'CANCEL', tx, ty, { align: 'center', color: P['3'], shadow: P['0'] });
+      ctx.globalAlpha = 1;
       return;
     }
     const power = Math.min(1, len / MAX_PULL);
@@ -172,7 +179,17 @@ export class RunScreen implements Screen {
     ctx.fillStyle = color;
     ctx.fillRect(ex, ey, 2, 2);
     // power pips near the ball
-    drawText(ctx, `${Math.round(power * 100)}%`, bx, by - 14, { align: 'center', color, shadow: P['0'] });
+    const lit = Math.max(1, Math.round(power * 5));
+    for (let i = 0; i < 5; i++) {
+      const px = tx - 12 + i * 5;
+      ctx.fillStyle = P['0'];
+      ctx.fillRect(px - 1, ty - 1, 5, 5);
+      ctx.fillStyle = i < lit ? color : P['2'];
+      ctx.fillRect(px, ty, 3, 3);
+    }
+    ctx.globalAlpha = 0.5;
+    drawText(ctx, `-${s.stats.releaseCost}`, tx + 15, ty - 1, { color: P.B, shadow: P['0'] });
+    ctx.globalAlpha = 1;
   }
 
   down(x: number, y: number): void {

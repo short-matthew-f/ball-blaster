@@ -121,7 +121,7 @@ export class ShopScreen implements Screen {
 
     // tabs
     TABS.forEach((t, i) => {
-      btns.push({ id: `tab:${t}`, x: i * 30, y: 34, w: 29, h: 12, label: t.toUpperCase(), style: t === 'emerald' ? 'green' : 'gray', active: t === this.tab });
+      btns.push({ id: `tab:${t}`, x: i * 30, y: 34, w: 29, h: 12, ...(t === 'emerald' ? { icon: 'emerald' } : { label: t.toUpperCase() }), style: 'gray', active: t === this.tab });
     });
 
     // ball selector
@@ -207,8 +207,8 @@ export class ShopScreen implements Screen {
     ctx.fillRect(b.x, b.y, NODE, NODE);
     ctx.fillStyle = st === 'locked' ? P['0'] : n.currency === 'emerald' ? P.g : P['1'];
     ctx.fillRect(b.x + 1, b.y + 1, NODE - 2, NODE - 2);
-    drawSprite(ctx, n.icon, b.x + NODE / 2, b.y + 11, { alpha: st === 'locked' ? 0.35 : 1 });
-    if (st === 'locked') drawSprite(ctx, 'icon_lock', b.x + NODE / 2 + 6, b.y + 18);
+    drawSprite(ctx, n.icon, b.x + NODE / 2, b.y + 11, { scale: 2, alpha: st === 'locked' ? 0.35 : 1 });
+    if (st === 'locked') drawSprite(ctx, 'icon_lock', b.x + NODE - 7, b.y + 17);
     // level pips / bar
     const py = b.y + NODE - 6;
     if (n.maxLevel <= 6) {

@@ -94,6 +94,12 @@ export class Sfx {
 
   handle(events: FxEvent[]): void {
     for (const e of events) {
+      if ((e as { t: string }).t === 'boardClear') {
+        if (!this.gate('clear')) continue;
+        [659, 784, 988, 1319].forEach((f, i) => this.tone(f, i === 3 ? 0.4 : 0.1, 'triangle', 0.18, 0, i * 0.07));
+        this.tone(1976, 0.5, 'sine', 0.06, 0, 0.25);
+        continue;
+      }
       switch (e.t) {
         case 'hit':
           if (e.killed || !this.gate('hit')) break;
@@ -147,9 +153,9 @@ export class Sfx {
           break;
         case 'bossArrive':
           if (!this.gate('boss')) break;
-          this.tone(60, 1.0, 'sawtooth', 0.35, 38);
-          this.tone(90, 0.8, 'square', 0.12, 45);
-          this.noise(0.7, 0.2, 'lowpass', 200);
+          this.tone(55, 0.9, 'sawtooth', 0.3, 40);
+          this.tone(82, 0.7, 'square', 0.1, 48);
+          this.noise(0.5, 0.18, 'lowpass', 180);
           break;
         case 'bossPhase':
           if (!this.gate('phase')) break;

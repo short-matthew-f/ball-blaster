@@ -79,11 +79,11 @@ describe('meta', () => {
       em.push(r.bossEmeralds);
       if (r.unlocked) { unlocks++; expect(r.unlocked).toBe('ice'); }
     }
-    expect(em).toEqual([3, 2, 1, 1, 1]);
+    expect(em).toEqual([5, 3, 2, 2, 1]);
     expect(unlocks).toBe(1);
     expect(sv.unlocked).toBe(1);
     expect(sv.cash).toBe(50);
-    expect(sv.emeralds).toBe(5 + 8);
+    expect(sv.emeralds).toBe(5 + 13);
     expect(sv.bossKills.felt).toBe(5);
     expect(sv.stats).toEqual({ runs: 5, kills: 20, shots: 15 });
     expect(sv.bestFill.felt).toBe(1);

@@ -10,7 +10,7 @@ import {
   type RunState,
   type Target,
 } from '../core/types';
-import { BALL_TYPES, SPIT_LIFE_CAP, TARGET_DEFS, stageById } from '../core/tuning';
+import { BALL_TYPES, SPIT_LIFE_CAP, STICKY_HOLD_SECONDS, STICKY_RELEASE_MULT, TARGET_DEFS, stageById } from '../core/tuning';
 import { refill, spend } from './energy';
 import { bossPhaseFx } from './boss';
 import { applyDamage, chainLightning } from './targets';
@@ -67,7 +67,12 @@ function hitTarget(s: RunState, b: Ball, t: Target, speed: number, fx: FxEvent[]
   const def = TARGET_DEFS[t.kind];
   let dmg: number;
   if (b.kind === 'main') {
-    const cost = s.stats.hitCost + def.drain + (bossPhaseFx(s).includes('drain') ? 1 : 0);
+    // A shielded boss takes no damage, so it only costs the flat hit cost (no drain, no drain-phase surcharge).
+    let cost = s.stats.hitCost;
+    if (!(t.kind === 'boss' && t.shielded)) {
+      cost += def.drain;
+      if (t.kind === 'boss' && bossPhaseFx(s).includes('drain')) cost += 1;
+    }
     spend(s, cost, b.x, b.y, fx);
     dmg = mainDamage(s, speed);
   } else if (b.kind === 'spat') {
@@ -83,8 +88,16 @@ function hitTarget(s: RunState, b: Ball, t: Target, speed: number, fx: FxEvent[]
       spawnSplit(s, b, fx);
     }
     if (s.stats.ballType === 'sticky') {
-      b.vx *= 0.3;
-      b.vy *= 0.3;
+      // Hold on the target's surface; release later along the reflected direction at reduced speed.
+      const rs = Math.hypot(b.vx, b.vy);
+      const k = rs > 1e-9 ? (speed * STICKY_RELEASE_MULT) / rs : 0;
+      b.stuck = STICKY_HOLD_SECONDS;
+      b.stuckVx = b.vx * k;
+      b.stuckVy = b.vy * k;
+      b.stuckTarget = t.id;
+      b.stuckDmg = dmg;
+      b.vx = 0;
+      b.vy = 0;
     }
   }
 }
@@ -193,8 +206,37 @@ function wallCollide(s: RunState, b: Ball, e: number, fx: FxEvent[]): void {
   void s;
 }
 
+/** Clear any sticky hold (new shot / stall guard). */
+export function unstick(b: Ball): void {
+  b.stuck = undefined;
+  b.stuckVx = undefined;
+  b.stuckVy = undefined;
+  b.stuckTarget = undefined;
+  b.stuckDmg = undefined;
+}
+
+/** Count down a sticky hold; on release, launch and hit the held target again (free: no energy cost). */
+function stickyStep(s: RunState, b: Ball, h: number, fx: FxEvent[]): void {
+  b.stuck = (b.stuck ?? 0) - h;
+  if (b.stuck > 1e-9) return;
+  const vx = b.stuckVx ?? 0;
+  const vy = b.stuckVy ?? 0;
+  const t = s.targets.find((x) => x.id === b.stuckTarget);
+  const dmg = b.stuckDmg ?? 0;
+  unstick(b);
+  b.vx = vx;
+  b.vy = vy;
+  if (t && !t.dead && dmg > 0) applyDamage(s, t, dmg, b.kind, fx, b);
+  if (Math.hypot(vx, vy) < STOP_SPEED) {
+    b.vx = 0;
+    b.vy = 0;
+    b.resting = true;
+  }
+}
+
 function collideBalls(a: Ball, b: Ball, fx: FxEvent[]): void {
   if (a.resting && b.resting) return;
+  if (a.stuck || b.stuck) return; // a held sticky ball is pinned to its target
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   const min = a.r + b.r;
@@ -232,6 +274,10 @@ export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
 
   for (const b of s.balls) {
     if (b.resting) continue;
+    if (b.stuck) {
+      stickyStep(s, b, h, fx);
+      continue;
+    }
     b.x += b.vx * h;
     b.y += b.vy * h;
     wallCollide(s, b, st.wallBounce, fx);
@@ -242,6 +288,11 @@ export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
       if (t.kind === 'boss' && bouncyBoss) e = 1.3;
       const sp = collideStatic(b, t.x, t.y, t.r, e);
       if (sp >= 0) hitTarget(s, b, t, sp, fx);
+      if (b.stuck) break;
+    }
+    if (b.stuck) {
+      wallCollide(s, b, st.wallBounce, fx);
+      continue;
     }
     for (const o of s.obstacles) {
       if (o.dead) continue;
@@ -258,7 +309,7 @@ export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
   }
 
   for (const b of s.balls) {
-    if (b.resting) continue;
+    if (b.resting || b.stuck) continue;
     const k = Math.max(0, 1 - st.friction * h);
     b.vx *= k;
     b.vy *= k;

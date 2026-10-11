@@ -1,6 +1,6 @@
 // Draws the run view (table, entities, HUD) from RunState. Read-only with respect to sim state.
 import type { RunState, Target } from '../core/types';
-import { TABLE, VIEW_H, VIEW_W } from '../core/types';
+import { BOSS_ZONE, TABLE, VIEW_H, VIEW_W } from '../core/types';
 import { stageById } from '../core/tuning';
 import { PALETTE } from './palette';
 import { drawSprite, spriteSize, WHITE } from './sprite-cache';
@@ -157,9 +157,29 @@ function drawTarget(ctx: CanvasRenderingContext2D, t: Target, stage: string, now
   }
 }
 
+/** Pulsing purple/red shimmer outline showing where the boss will land. */
+function drawBossZone(ctx: CanvasRenderingContext2D, now: number): void {
+  const { x, y, w, h } = BOSS_ZONE;
+  const pulse = 0.5 + 0.5 * Math.sin(now * 6);
+  ctx.globalAlpha = 0.06 + 0.1 * pulse;
+  ctx.fillStyle = P.M;
+  ctx.fillRect(x, y, w, h);
+  ctx.globalAlpha = 0.55 + 0.45 * pulse;
+  const ph = Math.floor(now * 12);
+  const px = (i: number, j: number, n: number): void => {
+    ctx.fillStyle = (n + ph) % 6 < 3 ? P.M : P.R;
+    ctx.fillRect(i, j, 1, 1);
+  };
+  let n = 0;
+  for (let i = 0; i < w; i++) { px(x + i, y, n); px(x + w - 1 - i, y + h - 1, n); n++; }
+  for (let j = 0; j < h; j++) { px(x + w - 1, y + j, n); px(x, y + h - 1 - j, n); n++; }
+  ctx.globalAlpha = 1;
+}
+
 /** Table contents. Call inside the shake translate. */
 export function drawWorld(ctx: CanvasRenderingContext2D, s: RunState, now: number): void {
   ctx.drawImage(getTableBg(), 0, 0);
+  if (s.bossPending && !s.bossSpawned) drawBossZone(ctx, now);
   for (const o of s.obstacles) {
     if (o.dead) continue;
     drawSprite(ctx, o.kind, o.x, o.y, o.flash > 0 ? { tint: WHITE } : {});

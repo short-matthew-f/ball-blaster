@@ -25,7 +25,7 @@ import type { Rng } from './rng';
 
 // ---------- Sim constants ----------
 export const MAX_PULL = 60; // px of drag for full power
-export const MAX_LAUNCH_SPEED = 400; // px/s
+export const MAX_LAUNCH_SPEED = 480; // px/s
 export const CANCEL_RADIUS = 6; // release within this drag length = cancel, no cost
 export const STOP_SPEED = 6; // px/s; below this a ball snaps to rest
 export const SPEED_DMG_REF = 200; // px/s per +speedDamage
@@ -106,6 +106,13 @@ export interface Ball {
   resting: boolean;
   /** True once this ball has hit a wall during the current shot (bank-shot combo). */
   banked: boolean;
+  /** Sticky ball: seconds left held on a target (absent/0 = not stuck). Ball stays non-resting while held. */
+  stuck?: number;
+  /** Sticky ball: velocity to release with, target to hit again, and that hit's damage. */
+  stuckVx?: number;
+  stuckVy?: number;
+  stuckTarget?: number;
+  stuckDmg?: number;
 }
 
 export type TargetKind =
@@ -215,6 +222,8 @@ export interface RunState {
   combo: ComboTally;
   bestCombo: number;
   splitUsed: boolean;
+  /** True once the board-clear bonus fired this shot (reset on shoot). */
+  boardCleared?: boolean;
   spitTimer: number;
   respawnAccum: number;
   /** Countdown for enemy-phase animation. */
@@ -273,7 +282,9 @@ export type FxEvent =
   | { t: 'shrine'; x: number; y: number }
   | { t: 'chest'; x: number; y: number; cash: number }
   | { t: 'shoot'; power: number }
-  | { t: 'runOver' };
+  | { t: 'runOver' }
+  /** The last regular target on the board died during a shot (once per shot). Board refills next enemy phase. */
+  | { t: 'boardClear'; x: number; y: number };
 
 // ---------- Derived per-run stats (meta -> sim contract) ----------
 

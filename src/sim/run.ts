@@ -18,7 +18,7 @@ import {
 } from '../core/types';
 import { BALL_TYPES, stageById } from '../core/tuning';
 import { Rng } from '../core/rng';
-import { physicsStep, spawnSpat } from './physics';
+import { physicsStep, spawnSpat, unstick } from './physics';
 import { emptyCombo, evaluateCombos } from './combos';
 import { bossEnemyPhase, spawnBoss } from './boss';
 import { liveRegulars, poolKind, regularCap, spawnObstacle, spawnRegular } from './spawn';
@@ -98,10 +98,12 @@ export function shoot(s: RunState, pull: Vec): boolean {
   b.vy = (pull.y / len) * speed;
   b.resting = false;
   b.banked = false;
+  unstick(b);
   s.energy -= s.stats.releaseCost;
   s.shots++;
   s.combo = emptyCombo();
   s.splitUsed = false;
+  s.boardCleared = false;
   s.spitTimer = s.stats.spitInterval;
   s.resolveTime = 0;
   s.phase = 'resolve';
@@ -169,6 +171,7 @@ function resolveStep(s: RunState, h: number, fx: FxEvent[]): void {
       b.vx = 0;
       b.vy = 0;
       b.resting = true;
+      unstick(b);
     }
   }
   // Extra balls leave the table when they stop (or their life runs out).
@@ -192,6 +195,8 @@ function startEnemy(s: RunState, fx: FxEvent[]): void {
 
   const cap = regularCap(s);
   s.respawnAccum = Math.min(s.respawnAccum + s.stats.respawnPerTurn, Math.max(1, cap));
+  // Empty board (after any boss zone-clear): refill at least two targets right away.
+  if (liveRegulars(s) === 0) s.respawnAccum = Math.max(s.respawnAccum, Math.min(cap, 2));
   while (s.respawnAccum >= 1 && liveRegulars(s) < cap) {
     const t = spawnRegular(s, poolKind(s), true);
     if (!t) break;

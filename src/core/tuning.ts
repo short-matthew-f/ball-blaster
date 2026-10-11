@@ -23,7 +23,7 @@ export const BASE_STATS: RunStats = {
   bumperRefill: 3,
   killRefillChance: 0,
   killRefillAmount: 0,
-  bossRefillPct: 0,
+  bossRefillPct: 0.25,
   enemyCount: 3,
   respawnPerTurn: 0.5,
   aimPreview: 0,
@@ -61,16 +61,21 @@ export const BALL_TYPES = {
 } as const;
 
 export const SPIT_LIFE_CAP = 3;
-export const EMERALD_REPEAT_DECAY = 0.6; // reward = max(1, round(base * decay^priorKills))
+export const EMERALD_REPEAT_DECAY = 0.68; // reward = max(1, round(base * decay^priorKills)); felt 5 -> 5,3,2,2,1...
+/** Base refill (via the shared curve) when the last regular target on the board dies during a shot. */
+export const BOARD_CLEAR_REFILL = 4;
+/** Sticky ball: seconds held on a hit target, and release speed as a fraction of the impact speed. */
+export const STICKY_HOLD_SECONDS = 0.25;
+export const STICKY_RELEASE_MULT = 0.6;
 
 export const STAGES: StageDef[] = [
   {
     id: 'felt',
     index: 0,
     name: 'Felt Hall',
-    friction: 0.4,
-    rollDecel: 35,
-    wallBounce: 0.85,
+    friction: 0.6,
+    rollDecel: 70,
+    wallBounce: 0.75,
     openingBoard: ['basic', 'basic', 'armored'],
     pool: [
       { kind: 'basic', weight: 50 },
@@ -83,8 +88,8 @@ export const STAGES: StageDef[] = [
     densityCap: 8,
     hpScale: 1,
     cashScale: 1,
-    meterKills: 10,
-    emeraldReward: 3,
+    meterKills: 14,
+    emeraldReward: 5,
     boss: {
       name: 'Old Eight',
       hp: 36,
@@ -99,8 +104,8 @@ export const STAGES: StageDef[] = [
     id: 'ice',
     index: 1,
     name: 'Ice Cavern',
-    friction: 0.25,
-    rollDecel: 25,
+    friction: 0.4,
+    rollDecel: 45,
     wallBounce: 0.92,
     openingBoard: ['basic', 'armored', 'volatile', 'basic'],
     pool: [

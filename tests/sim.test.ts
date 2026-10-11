@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CURVE_CAP, FAST_FORWARD_MULT, MAX_PULL, SIM_DT, type Ball, type FxEvent, type RunState, type Vec } from '../src/core/types';
-import { BASE_STATS } from '../src/core/tuning';
+import { BASE_STATS, BOARD_CLEAR_REFILL } from '../src/core/tuning';
 import { canFastForward, createRun, previewShot, refill, shoot, step } from '../src/sim/index';
 import { makeTarget } from '../src/sim/spawn';
 
@@ -250,4 +250,124 @@ describe('fully upgraded smoke run', () => {
       expect(bosses).toBeGreaterThan(0);
     });
   }
+});
+
+describe('design review rules', () => {
+  it('boss arrival refill applies before the run-over check (no anticlimax)', () => {
+    const s = createRun('felt', BASE_STATS, 5);
+    expect(shoot(s, { x: 0, y: MAX_PULL })).toBe(true);
+    s.energy = 0;
+    s.bossPending = true;
+    untilSettled(s);
+    expect(s.bossSpawned).toBe(true);
+    expect(s.phase).toBe('aim');
+    expect(s.energy).toBeCloseTo(0.25 * BASE_STATS.maxEnergy, 6);
+  });
+  it('empty board refills immediately in the enemy phase', () => {
+    const s = createRun('felt', { ...BASE_STATS, respawnPerTurn: 0 }, 8);
+    s.targets = [];
+    s.obstacles = [];
+    shoot(s, { x: 0, y: -10 });
+    untilSettled(s);
+    expect(s.targets.filter((t) => !t.dead).length).toBe(2);
+  });
+  it('killing the last regular target emits boardClear once and refills via the curve', () => {
+    const { s, main } = lab();
+    s.targets = [makeTarget(s, 'mini', 90, 100, 0)];
+    s.energy = 50;
+    main.x = 90;
+    main.y = 130;
+    main.vy = -200;
+    main.resting = false;
+    const fx: FxEvent[] = [];
+    for (let i = 0; i < 40; i++) fx.push(...step(s, SIM_DT));
+    expect(fx.filter((f) => f.t === 'boardClear').length).toBe(1);
+    expect(s.refilled).toBeCloseTo(BOARD_CLEAR_REFILL, 6);
+    expect(s.energy).toBe(50 - BASE_STATS.hitCost + BOARD_CLEAR_REFILL);
+  });
+  it('shielded boss costs only hitCost; drain phase surcharges boss hits only', () => {
+    const hit = (kind: 'boss' | 'basic', shielded: boolean, phase: number) => {
+      const { s, main } = lab();
+      const t = makeTarget(s, kind, 90, 100, 0);
+      t.shielded = shielded;
+      t.phase = phase;
+      s.targets = [t];
+      if (kind === 'basic') {
+        const boss = makeTarget(s, 'boss', 30, 50, 0);
+        boss.phase = phase;
+        s.targets.push(boss);
+      }
+      main.x = 90;
+      main.y = 130;
+      main.vy = -200;
+      main.resting = false;
+      const e0 = s.energy;
+      for (let i = 0; i < 40; i++) step(s, SIM_DT);
+      return e0 - s.energy;
+    };
+    const h = BASE_STATS.hitCost;
+    expect(hit('boss', true, 1)).toBe(h);
+    expect(hit('boss', false, 0)).toBe(h + 1);
+    expect(hit('boss', false, 1)).toBe(h + 2); // felt phase 1 = drain
+    expect(hit('basic', false, 1)).toBe(h);
+  });
+  it('sticky ball holds 0.25 s, releases at 60% reflected speed and hits again for free', () => {
+    const { s, main } = lab();
+    s.stats.ballType = 'sticky';
+    const t = s.targets[0];
+    main.x = 90;
+    main.y = 130;
+    main.vy = -200;
+    main.resting = false;
+    let fx: FxEvent[] = [];
+    let n = 0;
+    while (!main.stuck && n++ < 100) fx = step(s, SIM_DT);
+    expect(main.stuck).toBeGreaterThan(0);
+    const hp1 = t.hp;
+    const e1 = s.energy;
+    expect(hp1).toBe(t.maxHp - BASE_STATS.damage);
+    const held = { x: main.x, y: main.y };
+    const holdSteps = Math.round(0.25 / SIM_DT);
+    for (let i = 0; i < holdSteps - 2; i++) step(s, SIM_DT);
+    expect(main.x).toBe(held.x);
+    expect(main.y).toBe(held.y);
+    expect(main.resting).toBe(false);
+    for (let i = 0; i < 4; i++) fx.push(...step(s, SIM_DT));
+    expect(main.stuck).toBeFalsy();
+    expect(t.hp).toBe(hp1 - BASE_STATS.damage);
+    expect(s.energy).toBe(e1);
+    expect(main.vy).toBeGreaterThan(0); // reflected away from the target
+    expect(Math.hypot(main.vx, main.vy)).toBeGreaterThan(0.6 * 200 * 0.85);
+    expect(Math.hypot(main.vx, main.vy)).toBeLessThanOrEqual(0.6 * 200 + 1e-6);
+    untilSettled(s);
+    expect(['aim', 'over']).toContain(s.phase);
+  });
+  it('sticky runs stay deterministic and terminate', () => {
+    const run = () => {
+      const s = createRun('felt', { ...BASE_STATS, ballType: 'sticky' }, 77);
+      for (const p of SHOTS) {
+        if (s.phase !== 'aim') break;
+        shoot(s, p);
+        untilSettled(s);
+      }
+      return snapshot(s);
+    };
+    expect(run()).toEqual(run());
+  });
+  it('full-power shots settle in under 4 s on felt and ice (empty table)', () => {
+    for (const stage of ['felt', 'ice'] as const) {
+      for (const p of [{ x: 0, y: -MAX_PULL }, { x: MAX_PULL, y: 0 }, { x: 20, y: -MAX_PULL }]) {
+        const s = createRun(stage, BASE_STATS, 1);
+        s.targets = [];
+        s.obstacles = [];
+        shoot(s, p);
+        let t = 0;
+        while (s.phase === 'resolve') {
+          step(s, SIM_DT);
+          t += SIM_DT;
+        }
+        expect(t).toBeLessThan(4);
+      }
+    }
+  });
 });

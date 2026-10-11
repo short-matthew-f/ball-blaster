@@ -1,9 +1,9 @@
 // Damage, death and on-death effects (cash, meter, splitting, volatile chains, lightning).
 import { TABLE, type Ball, type BallKind, type FxEvent, type RunState, type Target, type Vec } from '../core/types';
-import { TARGET_DEFS, stageById } from '../core/tuning';
+import { BOARD_CLEAR_REFILL, TARGET_DEFS, stageById } from '../core/tuning';
 import { refill } from './energy';
 import { checkBossPhase, updateShield } from './boss';
-import { makeTarget } from './spawn';
+import { isRegular, liveRegulars, makeTarget } from './spawn';
 
 export type DamageSource = BallKind | 'lightning' | 'explosion';
 
@@ -62,6 +62,13 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
       const m = makeTarget(s, kind, clampX(t.x + Math.cos(a) * d, cr), clampY(t.y + Math.sin(a) * d, cr), 0);
       s.targets.push(m);
     }
+  }
+
+  // Board clear: the last regular target died during a shot (checked after splits so minis count).
+  if (s.phase === 'resolve' && !s.boardCleared && isRegular(t) && liveRegulars(s) === 0) {
+    s.boardCleared = true;
+    fx.push({ t: 'boardClear', x: t.x, y: t.y });
+    refill(s, BOARD_CLEAR_REFILL, t.x, t.y, fx);
   }
 
   if (def.explodeR && def.explodeDmg) {

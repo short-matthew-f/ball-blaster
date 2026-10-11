@@ -57,11 +57,11 @@ export const NODES: UpgradeNode[] = [
     } }),
   // ---- ENERGY ----
   mk({ id: 'maxEnergy', tree: 'energy', name: 'BATTERY', desc: '+{v} max energy', max: 10, cost: geo(8, 1.5), col: 1, row: 0, icon: 'icon_energy',
-    apply: (s, l) => { s.maxEnergy += 10 * l; } }),
+    apply: (s, l) => { s.maxEnergy += 15 * l; } }),
   mk({ id: 'killRefill', tree: 'energy', name: 'KILL JUICE', desc: 'Kills may refill energy', max: 6, cost: geo(15, 1.6), col: 1, row: 1, icon: 'icon_refill', requires: ['maxEnergy'],
     apply: (s, l) => { s.killRefillChance = 0.25 + 0.1 * (l - 1); s.killRefillAmount = 8 + 2 * (l - 1); } }),
-  mk({ id: 'bossRefill', tree: 'energy', name: 'BOSS JUICE', desc: 'Boss arrival refills', max: 3, cost: (l) => 30 * Math.pow(2, l), col: 1, row: 2, icon: 'icon_boss', requires: ['killRefill'],
-    apply: (s, l) => { s.bossRefillPct = 0.25 * l; } }),
+  mk({ id: 'bossRefill', tree: 'energy', name: 'BOSS JUICE', desc: 'Boss arrival refills {v}', max: 3, cost: (l) => 30 * Math.pow(2, l), col: 1, row: 2, icon: 'icon_boss', requires: ['killRefill'],
+    apply: (s, l) => { s.bossRefillPct = 0.25 + 0.2 * l; } }),
   mk({ id: 'bumperJuice', tree: 'energy', name: 'BUMPER JUICE', desc: 'Bumpers refill +{v}', max: 4, cost: geo(40, 1.6), col: 2, row: 1, icon: 'icon_bumper', requires: ['maxEnergy'],
     apply: (s, l) => { s.bumperRefill += l; } }),
   // ---- BOARD ----

@@ -36,6 +36,8 @@ export class Fx {
   /** Render frames of sim freeze remaining. */
   hitStop = 0;
   shakeEnabled = true;
+  /** Boss display name for the arrival banner (set by the run screen). */
+  bossName = '';
   private clock = 0;
 
   clear(): void {
@@ -81,11 +83,19 @@ export class Fx {
 
   consume(events: FxEvent[]): void {
     for (const e of events) {
+      if ((e as { t: string }).t === 'boardClear') {
+        const c = e as unknown as { x: number; y: number };
+        this.banner('CLEAR!', P.Y, 3, 1.3);
+        this.rings.push({ x: c.x, y: c.y, r: 40, life: 0.5, max: 0.5 });
+        this.rings.push({ x: c.x, y: c.y, r: 70, life: 0.7, max: 0.7 });
+        this.burst(c.x, c.y, [P.Y, P['5'], P.E, P.c], 24, 90, 0.7, 20, 2);
+        continue;
+      }
       switch (e.t) {
         case 'kill':
           this.burst(e.x, e.y, KIND_COLORS[e.targetKind] ?? [P.R], e.targetKind === 'boss' ? 30 : 10, 70, 0.55, 140, 2);
           if (e.cash > 0) this.floater(e.x, e.y, `+${fmt(e.cash)}`, P.Y);
-          this.stop(2);
+          this.stop(4);
           this.addShake(e.targetKind === 'boss' ? 2 : 0.8);
           break;
         case 'hit':
@@ -133,16 +143,18 @@ export class Fx {
           this.banner(`${e.name.toUpperCase()} x${e.mult}`, P.Y, 2, 1.1);
           break;
         case 'bossArrive':
-          this.banner('BOSS!', P.R, 4, 1.5);
-          this.addShake(2);
+          this.banner('BOSS!', P.R, 4, 1.6);
+          if (this.bossName) this.banner(this.bossName.toUpperCase(), P.p, 2, 1.6);
+          this.stop(6);
+          this.addShake(3.2); // ~0.4 s at 8/s decay, capped to 2px offset
           break;
         case 'bossPhase':
-          this.stop(5);
+          this.stop(8);
           this.addShake(2);
           this.banner('ENRAGED!', P.o, 2, 1.0);
           break;
         case 'bossDead':
-          this.stop(5);
+          this.stop(8);
           this.addShake(2);
           this.burst(e.x, e.y, [P.Y, P['5'], P.o, P.R, P.E], 40, 110, 0.9, 100, 2);
           this.banner('BOSS DOWN!', P.Y, 3, 1.8);
