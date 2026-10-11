@@ -8,7 +8,7 @@ import { drawText, textWidth } from './text';
 
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; max: number; color: string; size: number; g: number }
 interface Floater { x: number; y: number; text: string; color: string; life: number; max: number }
-interface Banner { text: string; color: string; life: number; max: number; scale: number }
+interface Banner { text: string; color: string; life: number; max: number; scale: number; keep?: boolean }
 interface Bolt { pts: Vec[]; life: number }
 interface Tracer { x0: number; y0: number; x1: number; y1: number; life: number }
 interface Ring { x: number; y: number; r: number; life: number; max: number; color?: string; color2?: string }
@@ -16,6 +16,7 @@ interface Ring { x: number; y: number; r: number; life: number; max: number; col
 const P = PALETTE;
 /** First Overtime wave number (stage waves + boss wave + 1). */
 const OVERTIME_FIRST = WAVES_PER_STAGE + 2;
+const BANNER_CAP = 3;
 const KIND_COLORS: Record<TargetKind, string[]> = {
   frost: [P.c, P['5'], P.B],
   cadre: [P.B, P.c, P.b],
@@ -106,10 +107,14 @@ export class Fx {
     this.floaters.push({ x: cx, y: y - 6, text, color, life: 0.9, max: 0.9 });
   }
 
-  private banner(text: string, color: string, scale: number, life: number): void {
+  /** Banners stack up to BANNER_CAP; the oldest non-`keep` one makes room (WAVE CLEAR is never dropped). */
+  private banner(text: string, color: string, scale: number, life: number, keep = false): void {
     if (textWidth(text, scale) > 168) scale = Math.max(1, scale - 1);
-    this.banners.push({ text, color, life, max: life, scale });
-    if (this.banners.length > 3) this.banners.shift();
+    this.banners.push({ text, color, life, max: life, scale, keep });
+    while (this.banners.length > BANNER_CAP) {
+      const i = this.banners.findIndex((b) => !b.keep);
+      this.banners.splice(i >= 0 ? i : 0, 1);
+    }
   }
 
   private addShake(v: number): void {
@@ -121,10 +126,11 @@ export class Fx {
   }
 
   consume(events: FxEvent[]): void {
+    let combos = 0; // combo floaters this batch stack upward above the hero
     for (const e of events) {
       switch (e.t) {
         case 'boardClear':
-          this.banner('WAVE CLEAR', P.Y, 3, 1.3);
+          this.banner('WAVE CLEAR', P.Y, 3, 1.3, true);
           this.rings.push({ x: e.x, y: e.y, r: 40, life: 0.5, max: 0.5 });
           this.rings.push({ x: e.x, y: e.y, r: 70, life: 0.7, max: 0.7 });
           this.burst(e.x, e.y, [P.Y, P['5'], P.E, P.c], 24, 90, 0.7, 20, 2);
@@ -229,9 +235,13 @@ export class Fx {
         case 'spit':
           this.burst(e.x, e.y, [P.c, P.B, P['5']], 4, 40, 0.25, 0);
           break;
-        case 'combo':
-          this.banner(`${e.name.toUpperCase()} x${e.mult}`, P.Y, 2, 1.1);
+        case 'combo': {
+          const text = e.mult === 1 ? e.name.toUpperCase() : `${e.name.toUpperCase()} x${Math.round(e.mult * 100) / 100}`;
+          // Banners are for WAVE / SWEEP / BOSS / OVERTIME / RAGE / YOU FELL; other combos float at the hero.
+          if (e.name === 'SWEEP') this.banner(text, P.Y, 2, 1.1);
+          else this.floater(e.x, e.y - 26 - 8 * combos++, text, P.Y);
           break;
+        }
         case 'bossArrive':
           this.pendingWave = 0;
           this.banner('BOSS!', P.R, 4, 1.6);

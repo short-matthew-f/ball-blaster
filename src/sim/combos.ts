@@ -1,7 +1,7 @@
 // Per-shot combo evaluation (release -> every ball stopped). Combos count hits, not kills.
 // Cascade pays at the kill (sim/damage.ts); Sweep pays at wave clear (sim/enemy.ts).
 import type { ComboTally, FxEvent, RunState } from '../core/types';
-import { TARGET_DEFS } from '../core/tuning';
+import { CHAIN_BONUS_CAP, TARGET_DEFS } from '../core/tuning';
 import { heal } from './damage';
 
 export function emptyCombo(): ComboTally {
@@ -15,12 +15,14 @@ export function evaluateCombos(s: RunState, x: number, y: number, fx: FxEvent[])
   const shotCash = c.cash ?? 0;
   s.bestCombo = Math.max(s.bestCombo, c.hits);
 
-  // Chain xN: 3+ hits in one shot, +comboChain of the shot's cash per hit beyond 2 (floor of 1 per hit).
+  // Chain xN: 3+ hits in one shot, +comboChain of the shot's cash per hit beyond 2, capped at +CHAIN_BONUS_CAP
+  // (floor of 1 per hit).
   if (st.comboChain > 0 && c.hits >= 3) {
     const extra = c.hits - 2;
-    const bonus = Math.max(extra, Math.round(shotCash * st.comboChain * extra));
+    const frac = Math.min(CHAIN_BONUS_CAP, st.comboChain * extra);
+    const bonus = Math.max(extra, Math.round(shotCash * frac));
     s.cash += bonus;
-    fx.push({ t: 'combo', name: `CHAIN x${c.hits}`, mult: 1 + st.comboChain * extra, x, y });
+    fx.push({ t: 'combo', name: `CHAIN x${c.hits}`, mult: 1 + frac, x, y });
   }
   // Bank: +comboBank on kills made after a wall bounce.
   if (st.comboBank > 0 && (c.bankCash ?? 0) > 0) {

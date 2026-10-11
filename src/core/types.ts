@@ -39,7 +39,6 @@ export const LAUNCH_GAP = 0.15;
 export const MIN_POWER = 0.25;
 export const CURVE_CAP = 1.0; // total healing per run <= CURVE_CAP * maxHp
 /** Boss arrival zone (cleared of regular targets on arrival). */
-export const BOSS_ZONE = { x: 50, y: 50, w: 80, h: 60 } as const;
 
 export interface Vec {
   x: number;
@@ -58,7 +57,7 @@ export interface WaveDef {
   formations: Formation[];
   /** Optional weights per formation (overrides a uniform pick from `formations`). */
   formationWeights?: Partial<Record<Formation, number>>;
-  /** Index into `slots` of the elite (from wave 3), or -1/absent for none. */
+  /** Elite wave marker (from wave 3): >= 0 = one random regular of the wave is elite; -1/absent = none. */
   elite?: number;
 }
 
@@ -289,8 +288,6 @@ export interface RunState {
   waveTurn: number;
   /** Next wave spawns at the start of the next enemy phase. */
   wavePending: boolean;
-  /** Kept for render compatibility: true once the boss wave is queued but not yet spawned. */
-  bossPending: boolean;
   bossSpawned: boolean;
   bossKilled: boolean;
   balls: Ball[];

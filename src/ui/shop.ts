@@ -38,7 +38,7 @@ function describe(node: UpgradeNode, level: number): string {
       const av = a[k], bv = BASE_STATS[k];
       if (typeof av === 'number' && typeof bv === 'number' && av !== bv) {
         const delta = node.desc.includes('+{v}');
-        text = fmtNum(delta ? av - bv : av, /Chance|Pct$/.test(k));
+        text = fmtNum(delta ? av - bv : av, /Chance|Pct$/.test(k) || node.desc.includes('{v}%'));
         break;
       }
     }

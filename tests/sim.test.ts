@@ -9,7 +9,7 @@ import { makeEnemy, placeFormation } from '../src/sim/spawn';
 import { maxOverlap } from '../src/sim/physics';
 import { rageLevel } from '../src/sim/enemy';
 import { hasCorridor, jamRule } from '../src/sim/run';
-import { updateBossShield } from '../src/sim/damage';
+import { kill, updateBossShield } from '../src/sim/damage';
 
 const SHOTS: Vec[] = [
   { x: 0, y: -60 },
@@ -339,17 +339,19 @@ describe('step 2: frost, cadre, thorns, stats, combos', () => {
     expect(g.hp).toBe(g.maxHp);
     expect(g.dead).toBe(false);
     while (s.phase !== 'aim') step(s, SIM_DT);
-    // Hard hit: shatter (kill + rewards).
+    // Hard hit (>= SHATTER_SPEED): shatter = thaw + 2x the hit's damage, not an instant kill.
     calm();
     s.balls[0].x = 95;
     s.balls[0].y = 200;
-    const cash = s.cash;
+    const hp0 = g.hp;
     shoot(s, { x: 0, y: -MAX_PULL });
     const fx: FxEvent[] = [];
     while ((s.phase as string) === 'resolve') fx.push(...step(s, SIM_DT));
-    expect(g.dead).toBe(true);
     expect(fx.some((e) => e.t === 'shatter')).toBe(true);
-    expect(s.cash).toBeGreaterThan(cash);
+    expect(g.frozen ?? 0).toBe(0);
+    expect(hp0 - g.hp).toBeGreaterThanOrEqual(2 * s.stats.damage);
+    expect(hp0).toBeGreaterThan(2 * s.stats.damage); // not one-shot by the shatter
+    expect(g.dead).toBe(false);
   });
   it('a frozen enemy skips its intent', () => {
     const s = lab(90, 240);
@@ -527,5 +529,37 @@ describe('step 4: arrivals and Overtime enrage', () => {
       if (fx.some((f) => f.t === 'jam')) nudged++;
     }
     expect(nudged).toBeGreaterThan(0);
+  });
+});
+
+describe('v0.3 review fixes', () => {
+  it('a charge that hits a crate is blocked (no damage)', () => {
+    const s = lab(90, 240);
+    const g = put(s, 'grunt', 90, 150);
+    g.intent = { t: 'attack', n: 3 };
+    s.obstacles.push({ id: s.nextId++, kind: 'crate', x: 90, y: 196, r: 5, hp: 1, flash: 0, dead: false });
+    const fx = enemyPhaseOnly(s);
+    expect(fx.some((e) => e.t === 'blocked')).toBe(true);
+    expect(s.hp).toBe(BASE_STATS.maxHp);
+  });
+  it('a cleric never shields the boss', () => {
+    const s = lab(90, 260);
+    const b = put(s, 'boss', 90, 90);
+    b.intent = { t: 'rest' };
+    const c = put(s, 'cleric', 90 + b.r + 14 + 10, 90);
+    c.intent = { t: 'guard' };
+    enemyPhaseOnly(s);
+    expect(b.shield ?? 0).toBe(0);
+  });
+  it('a bomber killed by a hit blasts the hero for 2 (Detonate stays 4)', () => {
+    const s = lab(90, 240);
+    const b = put(s, 'bomber', 90, 210);
+    kill(s, b, 'main', []);
+    expect(s.hp).toBe(BASE_STATS.maxHp - 2);
+  });
+  it('the Ice boss keeps its def HP (no hpScale)', () => {
+    const s = createRun('ice', BASE_STATS, 5);
+    expect(makeEnemy(s, 'boss', 90, 90).maxHp).toBe(40);
+    expect(makeEnemy(s, 'grunt', 90, 90).maxHp).toBe(Math.ceil(TARGET_DEFS.grunt.hp * 1.5));
   });
 });

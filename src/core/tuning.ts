@@ -99,6 +99,8 @@ export const HIVE_GRUB_CAP = 4;
 /** Detonate / bomber death: damage to the hero within HERO_R (edge gap), to enemies within ENEMY_R. */
 export const BLAST_HERO_R = 60;
 export const BLAST_HERO_DMG = 4;
+/** A bomber killed by a hit (death blast) deals this to the hero instead; Detonate keeps BLAST_HERO_DMG. */
+export const BLAST_DEATH_HERO_DMG = 2;
 export const BLAST_ENEMY_R = 40;
 export const BLAST_ENEMY_DMG = 3;
 export const CLERIC_RANGE = 60;
@@ -106,8 +108,12 @@ export const CLERIC_RANGE = 60;
 export const FROST_RANGE = 60;
 export const FREEZE_PHASES = 3;
 export const FREEZE_CAP = 2;
-/** A frozen enemy ignores hits below SHATTER_SPEED (approach, px/s); at or above it shatters (kill + blast). */
-export const SHATTER_SPEED = 160;
+/**
+ * A frozen enemy ignores hits below SHATTER_SPEED (approach, px/s); at or above it shatters: it thaws and takes
+ * SHATTER_MULT x the hit's damage (not an instant kill), plus SHATTER_DMG to neighbours.
+ */
+export const SHATTER_SPEED = 320;
+export const SHATTER_MULT = 2;
 export const SHATTER_R = 20;
 export const SHATTER_DMG = 2;
 /** Restitution off a frozen enemy (it is a static body). */
@@ -119,13 +125,19 @@ export const CASCADE_R = 50;
 /** Bumper hit: +1 stagger to enemies within this radius. */
 export const BUMPER_STAGGER_R = 40;
 export const WAVES_PER_STAGE = 3;
+/** Wave-clear cash = WAVE_CASH x min(wave, WAVE_CASH_CAP_WAVE): Overtime waves do not keep climbing. */
 export const WAVE_CASH = 8; // x wave number
+export const WAVE_CASH_CAP_WAVE = WAVES_PER_STAGE + 1;
 /** Enrage starts at turn ENRAGE_BASE + ENRAGE_PER_WAVE x wave; +1 attack per turn after. */
 export const ENRAGE_BASE = 8;
 export const ENRAGE_PER_WAVE = 2;
 /** Overtime: enrage starts at this turn of every Overtime wave (flat). */
 export const ENRAGE_OVERTIME_TURN = 6;
 export const OVERTIME_CASH_MULT = 2;
+/** Only the first this-many Overtime waves pay OVERTIME_CASH_MULT; later ones pay 1x. */
+export const OVERTIME_CASH_WAVES = 5;
+/** Chain combo bonus cap (fraction of the shot's cash). */
+export const CHAIN_BONUS_CAP = 1;
 /** Enemy HP scaling (step 3): x(1 + WAVE_HP_STEP) per stage wave after the first; +OVERTIME_HP_PER_WAVE x k in Overtime wave k. */
 export const WAVE_HP_STEP = 0.25;
 export const OVERTIME_HP_PER_WAVE = 2;
@@ -234,7 +246,7 @@ export const STAGES: StageDef[] = [
     waves: ICE_WAVES,
     bossWave: { slots: ['boss', 'frost', 'grunt'], formations: ['pincer', 'ring'], formationWeights: BOSS_FORM },
     hpScale: 1.5,
-    cashScale: 2.2,
+    cashScale: 0.7,
     emeraldReward: 6,
     boss: { name: 'Rime Golem', hp: 40, r: 23, phases: [0.5], cadre: 3 },
   },

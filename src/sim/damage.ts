@@ -13,6 +13,9 @@ import {
   BLAST_HERO_R,
   ELITE_CASH_MULT,
   OVERTIME_CASH_MULT,
+  OVERTIME_CASH_WAVES,
+  SHATTER_MULT,
+  BLAST_DEATH_HERO_DMG,
   TARGET_DEFS,
   WAVES_PER_STAGE,
   stageById,
@@ -35,16 +38,24 @@ export function isOvertime(s: RunState): boolean {
   return s.wave > WAVES_PER_STAGE + 1;
 }
 
+/** Overtime cash multiplier: OVERTIME_CASH_MULT for the first OVERTIME_CASH_WAVES Overtime waves, then 1. */
+export function overtimeCashMult(s: RunState): number {
+  const k = s.wave - (WAVES_PER_STAGE + 1);
+  return k >= 1 && k <= OVERTIME_CASH_WAVES ? OVERTIME_CASH_MULT : 1;
+}
+
 /**
  * A contact hit on an enemy (any ball, bump, lightning, blast): +stagger, counts in the chain, then damage.
- * Frozen enemies ignore soft hits; an impact >= SHATTER_SPEED (or any blast) shatters them; lightning thaws.
+ * Frozen enemies ignore soft hits; an impact >= SHATTER_SPEED (or any blast) shatters them (thaw + SHATTER_MULT x
+ * damage); lightning thaws.
  */
 export function hitEnemy(s: RunState, t: Target, dmg: number, src: DamageSource, fx: FxEvent[], killer?: Ball, stagger = 1, speed = 0): void {
   if (t.dead) return;
   if ((t.frozen ?? 0) > 0) {
     if (src === 'explosion' || speed >= SHATTER_SPEED) {
+      addStagger(t, stagger, fx);
       countHit(s, src);
-      shatter(s, t, src, fx, killer);
+      shatter(s, t, dmg, src, fx, killer);
     } else if (src === 'lightning') {
       t.frozen = 0;
       t.flash = 0.12;
@@ -75,13 +86,12 @@ function countHit(s: RunState, src: DamageSource): void {
   else if (isBallSource(src)) s.combo.direct = (s.combo.direct ?? 0) + 1;
 }
 
-/** A frozen enemy breaks: full kill rewards for `src`, then SHATTER_DMG as a blast to neighbours. */
-export function shatter(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], killer?: Ball): void {
+/** A frozen enemy breaks: it thaws and takes SHATTER_MULT x the hit's damage (not an instant kill), then SHATTER_DMG to neighbours. */
+export function shatter(s: RunState, t: Target, dmg: number, src: DamageSource, fx: FxEvent[], killer?: Ball): void {
   if (t.dead) return;
   fx.push({ t: 'shatter', x: t.x, y: t.y, r: SHATTER_R });
-  if (isBallSource(src)) fx.push({ t: 'hit', x: t.x, y: t.y, targetKind: t.kind, ballKind: src, dmg: t.hp, killed: true });
   t.frozen = 0;
-  kill(s, t, src, fx, killer);
+  applyDamage(s, t, SHATTER_MULT * dmg, src, fx, killer);
   for (const o of s.targets.slice()) {
     if (o.dead || o === t) continue;
     if (Math.hypot(o.x - t.x, o.y - t.y) <= SHATTER_R + t.r + o.r) hitEnemy(s, o, SHATTER_DMG, 'explosion', fx);
@@ -138,7 +148,7 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
   const def = TARGET_DEFS[t.kind];
   if (!quiet) {
     const st = stageById(s.stage);
-    const mult = (t.elite ? ELITE_CASH_MULT : 1) * (isOvertime(s) ? OVERTIME_CASH_MULT : 1);
+    const mult = (t.elite ? ELITE_CASH_MULT : 1) * overtimeCashMult(s);
     const cash = Math.round(def.cash * st.cashScale * s.stats.cashMult * mult);
     s.cash += cash;
     s.combo.cash = (s.combo.cash ?? 0) + cash;
@@ -147,7 +157,8 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
     if (s.stats.healOnKill > 0) heal(s, s.stats.healOnKill, t.x, t.y, fx);
     // Cascade: a kill caused by an enemy bumping another staggers everything within CASCADE_R.
     if (src === 'bump' && s.stats.comboCascade > 0) {
-      fx.push({ t: 'combo', name: 'CASCADE', mult: 1, x: t.x, y: t.y });
+      const hh = hero(s);
+      fx.push({ t: 'combo', name: 'CASCADE', mult: 1, x: hh.x, y: hh.y });
       for (const o of s.targets) if (!o.dead && o !== t && Math.hypot(o.x - t.x, o.y - t.y) <= CASCADE_R + o.r) addStagger(o, 1, fx);
     }
     if (t.kind === 'boss') {
@@ -181,14 +192,15 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
       s.targets.push(g);
     }
   }
-  if (def.explodes) blast(s, t.x, t.y, t.kind, fx);
+  // Detonate (quiet) hits the hero for BLAST_HERO_DMG; a bomber killed by a hit only for BLAST_DEATH_HERO_DMG.
+  if (def.explodes) blast(s, t.x, t.y, t.kind, fx, quiet ? BLAST_HERO_DMG : BLAST_DEATH_HERO_DMG);
 }
 
-/** Bomber blast: BLAST_HERO_DMG to the hero within BLAST_HERO_R of its body, BLAST_ENEMY_DMG to enemies within BLAST_ENEMY_R. */
-export function blast(s: RunState, x: number, y: number, src: TargetKind, fx: FxEvent[]): void {
+/** Bomber blast: `heroDmg` to the hero within BLAST_HERO_R of its body, BLAST_ENEMY_DMG to enemies within BLAST_ENEMY_R. */
+export function blast(s: RunState, x: number, y: number, src: TargetKind, fx: FxEvent[], heroDmg = BLAST_HERO_DMG): void {
   fx.push({ t: 'explode', x, y, r: BLAST_ENEMY_R });
   const h = hero(s);
-  if (Math.hypot(h.x - x, h.y - y) <= BLAST_HERO_R + h.r) heroDamage(s, BLAST_HERO_DMG, src, h.x, h.y, fx, 'blast');
+  if (Math.hypot(h.x - x, h.y - y) <= BLAST_HERO_R + h.r) heroDamage(s, heroDmg, src, h.x, h.y, fx, 'blast');
   for (const o of s.targets.slice()) {
     if (o.dead) continue;
     if (Math.hypot(o.x - x, o.y - y) <= BLAST_ENEMY_R + o.r) hitEnemy(s, o, BLAST_ENEMY_DMG, 'explosion', fx);

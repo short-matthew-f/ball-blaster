@@ -3,7 +3,8 @@ import type { SimApi } from '../core/types';
 import { canFastForward, createRun, previewShot, shoot, step } from './run';
 
 export { canFastForward, createRun, previewShot, shoot, step };
-export { heal } from './damage';
+export { heal, overtimeCashMult } from './damage';
+export { rageLevel, rageStart } from './enemy';
 
 /** Compile-time check that the named exports satisfy the contract. */
 export const sim: SimApi = { createRun, step, shoot, previewShot, canFastForward };

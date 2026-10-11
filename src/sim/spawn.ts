@@ -45,8 +45,8 @@ export function bossAlive(s: RunState): boolean {
 export function makeEnemy(s: RunState, kind: TargetKind, x: number, y: number, atkBonus = 0): Target {
   const def = TARGET_DEFS[kind];
   const st = stageById(s.stage);
-  const baseHp = kind === 'boss' ? st.boss.hp : def.hp;
-  const hp = Math.ceil(baseHp * st.hpScale);
+  // The boss keeps its def HP (exempt from the stage hpScale): Rime Golem 60 HP behind 3 cadre was a slog.
+  const hp = kind === 'boss' ? st.boss.hp : Math.ceil(def.hp * st.hpScale);
   const t: Target = {
     id: s.nextId++,
     kind,
@@ -268,17 +268,18 @@ const area = (k: TargetKind, s: RunState) => Math.PI * (k === 'boss' ? stageById
 export function spawnWave(s: RunState, fx: FxEvent[]): Target[] {
   const { def, bonus } = waveFor(s);
   const kinds: TargetKind[] = [];
-  let eliteKind: TargetKind | null = null;
-  def.slots.forEach((slot, i) => {
-    const k = Array.isArray(slot) ? slot[s.rng.int(0, slot.length - 1)] : slot;
-    kinds.push(k);
-    if (def.elite === i) eliteKind = k;
+  def.slots.forEach((slot) => {
+    kinds.push(Array.isArray(slot) ? slot[s.rng.int(0, slot.length - 1)] : slot);
   });
   // Area cap (regulars <= AREA_CAP of the table) and hard cap: drop grunts first.
   const cap = AREA_CAP * TABLE.w * TABLE.h;
   const total = () => kinds.reduce((a, k) => a + area(k, s), 0);
   while ((total() > cap || kinds.length > REGULAR_CAP) && kinds.includes('grunt')) kinds.splice(kinds.lastIndexOf('grunt'), 1);
   while (kinds.length > REGULAR_CAP) kinds.pop();
+  // Elite waves: the elite is a random regular of the wave (not always the def.elite slot, which made a Hardy brute
+  // the W3 elite every run).
+  const eligible = kinds.filter((k) => k !== 'boss');
+  const eliteKind: TargetKind | null = (def.elite ?? -1) >= 0 && eligible.length > 0 ? eligible[s.rng.int(0, eligible.length - 1)] : null;
 
   const formation = pickFormation(s, def, bonus > 0);
   const slots = placeFormation(s, kinds, formation);
@@ -302,7 +303,6 @@ export function spawnWave(s: RunState, fx: FxEvent[]): Target[] {
     fx.push({ t: 'shimmer', x: e.x, y: e.y });
     if (e.kind === 'boss') {
       s.bossSpawned = true;
-      s.bossPending = false;
       fx.push({ t: 'bossArrive' });
       out.push(...spawnCadre(s, e, fx));
       const h = s.balls.find((b) => b.kind === 'main');

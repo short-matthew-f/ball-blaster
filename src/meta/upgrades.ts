@@ -80,7 +80,7 @@ export const NODES: UpgradeNode[] = [
   mk({ id: 'cashBonus', tree: 'tactics', name: 'CASH BONUS', desc: '+10% cash per level', max: 8, cost: geo(50, 1.7), col: 2, row: 0, icon: 'icon_cash',
     apply: (s, l) => { s.cashMult += 0.1 * l; } }),
   // ---- COMBO ----
-  mk({ id: 'comboChain', tree: 'combo', name: 'CHAIN', desc: 'Multi-kill bonus', max: 5, cost: geo(40, 1.7), col: 1, row: 0, icon: 'icon_combo',
+  mk({ id: 'comboChain', tree: 'combo', name: 'CHAIN', desc: '3+ hits: +{v}% cash', max: 5, cost: geo(40, 1.7), col: 1, row: 0, icon: 'icon_combo',
     apply: (s, l) => { s.comboChain = 0.25 * l; } }),
   mk({ id: 'comboBank', tree: 'combo', name: 'BANK', desc: 'Bank kill bonus', max: 4, cost: geo(60, 1.7), col: 0, row: 1, icon: 'icon_bank',
     apply: (s, l) => { s.comboBank = 0.5 * l; } }),
@@ -88,7 +88,7 @@ export const NODES: UpgradeNode[] = [
     apply: (s) => { s.comboCascade = 1; } }),
   mk({ id: 'comboSweep', tree: 'combo', name: 'SWEEP', desc: 'Clear bonus +{v}', max: 4, cost: geo(100, 1.7), col: 2, row: 1, icon: 'icon_wave',
     apply: (s, l) => { s.comboSweep = 25 * l; } }),
-  mk({ id: 'comboLockdown', tree: 'combo', name: 'LOCKDOWN', desc: 'Combos stagger {v}', max: 4, cost: geo(120, 1.8), col: 1, row: 2, icon: 'icon_stagger', requires: ['comboChain'],
+  mk({ id: 'comboLockdown', tree: 'combo', name: 'LOCKDOWN', desc: 'Stagger all: +{v} HP', max: 4, cost: geo(120, 1.8), col: 1, row: 2, icon: 'icon_stagger', requires: ['comboChain'],
     apply: (s, l) => { s.comboLockdown = 2 * l; } }),
   // ---- EMERALD ----
   em({ id: 'bumpers', name: 'BUMPERS', desc: '{v} bumpers on table', max: 3, cost: (l) => l + 1, col: 0, row: 0, icon: 'icon_bumper',

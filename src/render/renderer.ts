@@ -1,7 +1,8 @@
 // Draws the run view (table, entities, HUD) from RunState. Read-only with respect to sim state.
 import type { RunState, Target } from '../core/types';
-import { BOSS_ZONE, TABLE, VIEW_H, VIEW_W } from '../core/types';
-import { BLAST_HERO_R, ENRAGE_BASE, ENRAGE_PER_WAVE, TARGET_DEFS, WAVES_PER_STAGE, stageById } from '../core/tuning';
+import { TABLE, VIEW_H, VIEW_W } from '../core/types';
+import { BLAST_HERO_R, TARGET_DEFS, WAVES_PER_STAGE, stageById } from '../core/tuning';
+import { overtimeCashMult, rageLevel, rageStart } from '../sim/index';
 import { PALETTE } from './palette';
 import { drawSprite, spriteSize, WHITE } from './sprite-cache';
 import { drawText } from './text';
@@ -160,9 +161,8 @@ export function reachState(s: RunState, e: Target): Reach {
 
 /** Enrage state for the next (or current) enemy phase: level >= 1 = raging; `inTurns` = phases until it starts. */
 export function rageInfo(s: RunState): { level: number; inTurns: number } {
-  const turn = s.waveTurn + 1;
-  const start = ENRAGE_BASE + ENRAGE_PER_WAVE * s.wave;
-  return { level: Math.max(0, turn - start + 1), inTurns: start - turn };
+  // Same clock as the sim (Overtime starts flat at ENRAGE_OVERTIME_TURN).
+  return { level: rageLevel(s), inTurns: rageStart(s) - (s.waveTurn + 1) };
 }
 
 function trail(ctx: CanvasRenderingContext2D, x: number, y: number, vx: number, vy: number, r: number, color: string): void {
@@ -241,7 +241,9 @@ function drawEnemyOverlay(ctx: CanvasRenderingContext2D, s: RunState, t: Target,
     let num = '';
     if ((it.t === 'attack' || it.t === 'shoot') && it.n !== undefined) {
       const rage = rageInfo(s).level;
-      num = String(Math.max(1, it.n + rage - (s.stats.armor ?? 0)));
+      // Mirror the sim: Shoot takes rangedResist first (min 1), then armor (min 1).
+      const raw = it.t === 'shoot' ? Math.max(1, it.n + rage - (s.stats.rangedResist ?? 0)) : it.n + rage;
+      num = String(Math.max(1, raw - (s.stats.armor ?? 0)));
     }
     const nw = num ? num.length * 4 : 0;
     const total = 11 + (nw ? nw + 1 : 0);
@@ -287,29 +289,9 @@ function drawEnemyOverlay(ctx: CanvasRenderingContext2D, s: RunState, t: Target,
   }
 }
 
-/** Pulsing purple/red shimmer outline showing where the boss will land. */
-function drawBossZone(ctx: CanvasRenderingContext2D, now: number): void {
-  const { x, y, w, h } = BOSS_ZONE;
-  const pulse = 0.5 + 0.5 * Math.sin(now * 6);
-  ctx.globalAlpha = 0.06 + 0.1 * pulse;
-  ctx.fillStyle = P.M;
-  ctx.fillRect(x, y, w, h);
-  ctx.globalAlpha = 0.55 + 0.45 * pulse;
-  const ph = Math.floor(now * 12);
-  const px = (i: number, j: number, n: number): void => {
-    ctx.fillStyle = (n + ph) % 6 < 3 ? P.M : P.R;
-    ctx.fillRect(i, j, 1, 1);
-  };
-  let n = 0;
-  for (let i = 0; i < w; i++) { px(x + i, y, n); px(x + w - 1 - i, y + h - 1, n); n++; }
-  for (let j = 0; j < h; j++) { px(x + w - 1, y + j, n); px(x, y + h - 1 - j, n); n++; }
-  ctx.globalAlpha = 1;
-}
-
 /** Table contents. Call inside the shake translate. */
 export function drawWorld(ctx: CanvasRenderingContext2D, s: RunState, now: number, flash = true, view: WorldView = {}): void {
   ctx.drawImage(getTableBg(), 0, 0);
-  if (s.bossPending && !s.bossSpawned) drawBossZone(ctx, now);
   for (const o of s.obstacles) {
     if (o.dead) continue;
     drawSprite(ctx, o.kind, o.x, o.y, o.flash > 0 ? { tint: WHITE } : {});
@@ -346,7 +328,8 @@ export function drawHud(ctx: CanvasRenderingContext2D, s: RunState, bestWave: nu
   drawText(ctx, String(Math.floor(s.cash)), 16, 18, { color: P.Y, shadow: P['0'] });
   drawSprite(ctx, 'emerald', 62, 21);
   drawText(ctx, String(s.emeralds), 69, 18, { color: P.E, shadow: P['0'] });
-  if (overtime) drawText(ctx, 'X2', 88, 18, { color: P.o, shadow: P['0'] });
+  const otMult = overtimeCashMult(s);
+  if (overtime && otMult > 1) drawText(ctx, `X${otMult}`, 88, 18, { color: P.o, shadow: P['0'] });
   const rage = rageInfo(s);
   if (s.phase !== 'over') {
     const on = !flash || Math.floor(now * 3) % 2 === 0;
@@ -362,15 +345,12 @@ export function drawHud(ctx: CanvasRenderingContext2D, s: RunState, bestWave: nu
   const boss = s.targets.find((t) => t.kind === 'boss' && !t.dead);
   if (overtime) {
     drawText(ctx, `OVERTIME +${s.wave - (WAVES_PER_STAGE + 1)}`, bx, ly, { scale: 2, color: P.Y, shadow: P['0'] });
-    drawText(ctx, '2X CASH', bx, 308, { color: P.o, shadow: P['0'] });
+    if (otMult > 1) drawText(ctx, `${otMult}X CASH`, bx, 308, { color: P.o, shadow: P['0'] });
   } else if (s.bossKilled) {
     drawText(ctx, 'STAGE CLEARED', bx, ly, { scale: 2, color: P.Y, shadow: P['0'] });
   } else if (s.bossSpawned && boss) {
     drawText(ctx, st.boss.name.toUpperCase(), bx, ly, { scale: 2, color: P.p, shadow: P['0'] });
     drawBar(ctx, bx, 308, bw, 8, boss.hp / boss.maxHp, P.R, P.p, P['2']);
-  } else if (s.bossPending) {
-    const alt = Math.floor(now * (flash ? 4 : 2)) % 2;
-    drawText(ctx, 'BOSS INCOMING', bx, ly, { scale: 2, color: alt ? P.R : P.p });
   } else {
     const slotsX: number[] = [];
     let x = bx;

@@ -48,7 +48,6 @@ export function createRun(stage: StageId, stats: RunStats, seed: number, _bestWa
     wave: 1,
     waveTurn: 0,
     wavePending: false,
-    bossPending: false,
     bossSpawned: false,
     bossKilled: false,
     balls: [],

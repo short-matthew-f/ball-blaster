@@ -467,6 +467,11 @@ export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
       const e = bumper ? s.stats.bumperBounce : OBSTACLE_RESTITUTION;
       const hit = collideStatic(b, o, e, bumper ? BUMPER_MIN_KICK : 0);
       if (hit >= 0 && b.ball) hitObstacle(s, o, fx);
+      // Obstacles are cover: a charger that hits a crate/bumper/chest loses its charge (shrines are not cover).
+      if (hit >= 0 && b.en && o.kind !== 'shrine' && (b.en.chargeDmg ?? 0) > 0) {
+        b.en.chargeDmg = 0;
+        fx.push({ t: 'blocked', x: (b.x + o.x) / 2, y: (b.y + o.y) / 2 });
+      }
     }
   }
   writeBack(list);

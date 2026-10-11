@@ -18,6 +18,7 @@ import {
   SWIFT_ADVANCE_DIST,
   TARGET_DEFS,
   WAVE_CASH,
+  WAVE_CASH_CAP_WAVE,
   WAVES_PER_STAGE,
 } from '../core/tuning';
 import { heal, hero, heroDamage, kill } from './damage';
@@ -25,12 +26,14 @@ import { rollIntent } from './intents';
 import { relaxAll } from './physics';
 import { liveRegulars, spawnWave, summonNear } from './spawn';
 
-/** Enrage level for the current enemy phase: +1 attack per turn from turn ENRAGE_BASE + ENRAGE_PER_WAVE x wave. */
+/** Turn of the current wave at which enrage starts (stage waves: ENRAGE_BASE + ENRAGE_PER_WAVE x wave; Overtime: flat). */
+export function rageStart(s: RunState): number {
+  return s.wave > WAVES_PER_STAGE + 1 ? ENRAGE_OVERTIME_TURN : ENRAGE_BASE + ENRAGE_PER_WAVE * s.wave;
+}
+
+/** Enrage level for the current (or next, during aim) enemy phase: +1 attack per turn from rageStart. */
 export function rageLevel(s: RunState): number {
-  const turn = s.waveTurn + 1;
-  // Overtime: flat start at turn ENRAGE_OVERTIME_TURN of each Overtime wave.
-  const start = s.wave > WAVES_PER_STAGE + 1 ? ENRAGE_OVERTIME_TURN : ENRAGE_BASE + ENRAGE_PER_WAVE * s.wave;
-  return Math.max(0, turn - start + 1);
+  return Math.max(0, s.waveTurn + 1 - rageStart(s) + 1);
 }
 
 export function staggered(t: Target): boolean {
@@ -66,7 +69,7 @@ function advanceWave(s: RunState, fx: FxEvent[]): Set<number> {
   if (!s.wavePending && liveRegulars(s) > 0) return fresh;
   const cleared = s.wave;
   if (cleared >= 1) {
-    s.cash += WAVE_CASH * cleared;
+    s.cash += WAVE_CASH * Math.min(cleared, WAVE_CASH_CAP_WAVE);
     const h = hero(s);
     fx.push({ t: 'boardClear', x: h.x, y: h.y });
     heal(s, s.stats.waveHeal, h.x, h.y, fx);
@@ -78,7 +81,6 @@ function advanceWave(s: RunState, fx: FxEvent[]): Set<number> {
   }
   s.wave++;
   s.wavePending = false;
-  if (s.wave === WAVES_PER_STAGE + 1 && !s.bossSpawned) s.bossPending = true;
   for (const e of spawnWave(s, fx)) fresh.add(e.id);
   s.waveTurn = -1; // the arrival phase is not a turn of the new wave (enrage clock)
   return fresh;
@@ -155,10 +157,14 @@ function segDist(px: number, py: number, ax: number, ay: number, bx: number, by:
   return Math.hypot(px - (ax + vx * k), py - (ay + vy * k));
 }
 
-/** Is the straight roll of `e` from a to b blocked by another enemy (cover)? */
+/** Is the straight roll of `e` from a to b blocked by another enemy or an obstacle (cover; shrines are not cover)? */
 function blocked(s: RunState, e: Target, ax: number, ay: number, bx: number, by: number): boolean {
   for (const o of s.targets) {
     if (o === e || o.dead) continue;
+    if (segDist(o.x, o.y, ax, ay, bx, by) < e.r + o.r - 1) return true;
+  }
+  for (const o of s.obstacles) {
+    if (o.dead || o.kind === 'shrine') continue;
     if (segDist(o.x, o.y, ax, ay, bx, by) < e.r + o.r - 1) return true;
   }
   return false;
@@ -297,7 +303,8 @@ function execute(s: RunState, e: Target, fx: FxEvent[]): boolean {
         let best: Target | undefined;
         let bestD = Infinity;
         for (const o of s.targets) {
-          if (o === e || o.dead || (o.shield ?? 0) > 0) continue;
+          // The boss is never shielded by a cleric (a shield eats a whole hit: boss waves dragged on).
+          if (o === e || o.dead || o.kind === 'boss' || (o.shield ?? 0) > 0) continue;
           const d = Math.hypot(o.x - e.x, o.y - e.y) - o.r - e.r;
           if (d <= CLERIC_RANGE && d < bestD) ((best = o), (bestD = d));
         }

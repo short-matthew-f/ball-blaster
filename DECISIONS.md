@@ -22,22 +22,25 @@ The v0.1 energy-era decisions (release/hit costs, drains, respawns, boss meter, 
 |---|---|---|
 | Reach | Edge-to-edge gap between enemy and hero. Grunt 110, thornback/broodmother 100, bouncer 140, brute 70, boss 90. | Simple, size-independent. |
 | Charge lands | A charger stops dead when its blow lands (hero keeps the full knock). | Heavy chargers ploughed on and pinned the hero into corners (jams 0.6-1.1/run -> <= 0.1). |
-| Blocked | A charger that touches any other enemy first loses its charge (and bumps it per the bump rule). | Cover. |
+| Blocked | A charger that touches any other enemy first loses its charge (and bumps it per the bump rule). v0.3: so does a charger that hits a crate, bumper or chest (shrines are not cover); bankers' line checks count those obstacles too. | Cover. The HUD already painted obstacle cover amber; the sim ignored it. |
 | Advance | Rolls 60 px (Swift elite 75 px), launch speed solved from friction; stops 6 px short of the hero instead of shoving it. Skirmisher's Advance is a sideways reposition toward the open side. | An advance is not an attack; shoving caused corner pins. |
 | Brute Charge | Brute's Charge -> Attack 5 at 300 px/s does not double (5 is the charged value). Boss Charge -> Slam 8 (= 2 x 4), full-table, banks once. Other kinds: Charge doubles the next Attack. | Brute's printed number is the hit you take. |
-| Staggered / frozen | Skip; the intent is kept. Stagger clears at the end of the enemy phase. Frozen enemies ignore hits below 160 px/s (no damage, no stagger), shatter at or above it (kill + 2 to neighbours), explosions shatter, lightning thaws. | Freeze is a trade. |
+| Staggered / frozen | Skip; the intent is kept. Stagger clears at the end of the enemy phase. Frozen enemies ignore hits below 320 px/s (no damage, no stagger), shatter at or above it (thaw + 2x the hit's damage, not a kill; 2 to neighbours), explosions shatter, lightning thaws. Frozen enemies still skip their intent. | Freeze is a trade. v0.3: at 160 px/s with an instant kill, 83% of freezes on Ice MID ended in a free full-cash kill (~15% of kills). |
 | Waves | Next wave spawns at the start of the enemy phase after the last regular dies, or at the end of an enemy phase that emptied the board. New enemies act from the next phase; the arrival phase does not count toward enrage. Reflex skips each wave's first acting phase. | No empty aim states. |
 | Arrivals are solid at aim | The enemy phase does not end while any live enemy is still shimmering (wave, boss, cadre, summons, splits). A wave that becomes due at the end of a phase spawns then and the phase waits out its shimmer. | The player never sees, or shoots through, a ghost board. |
 | Boss spot | The boss takes its formation spot even if the hero is there; the hero is then moved to the nearest free spot (emits `jam` fx, not counted as a jam). | The boss anchors the formation; the hero is the cheap thing to move. |
 | Overtime enrage | In Overtime, enrage starts at turn 6 of every Overtime wave (flat), +1 attack per turn. Stage waves keep 8 + 2 x wave. | 8 + 2 x wave never fired in Overtime (wave 5+ means turn 18+). |
 | Thorns | Thornback (and Spiky elites) prick the hero for 1 on every counted hero contact, in the shot and in the enemy phase, except the contact that lands the thornback's own charge. | |
 | Ice | Frost freezes the nearest ally within 60 px for 3 phases (max 2 frozen). Rime Golem arrives with 3 cadre; it takes no damage while any lives. | v0.1 active tier, adapted. |
+| Boss HP / Guard (v0.3) | Bosses keep their def HP (exempt from the stage hpScale: Rime Golem 40, not 60). A Cleric's Guard never targets the boss. | LATE bot boss waves ran 12-15 turns vs 5 for regular waves (a shield eats a whole hit; Golem 60 HP behind 3 cadre). |
+| Bomber blast (v0.3) | A bomber killed by a hit deals 2 to the hero within range; its own Detonate still deals 4. | Every contact kill sits inside the radius: the 4-HP death blast was a flat tax on killing bombers. |
+| Elites (v0.3) | On an elite wave, the elite is a random regular of the wave (after the area cap), not a fixed slot. | The fixed slot made a Hardy brute (18 HP at W3) the elite every run. |
 
 ## Combos and heals
 
 | Gap | Decision |
 |---|---|
-| Chain | 3+ hits in one shot: + comboChain x shot cash per hit beyond 2 (at least 1 per extra hit). |
+| Chain | 3+ hits in one shot: + comboChain x shot cash per hit beyond 2, capped at +100 % of the shot's cash (at least 1 per extra hit). |
 | Bank | + comboBank x cash of kills made by the hero after a rail bounce. |
 | Cascade | A kill caused by a bump: +1 stagger to enemies within 50 px (instant). |
 | Sweep | comboSweep cash when every regular of a wave died within the shot just played. |
@@ -53,6 +56,16 @@ The v0.1 energy-era decisions (release/hit costs, drains, respawns, boss meter, 
 | Grunt / skirmisher | Grunt Attack 3, weights Attack 70 / Advance 25 / Rest 5. Skirmisher Shoot 2. Hero 16 HP (owner: fragile). Wave 1 = 2 grunts + skirmisher. | Run 1 lands at ~9 shots with ~2.1 damage per enemy phase. |
 | Formation weights | Wave 1 always Rack; wave 2 Rack 60 / Wall 40; wave 3 Rack 30 / Wall 30 / Pincer 25 / Ring 15; boss wave Pincer 50 / Ring 50; Scatter only in Overtime (wave weights + Scatter 20). | Racks break for 3-4 hits; walls and pincers give 1-2. Lifts hits/shot toward 2 without touching physics. |
 | Economy / HP scaling | Felt cashScale 0.5. Big Stripe 60 HP. Regular enemy HP x(1 + 0.25 x (wave - 1)) within a stage; Overtime wave k adds +2 HP per enemy (doc: +1) and +k attack. | Progression bot: first boss reached run ~4, first kill run ~7 (was 3 / 4). |
+
+## Economy (v0.3)
+
+| Gap | Decision | Why |
+|---|---|---|
+| Ice cash | Ice cashScale 0.7 (was 2.2; Felt 0.5). | Switching to Ice at unlock paid ~33k/run at r12 and emptied the 37k tree by r13. |
+| Wave-clear cash | 8 x min(wave, 4): Overtime waves pay the boss-wave amount, not more each wave. | Unbounded in Overtime. |
+| Overtime cash | 2x for the first 5 Overtime waves, then 1x (HUD shows X2 only while it applies). | 85-90 % of late-run cash came from long Overtime streaks. |
+| Chain cap | See Combos: +100 % max. | At 3.6-5.4 hits/shot and +125 % per extra hit (max level), Chain paid several times the shot cash. |
+| Cash sink | **Open design question.** Once the tree is maxed cash has no use; candidates are a Challenge toggle or prestige. Not designed yet. | |
 
 ## Scope
 

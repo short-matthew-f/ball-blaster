@@ -104,11 +104,14 @@ export class RunScreen implements Screen {
       return;
     }
     if (s.phase === 'aim') this.ff = false;
+    const mult = (this.ff && this.ffAvailable()) || this.autoFast(s) ? FAST_FORWARD_MULT : 1;
+    // Fast-forward (manual or FAST ENEMIES) skips hit-stop: zeroing `acc` per kill made 4x hitch.
+    const fast = mult > 1;
+    if (fast) this.fx.hitStop = 0;
     if (this.fx.hitStop > 0) {
       this.fx.hitStop--;
       return;
     }
-    const mult = (this.ff && this.ffAvailable()) || this.autoFast(s) ? FAST_FORWARD_MULT : 1;
     this.acc += dt * mult;
     const all = [] as ReturnType<typeof sim.step>;
     let guard = 0;
@@ -117,6 +120,7 @@ export class RunScreen implements Screen {
       const ev = sim.step(s, SIM_DT);
       if (ev.length) {
         this.fx.consume(ev);
+        if (fast) this.fx.hitStop = 0;
         for (const e of ev) all.push(e);
       }
       if (this.fx.hitStop > 0 || (s.phase as string) === 'over') {
