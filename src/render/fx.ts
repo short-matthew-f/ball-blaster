@@ -81,6 +81,15 @@ export class Fx {
     }
   }
 
+  /** Wave number whose banner waits for the arriving enemies to turn solid (0 = none). */
+  pendingWave = 0;
+
+  /** Show the pending "WAVE n" banner (call once arrivals are solid). */
+  releaseWave(): void {
+    if (this.pendingWave > 0) this.banner(`WAVE ${this.pendingWave}`, P.Y, 3, 1.1);
+    this.pendingWave = 0;
+  }
+
   /** Newly staggered enemy: small star burst. */
   stagger(x: number, y: number): void {
     this.burst(x, y, [P.Y, P['5']], 6, 35, 0.4, 0, 2);
@@ -116,6 +125,7 @@ export class Fx {
           this.burst(e.x, e.y, [P.Y, P['5'], P.E, P.c], 24, 90, 0.7, 20, 2);
           break;
         case 'waveStart':
+          this.pendingWave = e.overtime ? 0 : e.wave;
           if (e.overtime) {
             if (e.wave === OVERTIME_FIRST) this.banner('OVERTIME!', P.o, 3, 1.5);
             else this.banner(`OVERTIME +${e.wave - OVERTIME_FIRST + 1}`, P.o, 2, 1.0);
@@ -137,6 +147,9 @@ export class Fx {
           break;
         case 'tracer':
           this.tracers.push({ x0: e.x0, y0: e.y0, x1: e.x1, y1: e.y1, life: 0.15 });
+          break;
+        case 'stagger':
+          this.stagger(e.x, e.y - 8);
           break;
         case 'enrage':
           this.vignette = this.flashEnabled ? 0.7 : 0.9;
@@ -215,6 +228,7 @@ export class Fx {
           this.banner(`${e.name.toUpperCase()} x${e.mult}`, P.Y, 2, 1.1);
           break;
         case 'bossArrive':
+          this.pendingWave = 0;
           this.banner('BOSS!', P.R, 4, 1.6);
           if (this.bossName) this.banner(this.bossName.toUpperCase(), P.p, 2, 1.6);
           this.stop(6);

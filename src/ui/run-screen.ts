@@ -2,8 +2,8 @@
 import type { RunResult, RunState, Vec } from '../core/types';
 import { CANCEL_RADIUS, FAST_FORWARD_MULT, MAX_PULL, MIN_POWER, SIM_DT, TABLE } from '../core/types';
 import { PALETTE } from '../render/palette';
-import { drawHud, drawWorld, rageInfo, ringDots } from '../render/renderer';
-import { TARGET_DEFS, stageById } from '../core/tuning';
+import { drawHud, drawWorld, ringDots } from '../render/renderer';
+import { stageById } from '../core/tuning';
 import { Fx } from '../render/fx';
 import { drawText } from '../render/text';
 import { Buttons, inRect } from './widgets';
@@ -31,7 +31,6 @@ export class RunScreen implements Screen {
   private prevPhase = '';
   private pulse = 0;
   private phaseHint = 0;
-  private staggered = new Set<number>();
 
   constructor(private app: App) {}
 
@@ -48,7 +47,6 @@ export class RunScreen implements Screen {
     this.prevPhase = '';
     this.pulse = 0;
     this.phaseHint = 0;
-    this.staggered.clear();
   }
 
   enter(): void {
@@ -112,13 +110,7 @@ export class RunScreen implements Screen {
     let guard = 0;
     while (this.acc >= SIM_DT && guard++ < 1000) {
       this.acc -= SIM_DT;
-      const was = s.phase;
       const ev = sim.step(s, SIM_DT);
-      // Enrage pulse even if the sim does not emit it: the enemy phase just began with the rage clock running.
-      if (was !== 'enemy' && s.phase === 'enemy' && !ev.some((e) => e.t === 'enrage')) {
-        const lvl = rageInfo(s).level;
-        if (lvl > 0) ev.push({ t: 'enrage', level: lvl });
-      }
       if (ev.length) {
         this.fx.consume(ev);
         for (const e of ev) all.push(e);
@@ -129,19 +121,7 @@ export class RunScreen implements Screen {
       }
     }
     if (all.length) sfx.handle(all);
-    // newly staggered enemies: dizzy blip + stars burst
-    let anyNew = false;
-    const now: Set<number> = new Set();
-    for (const t of s.targets) {
-      if (t.dead || t.stagger < TARGET_DEFS[t.kind].staggerAt) continue;
-      now.add(t.id);
-      if (!this.staggered.has(t.id)) {
-        anyNew = true;
-        this.fx.stagger(t.x, t.y - t.r);
-      }
-    }
-    this.staggered = now;
-    if (anyNew) sfx.stagger();
+    if (this.fx.pendingWave > 0 && !s.targets.some((t) => !t.dead && t.shimmer > 0)) this.fx.releaseWave();
     if (s.phase === 'aim') this.acc = 0;
   }
 

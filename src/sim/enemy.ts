@@ -11,6 +11,7 @@ import {
   stageById,
   CLERIC_RANGE,
   ENRAGE_BASE,
+  ENRAGE_OVERTIME_TURN,
   ENRAGE_PER_WAVE,
   HIVE_GRUB_CAP,
   SUMMON_CAP,
@@ -27,7 +28,8 @@ import { liveRegulars, spawnWave, summonNear } from './spawn';
 /** Enrage level for the current enemy phase: +1 attack per turn from turn ENRAGE_BASE + ENRAGE_PER_WAVE x wave. */
 export function rageLevel(s: RunState): number {
   const turn = s.waveTurn + 1;
-  const start = ENRAGE_BASE + ENRAGE_PER_WAVE * s.wave;
+  // Overtime: flat start at turn ENRAGE_OVERTIME_TURN of each Overtime wave.
+  const start = s.wave > WAVES_PER_STAGE + 1 ? ENRAGE_OVERTIME_TURN : ENRAGE_BASE + ENRAGE_PER_WAVE * s.wave;
   return Math.max(0, turn - start + 1);
 }
 
@@ -110,15 +112,21 @@ export function enemyStep(s: RunState, h: number, fx: FxEvent[], physics: (s: Ru
   }
   if (s.enemyQueue.length > 0) return false;
   if (!s.balls.every((b) => b.resting) || !s.targets.every((t) => t.dead || t.resting)) return false;
-  endEnemyPhase(s, fx);
+  // The last regular died during the enemy phase (bump, detonation): the next wave arrives now (it acts next phase).
+  if (s.wavePending || liveRegulars(s) === 0) {
+    s.targets = s.targets.filter((t) => !t.dead);
+    advanceWave(s, fx);
+    return false;
+  }
+  // Hold the phase until every arrival (wave, boss, summons, splits) is solid: aim never sees a shimmering enemy.
+  if (s.targets.some((t) => !t.dead && t.shimmer > 0)) return false;
+  endEnemyPhase(s);
   return true;
 }
 
 /** Reroll intents for enemies that acted, clear stagger, tick freezes, advance the enrage clock. */
-function endEnemyPhase(s: RunState, fx: FxEvent[]): void {
+function endEnemyPhase(s: RunState): void {
   s.targets = s.targets.filter((t) => !t.dead);
-  // The last regular died during the enemy phase (bump, detonation): the next wave arrives now (it acts next phase).
-  advanceWave(s, fx);
   const acted = new Set(s.acted);
   for (const t of s.targets) {
     if (acted.has(t.id)) rollIntent(s, t);

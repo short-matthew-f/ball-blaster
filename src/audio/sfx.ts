@@ -133,6 +133,9 @@ export class Sfx {
           if (!this.gate('tracer')) break;
           this.tone(1800, 0.12, 'sawtooth', 0.08, 500);
           break;
+        case 'stagger':
+          this.stagger();
+          break;
         case 'enrage':
           if (!this.gate('enrage')) break;
           this.tone(70, 0.18, 'sine', 0.45, 45);

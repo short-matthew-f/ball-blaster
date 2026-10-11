@@ -55,6 +55,8 @@ function checkSane(s: RunState, where: string, problems: string[]): void {
     }
   }
   if (!Number.isFinite(s.hp)) problems.push(`${where}: NaN hp`);
+  if (s.phase === 'aim' && s.targets.some((t) => !t.dead && t.shimmer > 0)) problems.push(`${where}: shimmering enemy at aim`);
+  if (s.phase === 'aim' && s.targets.filter((t) => !t.dead).length === 0) problems.push(`${where}: empty board at aim`);
   const ov = maxOverlap(s);
   if (ov > 0.5) problems.push(`${where}: overlap ${ov.toFixed(2)} at rest`);
 }

@@ -486,3 +486,46 @@ describe('step 3: fx', () => {
     expect(enemyPhaseOnly(s2).some((f) => f.t === 'enrage')).toBe(true);
   });
 });
+
+describe('step 4: arrivals and Overtime enrage', () => {
+  it('no live enemy is shimmering at any transition to aim (waves, boss, summons)', () => {
+    for (let seed = 1; seed <= 6; seed++) {
+      const s = createRun('felt', { ...BASE_STATS, damage: 4, maxHp: 40 }, seed);
+      expect(s.targets.some((t) => t.shimmer > 0)).toBe(false);
+      while (s.phase === 'aim' && s.shots < 200) {
+        const h = s.balls[0];
+        const tg = s.targets.reduce((a, b) => (Math.hypot(b.x - h.x, b.y - h.y) < Math.hypot(a.x - h.x, a.y - h.y) ? b : a));
+        const d = Math.hypot(tg.x - h.x, tg.y - h.y) || 1;
+        shoot(s, { x: ((tg.x - h.x) / d) * MAX_PULL, y: ((tg.y - h.y) / d) * MAX_PULL });
+        untilSettled(s);
+        if (s.phase === 'aim') expect(s.targets.filter((t) => !t.dead && t.shimmer > 0)).toEqual([]);
+      }
+    }
+  });
+  it('Overtime enrage starts at turn 6 of each Overtime wave', () => {
+    const s = lab();
+    s.wave = 6;
+    s.waveTurn = 4; // turn 5
+    expect(rageLevel(s)).toBe(0);
+    s.waveTurn = 5; // turn 6
+    expect(rageLevel(s)).toBe(1);
+  });
+  it('the boss takes its spot; a hero standing there is nudged clear', () => {
+    let nudged = 0;
+    for (let seed = 1; seed <= 12; seed++) {
+      const s = createRun('felt', BASE_STATS, seed);
+      s.targets = [];
+      s.wave = 3;
+      s.wavePending = true;
+      // Park the hero where Pincer/Ring put the boss (upper centre band).
+      s.balls[0].x = 90;
+      s.balls[0].y = 70;
+      const fx = enemyPhaseOnly(s);
+      const boss = s.targets.find((t) => t.kind === 'boss')!;
+      const h = s.balls[0];
+      expect(Math.hypot(boss.x - h.x, boss.y - h.y)).toBeGreaterThanOrEqual(boss.r + h.r - 0.5);
+      if (fx.some((f) => f.t === 'jam')) nudged++;
+    }
+    expect(nudged).toBeGreaterThan(0);
+  });
+});

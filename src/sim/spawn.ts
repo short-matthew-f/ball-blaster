@@ -80,9 +80,9 @@ interface Slot {
 }
 
 /** Can a circle sit at (x,y) without touching live bodies / obstacles / `extra` (and away from the balls)? */
-export function spotFree(s: RunState, x: number, y: number, r: number, extra: { x: number; y: number; r: number }[] = []): boolean {
+export function spotFree(s: RunState, x: number, y: number, r: number, extra: { x: number; y: number; r: number }[] = [], ignoreBalls = false): boolean {
   if (x - r < TABLE.x || x + r > TABLE.x + TABLE.w || y - r < TABLE.y || y + r > TABLE.y + TABLE.h) return false;
-  for (const b of s.balls) if (Math.hypot(b.x - x, b.y - y) < r + b.r + HERO_CLEARANCE) return false;
+  if (!ignoreBalls) for (const b of s.balls) if (Math.hypot(b.x - x, b.y - y) < r + b.r + HERO_CLEARANCE) return false;
   for (const t of s.targets) if (!t.dead && Math.hypot(t.x - x, t.y - y) < r + t.r + GAP) return false;
   for (const o of s.obstacles) if (!o.dead && Math.hypot(o.x - x, o.y - y) < r + o.r + GAP) return false;
   for (const o of extra) if (Math.hypot(o.x - x, o.y - y) < r + o.r + GAP) return false;
@@ -233,7 +233,8 @@ export function placeFormation(s: RunState, kinds: TargetKind[], formation: Form
   const placed: Slot[] = [];
   for (const m of slots) {
     let ok = m.x - m.r >= REGION.x0 && m.x + m.r <= REGION.x1 && m.y - m.r >= REGION.y0 && m.y + m.r <= REGION.y1;
-    if (ok) ok = spotFree(s, m.x, m.y, m.r, placed);
+    // The boss owns its spot: the hero is moved out of the way instead (nudgeHeroClear).
+    if (ok) ok = spotFree(s, m.x, m.y, m.r, placed, m.kind === 'boss');
     if (!ok) {
       const p = findFreeNear(s, m.x, m.y, m.r, placed);
       if (!p) continue; // table full: drop it
@@ -309,6 +310,7 @@ export function spawnWave(s: RunState, fx: FxEvent[]): Target[] {
     }
   }
   s.waveKillShot = -1;
+  nudgeHeroClear(s, fx);
   s.waveTurn = 0;
   fx.push({ t: 'waveStart', wave: s.wave, overtime: bonus > 0 });
   return out;
@@ -332,6 +334,34 @@ function spawnCadre(s: RunState, boss: Target, fx: FxEvent[]): Target[] {
   }
   updateBossShield(s);
   return out;
+}
+
+/** If the hero overlaps a just-spawned enemy (the boss takes its spot regardless), move the hero to the nearest free spot. */
+export function nudgeHeroClear(s: RunState, fx: FxEvent[]): void {
+  const h = s.balls.find((b) => b.kind === 'main');
+  if (!h) return;
+  const clear = (x: number, y: number) => {
+    if (x - h.r < TABLE.x || x + h.r > TABLE.x + TABLE.w || y - h.r < TABLE.y || y + h.r > TABLE.y + TABLE.h) return false;
+    for (const t of s.targets) if (!t.dead && Math.hypot(t.x - x, t.y - y) < t.r + h.r + GAP) return false;
+    for (const o of s.obstacles) if (!o.dead && Math.hypot(o.x - x, o.y - y) < o.r + h.r + GAP) return false;
+    return true;
+  };
+  if (s.targets.every((t) => t.dead || Math.hypot(t.x - h.x, t.y - h.y) >= t.r + h.r)) return;
+  for (let rho = 2; rho <= 320; rho += 2) {
+    const n = Math.max(8, Math.ceil((2 * Math.PI * rho) / 3));
+    for (let k = 0; k < n; k++) {
+      const a = (k / n) * Math.PI * 2;
+      const x = h.x + Math.cos(a) * rho;
+      const y = h.y + Math.sin(a) * rho;
+      if (!clear(x, y)) continue;
+      fx.push({ t: 'jam', x0: h.x, y0: h.y, x, y });
+      h.x = x;
+      h.y = y;
+      h.vx = 0;
+      h.vy = 0;
+      return;
+    }
+  }
 }
 
 /** A summon next to `near` (grubs). Null if there is no room. */

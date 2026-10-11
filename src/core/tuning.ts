@@ -123,6 +123,8 @@ export const WAVE_CASH = 8; // x wave number
 /** Enrage starts at turn ENRAGE_BASE + ENRAGE_PER_WAVE x wave; +1 attack per turn after. */
 export const ENRAGE_BASE = 8;
 export const ENRAGE_PER_WAVE = 2;
+/** Overtime: enrage starts at this turn of every Overtime wave (flat). */
+export const ENRAGE_OVERTIME_TURN = 6;
 export const OVERTIME_CASH_MULT = 2;
 /** Enemy HP scaling (step 3): x(1 + WAVE_HP_STEP) per stage wave after the first; +OVERTIME_HP_PER_WAVE x k in Overtime wave k. */
 export const WAVE_HP_STEP = 0.25;

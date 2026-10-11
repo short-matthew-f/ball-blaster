@@ -184,15 +184,10 @@ function drawEnemyBody(ctx: CanvasRenderingContext2D, t: Target, stage: string, 
   const name = enemySprite(t, stage);
   const { w, h } = spriteSize(name);
   if (t.shimmer > 0) {
-    // spawn telegraph: flickering ghost + sparkles; reduced flashing: steady ghost, shimmer rate <= 4 Hz
-    if (!flash || Math.floor(now * 18) % 2 === 0) drawSprite(ctx, name, t.x, t.y, { alpha: 0.45 });
-    ringDots(ctx, t.x, t.y, Math.max(w, h) / 2 + 2, P['5'], now * 4, 0.5);
-    const k = Math.floor(now * (flash ? 12 : 4)) % 4;
-    ctx.fillStyle = k % 2 ? P['5'] : P.Y;
-    const sx = Math.round(t.x + Math.cos(now * 5 + k) * (t.r + 3));
-    const sy = Math.round(t.y + Math.sin(now * 5 + k) * (t.r + 3));
-    ctx.fillRect(sx - 1, sy, 3, 1);
-    ctx.fillRect(sx, sy - 1, 1, 3);
+    // arrival ghost: sprite alpha rises 0.25 -> 0.9 across the 0.5 s shimmer, over a dotted ring (steady when flash is off)
+    const k = 1 - Math.min(1, t.shimmer / 0.5);
+    drawSprite(ctx, name, t.x, t.y, { alpha: 0.25 + 0.65 * k, ...(t.kind === 'cadre' ? { tint: P.B } : {}) });
+    ringDots(ctx, t.x, t.y, t.r + 1, P['5'], flash ? now * 4 : 0, 0.5);
     return;
   }
   const speed = Math.hypot(t.vx, t.vy);
@@ -206,6 +201,7 @@ function drawEnemyBody(ctx: CanvasRenderingContext2D, t: Target, stage: string, 
   }
   const frozen = !!t.frozen && t.frozen > 0;
   drawSprite(ctx, name, t.x, t.y, t.flash > 0 ? { tint: WHITE } : {});
+  if (t.kind === 'cadre' && !(t.flash > 0)) drawSprite(ctx, name, t.x, t.y, { tint: P.B, alpha: 0.55 });
   if (frozen && !(t.flash > 0)) drawSprite(ctx, name, t.x, t.y, { tint: P.c, alpha: 0.5 });
   if (frozen) ringDots(ctx, t.x, t.y, t.r + 3, P['5'], 0, 0.45);
   if (t.shield && t.shield > 0) ringDots(ctx, t.x, t.y, t.r + 3, P.B, now * 1.6, 0.4);
