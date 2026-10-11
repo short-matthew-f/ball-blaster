@@ -49,8 +49,8 @@ describe('balance: run 1 with BASE_STATS on felt', () => {
         `avg kills ${avg((r) => r.kills).toFixed(1)}, all-opening-killed ${allKilled}/20, cash>=5 on ${runs.filter((r) => r.cash >= 5).length}/20`,
     );
     expect(runs.every((r) => r.over)).toBe(true);
-    expect(cash).toBeGreaterThanOrEqual(10);
-    expect(seconds).toBeGreaterThanOrEqual(20); // target 25-45 s
+    expect(cash).toBeGreaterThanOrEqual(6);
+    expect(seconds).toBeGreaterThanOrEqual(14); // target ~7 shots, 15-30 s
     expect(seconds).toBeLessThanOrEqual(150);
     expect(allKilled).toBeLessThan(10);
   });
@@ -123,7 +123,7 @@ describe('balance: progression pacing (greedy shopper bot, felt)', () => {
     expect(median(spawns)).toBeLessThanOrEqual(9);
     expect(median(kills)).toBeGreaterThanOrEqual(4);
     expect(median(kills)).toBeLessThanOrEqual(14);
-    expect(avgAt(1)).toBeGreaterThanOrEqual(20);
+    expect(avgAt(1)).toBeGreaterThanOrEqual(14);
     expect(avgAt(1)).toBeLessThanOrEqual(50);
     expect(avgAt(10)).toBeGreaterThanOrEqual(60);
     for (const e of arrival) if (Number.isFinite(e)) expect(e).toBeGreaterThan(0);

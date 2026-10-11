@@ -2,7 +2,7 @@
 import type { RunStats, StageDef, StageId, TargetDef, TargetKind } from './types';
 
 export const TARGET_DEFS: Record<TargetKind, TargetDef> = {
-  basic: { hp: 3, r: 6, cash: 5, drain: 0, meter: 1, bounce: 1 },
+  basic: { hp: 3, r: 6, cash: 6, drain: 0, meter: 1, bounce: 1 },
   armored: { hp: 8, r: 7, cash: 12, drain: 2, meter: 1, bounce: 0.9 },
   bouncy: { hp: 4, r: 7, cash: 6, drain: 0, meter: 1, bounce: 1.3 },
   moving: { hp: 3, r: 6, cash: 6, drain: 0, meter: 1, bounce: 1, drift: 12 },
@@ -17,7 +17,7 @@ export const TARGET_DEFS: Record<TargetKind, TargetDef> = {
 export const BASE_STATS: RunStats = {
   damage: 1,
   speedDamage: 0,
-  maxEnergy: 100,
+  maxEnergy: 72,
   releaseCost: 8,
   hitCost: 1,
   bumperRefill: 3,
