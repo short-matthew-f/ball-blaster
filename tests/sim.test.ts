@@ -80,7 +80,7 @@ describe('shooting', () => {
   });
   it('release pays the flat release cost regardless of power', () => {
     const s = createRun('felt', BASE_STATS, 1);
-    expect(shoot(s, { x: 0, y: 10 })).toBe(true);
+    expect(shoot(s, { x: 0, y: 20 })).toBe(true);
     expect(s.energy).toBe(BASE_STATS.maxEnergy - BASE_STATS.releaseCost);
     expect(s.phase).toBe('resolve');
     expect(shoot(s, { x: 0, y: MAX_PULL })).toBe(false); // no shooting while balls move
@@ -267,7 +267,7 @@ describe('design review rules', () => {
     const s = createRun('felt', { ...BASE_STATS, respawnPerTurn: 0 }, 8);
     s.targets = [];
     s.obstacles = [];
-    shoot(s, { x: 0, y: -10 });
+    shoot(s, { x: 0, y: -20 });
     untilSettled(s);
     expect(s.targets.filter((t) => !t.dead).length).toBe(2);
   });

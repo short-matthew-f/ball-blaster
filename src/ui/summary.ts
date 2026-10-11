@@ -3,7 +3,7 @@ import { PALETTE } from '../render/palette';
 import { getMenuBg } from '../render/renderer';
 import { drawSprite } from '../render/sprite-cache';
 import { drawText } from '../render/text';
-import { Buttons, drawBar, drawPanel } from './widgets';
+import { Buttons, anyAffordable, drawBar, drawBuyDot, drawPanel } from './widgets';
 import type { App, Screen } from './app';
 
 const P = PALETTE;
@@ -71,6 +71,7 @@ export class SummaryScreen implements Screen {
       { id: 'again', x: 30, y: 280, w: 120, h: 22, label: 'RUN AGAIN', scale: 2, style: 'green' },
     ]);
     this.buttons.draw(ctx);
+    if (anyAffordable(this.app)) drawBuyDot(ctx, this.buttons.list[0]);
   }
 
   down(x: number, y: number): void {

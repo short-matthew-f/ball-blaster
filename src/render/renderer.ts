@@ -124,14 +124,15 @@ export function targetSprite(t: Target, stage: string): string {
   return `target_${t.kind}`;
 }
 
-function drawTarget(ctx: CanvasRenderingContext2D, t: Target, stage: string, now: number): void {
+function drawTarget(ctx: CanvasRenderingContext2D, t: Target, stage: string, now: number, flash: boolean): void {
   const name = targetSprite(t, stage);
   const { w, h } = spriteSize(name);
   if (t.shimmer > 0) {
     // spawn telegraph: flickering ghost + sparkles
-    if (Math.floor(now * 18) % 2 === 0) drawSprite(ctx, name, t.x, t.y, { alpha: 0.45 });
+    // reduced flashing: steady ghost, shimmer rate <= 4 Hz
+    if (!flash || Math.floor(now * 18) % 2 === 0) drawSprite(ctx, name, t.x, t.y, { alpha: 0.45 });
     ringDots(ctx, t.x, t.y, Math.max(w, h) / 2 + 2, P['5'], now * 4, 0.5);
-    const k = Math.floor(now * 12) % 4;
+    const k = Math.floor(now * (flash ? 12 : 4)) % 4;
     ctx.fillStyle = k % 2 ? P['5'] : P.Y;
     const sx = Math.round(t.x + Math.cos(now * 5 + k) * (t.r + 3));
     const sy = Math.round(t.y + Math.sin(now * 5 + k) * (t.r + 3));
@@ -177,14 +178,14 @@ function drawBossZone(ctx: CanvasRenderingContext2D, now: number): void {
 }
 
 /** Table contents. Call inside the shake translate. */
-export function drawWorld(ctx: CanvasRenderingContext2D, s: RunState, now: number): void {
+export function drawWorld(ctx: CanvasRenderingContext2D, s: RunState, now: number, flash = true): void {
   ctx.drawImage(getTableBg(), 0, 0);
   if (s.bossPending && !s.bossSpawned) drawBossZone(ctx, now);
   for (const o of s.obstacles) {
     if (o.dead) continue;
     drawSprite(ctx, o.kind, o.x, o.y, o.flash > 0 ? { tint: WHITE } : {});
   }
-  for (const t of s.targets) if (!t.dead) drawTarget(ctx, t, s.stage, now);
+  for (const t of s.targets) if (!t.dead) drawTarget(ctx, t, s.stage, now, flash);
   const main = s.stats.ballType === 'standard' ? 'ball_main' : `ball_${s.stats.ballType}`;
   for (const b of s.balls) {
     const name = b.kind === 'main' ? main : b.kind === 'split' ? 'ball_split' : 'ball_spat';
@@ -192,35 +193,46 @@ export function drawWorld(ctx: CanvasRenderingContext2D, s: RunState, now: numbe
   }
 }
 
-export function drawHud(ctx: CanvasRenderingContext2D, s: RunState, bestFill: number, now: number): void {
+export interface HudOpts {
+  /** Blink the BOSS label (first kill of the first-ever run). */
+  bossBlink?: boolean;
+  flash?: boolean;
+}
+
+export function drawHud(ctx: CanvasRenderingContext2D, s: RunState, bestFill: number, now: number, opts: HudOpts = {}): void {
   const st = stageById(s.stage);
-  // energy bar
+  const flash = opts.flash !== false;
+  // energy bar (2x number)
   const frac = s.stats.maxEnergy > 0 ? s.energy / s.stats.maxEnergy : 0;
-  const low = frac < 0.2 && Math.floor(now * 4) % 2 === 0;
-  drawBar(ctx, 5, 4, 100, 9, frac, low ? P.R : P.B, low ? P.p : P.c, P['2']);
-  drawText(ctx, `${Math.ceil(Math.max(0, s.energy))}/${s.stats.maxEnergy}`, 55, 6, { align: 'center', color: P['5'], shadow: P['0'] });
-  drawText(ctx, `SHOT -${s.stats.releaseCost}`, 175, 6, { align: 'right', color: P['3'] });
-  // cash + emeralds
+  const low = frac < 0.2 && Math.floor(now * (flash ? 4 : 2)) % 2 === 0;
+  drawBar(ctx, 5, 3, 100, 12, frac, low ? P.R : P.B, low ? P.p : P.c, P['2']);
+  drawText(ctx, `${Math.ceil(Math.max(0, s.energy))}/${s.stats.maxEnergy}`, 55, 4, { align: 'center', scale: 2, color: P['5'], shadow: P['0'] });
+  // shots left (2x, right)
+  const shots = s.stats.releaseCost > 0 ? Math.floor(s.energy / s.stats.releaseCost) : 0;
+  drawText(ctx, `x${Math.max(0, shots)}`, 175, 4, { align: 'right', scale: 2, color: P['5'], shadow: P['0'] });
+  // row 2: cash, emeralds, cost per shot
   drawSprite(ctx, 'coin', 9, 21);
   drawText(ctx, String(Math.floor(s.cash)), 16, 18, { color: P.Y, shadow: P['0'] });
-  drawSprite(ctx, 'emerald', 80, 21);
-  drawText(ctx, String(s.emeralds), 87, 18, { color: P.E, shadow: P['0'] });
-  drawText(ctx, st.name.toUpperCase(), 175, 18, { align: 'right', color: P['3'] });
+  drawSprite(ctx, 'emerald', 62, 21);
+  drawText(ctx, String(s.emeralds), 69, 18, { color: P.E, shadow: P['0'] });
+  drawText(ctx, `-${s.stats.releaseCost}/SHOT`, 175, 18, { align: 'right', color: P['4'] });
 
   // bottom meter band (x 10..130)
-  const bx = TABLE.x, bw = 120, by = 304, bh = 7;
+  const bx = TABLE.x, bw = 120, by = 308, bh = 8, ly = 294;
   const boss = s.targets.find((t) => t.kind === 'boss' && !t.dead);
   if (s.bossKilled) {
-    drawText(ctx, 'STAGE CLEARED', bx, 295, { color: P.Y });
+    drawText(ctx, 'STAGE CLEARED', bx, ly, { scale: 2, color: P.Y });
     drawBar(ctx, bx, by, bw, bh, 1, P.Y, P['5'], P.y);
   } else if (s.bossSpawned && boss) {
-    drawText(ctx, st.boss.name.toUpperCase(), bx, 295, { color: P.p });
+    drawText(ctx, st.boss.name.toUpperCase(), bx, ly, { scale: 2, color: P.p });
     drawBar(ctx, bx, by, bw, bh, boss.hp / boss.maxHp, P.R, P.p, P['2']);
   } else if (s.bossPending || s.bossSpawned) {
-    drawText(ctx, 'BOSS INCOMING', bx, 295, { color: Math.floor(now * 4) % 2 ? P.R : P.p });
+    const alt = Math.floor(now * (flash ? 4 : 2)) % 2;
+    drawText(ctx, 'BOSS INCOMING', bx, ly, { scale: 2, color: alt ? P.R : P.p });
     drawBar(ctx, bx, by, bw, bh, 1, P.M, P['5'], P.m);
   } else {
-    drawText(ctx, `BOSS ${s.meterKills}/${st.meterKills}`, bx, 295, { color: P.M });
+    const on = !opts.bossBlink || Math.floor(now * (flash ? 4 : 2)) % 2 === 0;
+    if (on) drawText(ctx, `BOSS ${s.meterKills}/${st.meterKills}`, bx, ly, { scale: 2, color: opts.bossBlink ? P.Y : P.M });
     drawBar(ctx, bx, by, bw, bh, s.meterKills / st.meterKills, P.m, P.M, P['2'], bestFill);
   }
 }

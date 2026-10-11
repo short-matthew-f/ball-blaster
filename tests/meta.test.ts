@@ -94,7 +94,7 @@ describe('meta', () => {
     const pos = new Set<string>();
     for (const n of NODES) {
       expect(n.name.length).toBeLessThanOrEqual(12);
-      expect(n.desc.length).toBeLessThanOrEqual(28);
+      expect(n.desc.length).toBeLessThanOrEqual(20);
       for (const r of n.requires ?? []) expect(ids.has(r)).toBe(true);
       for (let l = 0; l < n.maxLevel; l++) {
         const c = n.cost(l);

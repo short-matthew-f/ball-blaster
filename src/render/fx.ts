@@ -36,6 +36,10 @@ export class Fx {
   /** Render frames of sim freeze remaining. */
   hitStop = 0;
   shakeEnabled = true;
+  /** false = reduced flashing: alpha-fade banners, solid bolts. */
+  flashEnabled = true;
+  /** Ball position (set by the run screen) for the shoot puff. */
+  ballPos: Vec | null = null;
   /** Boss display name for the arrival banner (set by the run screen). */
   bossName = '';
   private clock = 0;
@@ -169,9 +173,11 @@ export class Fx {
         case 'shrine':
           this.burst(e.x, e.y, [P.M, P.c, P['5']], 10, 50, 0.6, -20);
           break;
+        case 'shoot':
+          if (this.ballPos) this.burst(this.ballPos.x, this.ballPos.y, [P['5'], P['4']], 4, 28, 0.25, 0);
+          break;
         case 'shimmer':
         case 'ballClack':
-        case 'shoot':
         case 'runOver':
           break;
       }
@@ -229,7 +235,7 @@ export class Fx {
     }
     ctx.globalAlpha = 1;
     for (const b of this.bolts) {
-      const flick = Math.floor(this.clock * 40) % 2 === 0;
+      const flick = !this.flashEnabled || Math.floor(this.clock * 40) % 2 === 0;
       ctx.fillStyle = flick ? P.Y : P['5'];
       for (let i = 0; i < b.pts.length - 1; i++) pxLine(ctx, b.pts[i], b.pts[i + 1]);
     }
@@ -244,10 +250,15 @@ export class Fx {
     ctx.globalAlpha = 1;
     this.banners.forEach((b, i) => {
       const age = b.max - b.life;
-      if (b.life < 0.25 && Math.floor(this.clock * 30) % 2 === 0) return;
+      if (b.life < 0.25) {
+        if (this.flashEnabled) {
+          if (Math.floor(this.clock * 30) % 2 === 0) return;
+        } else ctx.globalAlpha = Math.max(0, b.life / 0.25);
+      }
       const pop = age < 0.1 ? 1 : 0;
       const y = 118 + i * 22 - pop * 2;
       drawText(ctx, b.text, TABLE.x + TABLE.w / 2, y, { color: b.color, scale: b.scale, align: 'center', shadow: P['0'], shadowOff: b.scale >= 3 ? 2 : 1 });
+      ctx.globalAlpha = 1;
     });
   }
 }

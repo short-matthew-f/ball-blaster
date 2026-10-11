@@ -38,7 +38,7 @@ export const NODES: UpgradeNode[] = [
   // ---- POWER ----
   mk({ id: 'damage', tree: 'power', name: 'DAMAGE', desc: 'Hits deal {v} damage', max: 12, cost: geo(5, 1.8), col: 1, row: 0, icon: 'icon_damage',
     apply: (s, l) => { s.damage += l; } }),
-  mk({ id: 'speed', tree: 'power', name: 'VELOCITY', desc: 'Fast hits +{v} damage', max: 5, cost: geo(60, 1.8), col: 0, row: 1, icon: 'icon_speed', requires: ['damage'],
+  mk({ id: 'speed', tree: 'power', name: 'VELOCITY', desc: 'Fast hits +{v} dmg', max: 5, cost: geo(60, 1.8), col: 0, row: 1, icon: 'icon_speed', requires: ['damage'],
     apply: (s, l) => { s.speedDamage = l; } }),
   mk({ id: 'lightning', tree: 'power', name: 'LIGHTNING', desc: 'Arcs between targets', max: 6, cost: geo(150, 1.7), col: 1, row: 1, icon: 'icon_lightning', requires: ['damage'],
     apply: (s, l) => {
@@ -47,7 +47,7 @@ export const NODES: UpgradeNode[] = [
       s.lightningRange = 40;
       s.lightningDamage = 1 + Math.floor(l / 3);
     } }),
-  mk({ id: 'split', tree: 'power', name: 'SPLIT', desc: '{v} balls on first hit', max: 3, cost: geo(200, 2), col: 2, row: 1, icon: 'icon_split', requires: ['damage'],
+  mk({ id: 'split', tree: 'power', name: 'SPLIT', desc: '{v} balls on 1st hit', max: 3, cost: geo(200, 2), col: 2, row: 1, icon: 'icon_split', requires: ['damage'],
     apply: (s, l) => { s.splitCount = l + 1; } }),
   mk({ id: 'spitter', tree: 'power', name: 'SPITTER', desc: 'Spits mini balls', max: 5, cost: geo(250, 1.8), col: 2, row: 2, icon: 'icon_spit', requires: ['split'],
     apply: (s, l) => {
@@ -58,25 +58,25 @@ export const NODES: UpgradeNode[] = [
   // ---- ENERGY ----
   mk({ id: 'maxEnergy', tree: 'energy', name: 'BATTERY', desc: '+{v} max energy', max: 10, cost: geo(8, 1.5), col: 1, row: 0, icon: 'icon_energy',
     apply: (s, l) => { s.maxEnergy += 15 * l; } }),
-  mk({ id: 'killRefill', tree: 'energy', name: 'KILL JUICE', desc: 'Kills may refill energy', max: 6, cost: geo(15, 1.6), col: 1, row: 1, icon: 'icon_refill', requires: ['maxEnergy'],
+  mk({ id: 'killRefill', tree: 'energy', name: 'KILL JUICE', desc: 'Kills refill energy', max: 6, cost: geo(15, 1.6), col: 1, row: 1, icon: 'icon_refill', requires: ['maxEnergy'],
     apply: (s, l) => { s.killRefillChance = 0.25 + 0.1 * (l - 1); s.killRefillAmount = 8 + 2 * (l - 1); } }),
-  mk({ id: 'bossRefill', tree: 'energy', name: 'BOSS JUICE', desc: 'Boss arrival refills {v}', max: 3, cost: (l) => 30 * Math.pow(2, l), col: 1, row: 2, icon: 'icon_boss', requires: ['killRefill'],
+  mk({ id: 'bossRefill', tree: 'energy', name: 'BOSS JUICE', desc: 'Boss refills {v}', max: 3, cost: (l) => 30 * Math.pow(2, l), col: 1, row: 2, icon: 'icon_boss', requires: ['killRefill'],
     apply: (s, l) => { s.bossRefillPct = 0.25 + 0.2 * l; } }),
   mk({ id: 'bumperJuice', tree: 'energy', name: 'BUMPER JUICE', desc: 'Bumpers refill +{v}', max: 4, cost: geo(40, 1.6), col: 2, row: 1, icon: 'icon_bumper', requires: ['maxEnergy'],
     apply: (s, l) => { s.bumperRefill += l; } }),
   // ---- BOARD ----
   mk({ id: 'enemyCount', tree: 'board', name: 'CROWD', desc: '+{v} live targets', max: 5, cost: geo(12, 1.6), col: 1, row: 0, icon: 'icon_enemies',
     apply: (s, l) => { s.enemyCount += l; } }),
-  mk({ id: 'respawn', tree: 'board', name: 'RESPAWN', desc: 'Faster target refills', max: 6, cost: geo(12, 1.6), col: 2, row: 0, icon: 'icon_respawn',
+  mk({ id: 'respawn', tree: 'board', name: 'RESPAWN', desc: 'Faster refills', max: 6, cost: geo(12, 1.6), col: 2, row: 0, icon: 'icon_respawn',
     apply: (s, l) => { s.respawnPerTurn += 0.25 * l; } }),
   mk({ id: 'aim', tree: 'board', name: 'AIM LINE', desc: 'Preview {v} bounces', max: 3, cost: (l) => [25, 80, 200][l] ?? 200, col: 0, row: 1, icon: 'icon_aim',
     apply: (s, l) => { s.aimPreview = l; } }),
   mk({ id: 'cashBonus', tree: 'board', name: 'CASH BONUS', desc: '+10% cash per level', max: 8, cost: geo(50, 1.7), col: 1, row: 1, icon: 'icon_cash', requires: ['enemyCount'],
     apply: (s, l) => { s.cashMult += 0.1 * l; } }),
   // ---- COMBO ----
-  mk({ id: 'multiKill', tree: 'combo', name: 'MULTI KILL', desc: 'Multi-kill cash bonus', max: 5, cost: geo(40, 1.7), col: 1, row: 0, icon: 'icon_combo',
+  mk({ id: 'multiKill', tree: 'combo', name: 'MULTI KILL', desc: 'Multi-kill bonus', max: 5, cost: geo(40, 1.7), col: 1, row: 0, icon: 'icon_combo',
     apply: (s, l) => { s.comboMultiKill = 0.25 * l; } }),
-  mk({ id: 'bankShot', tree: 'combo', name: 'BANK SHOT', desc: 'Wall-bounce kill bonus', max: 5, cost: geo(60, 1.7), col: 0, row: 1, icon: 'icon_bank',
+  mk({ id: 'bankShot', tree: 'combo', name: 'BANK SHOT', desc: 'Bank kill bonus', max: 5, cost: geo(60, 1.7), col: 0, row: 1, icon: 'icon_bank',
     apply: (s, l) => { s.comboBank = 0.5 * l; } }),
   mk({ id: 'bumperChain', tree: 'combo', name: 'BUMP CHAIN', desc: 'Bumper kill bonus', max: 5, cost: geo(80, 1.7), col: 1, row: 1, icon: 'icon_bumper',
     apply: (s, l) => { s.comboBumperChain = 0.5 * l; } }),
@@ -89,9 +89,9 @@ export const NODES: UpgradeNode[] = [
     apply: (s, l) => { s.bumpers = l; } }),
   em({ id: 'crates', name: 'CRATES', desc: '{v} cash crates', max: 3, cost: (l) => 2 + l, col: 1, row: 0, icon: 'icon_crate',
     apply: (s, l) => { s.crates = l; s.crateCash = 8 + 4 * l; } }),
-  em({ id: 'chests', name: 'CHESTS', desc: 'Chests hold more cash', max: 3, cost: (l) => 3 + l, col: 2, row: 0, icon: 'icon_chest',
+  em({ id: 'chests', name: 'CHESTS', desc: 'Richer chests', max: 3, cost: (l) => 3 + l, col: 2, row: 0, icon: 'icon_chest',
     apply: (s, l) => { s.chests = Math.min(l, 2); s.chestCash = 25 + 15 * l; } }),
-  em({ id: 'shrine', name: 'SHRINE', desc: 'Shrine refills energy', max: 4, cost: (l) => 3 + 2 * l, col: 3, row: 0, icon: 'icon_shrine',
+  em({ id: 'shrine', name: 'SHRINE', desc: 'Shrine gives energy', max: 4, cost: (l) => 3 + 2 * l, col: 3, row: 0, icon: 'icon_shrine',
     apply: (s, l) => { s.shrineChance = 0.3 + 0.15 * (l - 1); s.shrineEnergy = 25 + 5 * l; } }),
   em({ id: 'ballHeavy', name: 'HEAVY BALL', desc: 'Unlock heavy ball', max: 1, cost: () => 3, col: 0, row: 1, icon: 'icon_ball', apply: () => {} }),
   em({ id: 'ballLight', name: 'LIGHT BALL', desc: 'Unlock light ball', max: 1, cost: () => 3, col: 1, row: 1, icon: 'icon_ball', apply: () => {} }),

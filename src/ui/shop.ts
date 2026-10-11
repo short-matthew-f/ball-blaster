@@ -4,8 +4,8 @@ import { BASE_STATS, STAGES } from '../core/tuning';
 import { PALETTE } from '../render/palette';
 import { getMenuBg } from '../render/renderer';
 import { drawSprite } from '../render/sprite-cache';
-import { drawText, wrapText } from '../render/text';
-import { Buttons, drawPanel, inRect } from './widgets';
+import { drawText, textWidth, wrapText } from '../render/text';
+import { Buttons, drawBuyDot, drawPanel, inRect, syncHints } from './widgets';
 import type { Button } from './widgets';
 import type { App, Screen } from './app';
 
@@ -52,8 +52,8 @@ export class ShopScreen implements Screen {
   private sel: string | null = null;
   private scroll = 0;
   private maxScroll = 0;
-  private treeTop = 49;
-  private drag: { y0: number; s0: number; moved: boolean; x: number; y: number } | null = null;
+  private treeTop = 51;
+  private drag: { y0: number; s0: number; moved: boolean; prevSel: string | null; picked: boolean } | null = null;
   private toast = '';
   private toastUntil = 0;
   private now = 0;
@@ -62,9 +62,28 @@ export class ShopScreen implements Screen {
   constructor(private app: App) {}
 
   enter(): void {
+    syncHints(this.app);
     this.scroll = 0;
     this.sel = null;
     this.drag = null;
+  }
+
+  private tabOpen(t: Tab): boolean {
+    return t === 'combo' || t === 'emerald' || t === 'stage' ? !!this.app.save.hints[`tab:${t}`] : true;
+  }
+
+  private tabHasBuy(t: Tab): boolean {
+    const id = t === 'stage' ? `stage:${this.app.save.current}` : t;
+    return this.app.meta.NODES.some((n) => n.tree === id && this.app.meta.buyState(this.app.save, n) === 'ok');
+  }
+
+  private nodeAt(x: number, y: number): UpgradeNode | undefined {
+    if (y < this.treeTop || y >= TREE_BOTTOM) return undefined;
+    for (const n of this.nodes()) {
+      const b = this.boxes.get(n.id);
+      if (b && inRect(x, y, b.x - 3, b.y - 3, NODE + 6, NODE + 6)) return n;
+    }
+    return undefined;
   }
 
   private treeId(): TreeId {
@@ -95,11 +114,13 @@ export class ShopScreen implements Screen {
 
   draw(ctx: CanvasRenderingContext2D, now: number): void {
     this.now = now;
+    syncHints(this.app);
+    if (!this.tabOpen(this.tab)) this.tab = 'power';
     const app = this.app;
     const save = app.save;
     const meta = app.meta;
     ctx.drawImage(getMenuBg(), 0, 0);
-    this.treeTop = this.tab === 'emerald' ? 66 : 49;
+    this.treeTop = this.tab === 'emerald' ? 68 : 51;
     const nodes = this.nodes();
     this.layoutBoxes(nodes);
     const btns: Button[] = [];
@@ -109,7 +130,7 @@ export class ShopScreen implements Screen {
     drawText(ctx, String(Math.floor(save.cash)), 16, 5, { color: P.Y, shadow: P['0'], scale: 1 });
     drawSprite(ctx, 'emerald', 82, 8);
     drawText(ctx, String(save.emeralds), 89, 5, { color: P.E, shadow: P['0'] });
-    btns.push({ id: 'settings', x: 148, y: 2, w: 28, h: 12, label: 'SET', style: 'gray' });
+    btns.push({ id: 'settings', x: 144, y: 1, w: 32, h: 16, label: 'SET', style: 'gray' });
 
     // stage selector
     const stage = STAGES.find((s) => s.id === save.current) ?? STAGES[0];
@@ -121,15 +142,16 @@ export class ShopScreen implements Screen {
 
     // tabs
     TABS.forEach((t, i) => {
-      btns.push({ id: `tab:${t}`, x: i * 30, y: 34, w: 29, h: 12, ...(t === 'emerald' ? { icon: 'emerald' } : { label: t.toUpperCase() }), style: 'gray', active: t === this.tab });
+      const open = this.tabOpen(t);
+      btns.push({ id: `tab:${t}`, x: i * 30, y: 32, w: 29, h: 16, ...(!open ? { icon: 'icon_lock' } : t === 'emerald' ? { icon: 'emerald' } : { label: t.toUpperCase() }), style: 'gray', active: t === this.tab, disabled: !open });
     });
 
     // ball selector
     if (this.tab === 'emerald') {
-      drawText(ctx, 'BALL', 4, 52, { color: P['3'] });
+      drawText(ctx, 'BALL', 4, 56, { color: P['3'] });
       BALLS.forEach((b, i) => {
         const own = this.owned(b);
-        btns.push({ id: `ball:${b}`, x: 28 + i * 34, y: 48, w: 30, h: 14, icon: BALL_SPRITE[b], style: 'gray', disabled: !own, active: save.ballType === b });
+        btns.push({ id: `ball:${b}`, x: 28 + i * 34, y: 51, w: 30, h: 15, icon: BALL_SPRITE[b], style: 'gray', disabled: !own, active: save.ballType === b });
       });
     }
 
@@ -169,25 +191,27 @@ export class ShopScreen implements Screen {
     if (node) {
       const lvl = meta.nodeLevel(save, node.id);
       const st = meta.buyState(save, node);
-      drawText(ctx, node.name, 7, PANEL_Y + 5, { color: node.currency === 'emerald' ? P.E : P.Y, shadow: P['0'] });
-      drawText(ctx, `LV ${lvl}/${node.maxLevel}`, 173, PANEL_Y + 5, { align: 'right', color: P['4'] });
-      wrapText(describe(node, lvl), 42).slice(0, 3).forEach((l, i) => drawText(ctx, l, 7, PANEL_Y + 15 + i * 8, { color: P['4'] }));
+      const nm = node.name;
+      const lv = lvl >= node.maxLevel ? `LV${lvl} MAX` : `LV${lvl}>${lvl + 1}`;
+      drawText(ctx, `${nm} ${lv}`, 7, PANEL_Y + 5, { color: node.currency === 'emerald' ? P.E : P.Y, shadow: P['0'], scale: 2 });
+      wrapText(describe(node, lvl), 20).slice(0, 2).forEach((l, i) => drawText(ctx, l, 7, PANEL_Y + 17 + i * 10, { color: P['4'], scale: 2 }));
       const cost = meta.nextCost(save, node);
       if (cost !== null) {
-        drawSprite(ctx, node.currency === 'emerald' ? 'emerald' : 'coin', 12, PANEL_Y + 47);
-        drawText(ctx, String(cost), 20, PANEL_Y + 44, { color: node.currency === 'emerald' ? P.E : P.Y, shadow: P['0'] });
+        drawSprite(ctx, node.currency === 'emerald' ? 'emerald' : 'coin', 12, PANEL_Y + 49);
+        drawText(ctx, String(cost), 20, PANEL_Y + 46, { color: node.currency === 'emerald' ? P.E : P.Y, shadow: P['0'] });
       }
       const label = st === 'maxed' ? 'MAXED' : st === 'locked' ? 'LOCKED' : st === 'poor' ? 'NEED MORE' : 'BUY';
-      btns.push({ id: 'buy', x: 100, y: PANEL_Y + 38, w: 72, h: 18, label, scale: 1, style: 'gold', disabled: st !== 'ok' });
+      btns.push({ id: 'buy', x: 84, y: PANEL_Y + 37, w: 90, h: 22, label, scale: st === 'ok' || st === 'maxed' ? 2 : 1, style: 'gold', disabled: st !== 'ok' });
     } else {
       drawText(ctx, 'TAP A NODE TO INSPECT IT', 90, PANEL_Y + 26, { align: 'center', color: P['3'] });
     }
 
-    btns.push({ id: 'menu', x: 4, y: 299, w: 50, h: 16, label: 'MENU', style: 'gray' });
-    btns.push({ id: 'start', x: 58, y: 299, w: 118, h: 16, label: 'START RUN', scale: 2, style: 'green' });
+    btns.push({ id: 'menu', x: 4, y: 297, w: 50, h: 20, label: 'MENU', style: 'gray' });
+    btns.push({ id: 'start', x: 58, y: 297, w: 118, h: 20, label: 'START RUN', scale: 2, style: 'green' });
     this.buttons.set(btns);
     this.buttons.draw(ctx);
-    if (now < this.toastUntil) drawText(ctx, this.toast, 90, 289, { align: 'center', color: P.Y, shadow: P['0'] });
+    for (const b of btns) if (b.id.startsWith('tab:') && !b.disabled && this.tabHasBuy(b.id.slice(4) as Tab)) drawBuyDot(ctx, b);
+    if (now < this.toastUntil) drawText(ctx, this.toast, 90, 288, { align: 'center', color: P.Y, shadow: P['0'] });
   }
 
   private drawNode(ctx: CanvasRenderingContext2D, n: UpgradeNode, b: { x: number; y: number }): void {
@@ -209,6 +233,20 @@ export class ShopScreen implements Screen {
     ctx.fillRect(b.x + 1, b.y + 1, NODE - 2, NODE - 2);
     drawSprite(ctx, n.icon, b.x + NODE / 2, b.y + 11, { scale: 2, alpha: st === 'locked' ? 0.35 : 1 });
     if (st === 'locked') drawSprite(ctx, 'icon_lock', b.x + NODE - 7, b.y + 17);
+    // cost under the card
+    {
+      const cost = meta.nextCost(save, n);
+      const cy = b.y + NODE + 2;
+      if (cost === null) {
+        drawText(ctx, 'MAX', b.x + NODE / 2, cy, { align: 'center', color: P.Y });
+      } else {
+        const txt = String(cost);
+        const w = textWidth(txt) + 7;
+        const x0 = Math.round(b.x + NODE / 2 - w / 2);
+        drawSprite(ctx, n.currency === 'emerald' ? 'emerald' : 'coin', x0 + 2, cy + 3);
+        drawText(ctx, txt, x0 + 7, cy, { color: st === 'ok' ? P.Y : P['3'] });
+      }
+    }
     // level pips / bar
     const py = b.y + NODE - 6;
     if (n.maxLevel <= 6) {
@@ -231,30 +269,29 @@ export class ShopScreen implements Screen {
       this.drag = null;
       return;
     }
-    this.drag = { y0: y, s0: this.scroll, moved: false, x, y };
+    const d = { y0: y, s0: this.scroll, moved: false, prevSel: this.sel, picked: false };
+    const n = this.nodeAt(x, y);
+    if (n) {
+      this.sel = n.id;
+      d.picked = true;
+      this.app.sfx.ui();
+    }
+    this.drag = d;
   }
 
   move(_x: number, y: number): void {
     const d = this.drag;
     if (!d) return;
-    if (Math.abs(y - d.y0) > 4) d.moved = true;
+    if (!d.moved && Math.abs(y - d.y0) > 10 && this.maxScroll > 0) {
+      d.moved = true;
+      if (d.picked) this.sel = d.prevSel; // a real scroll began: undo the tap selection
+    }
     if (d.moved) this.scroll = Math.max(0, Math.min(this.maxScroll, d.s0 - (y - d.y0)));
   }
 
   up(x: number, y: number): void {
-    const d = this.drag;
-    this.drag = null;
-    if (d) {
-      if (!d.moved && y >= this.treeTop && y < TREE_BOTTOM) {
-        for (const n of this.nodes()) {
-          const b = this.boxes.get(n.id);
-          if (b && inRect(x, y, b.x - 3, b.y - 3, NODE + 6, NODE + 6)) {
-            this.sel = n.id;
-            this.app.sfx.ui();
-            break;
-          }
-        }
-      }
+    if (this.drag) {
+      this.drag = null;
       return;
     }
     const id = this.buttons.up(x, y);

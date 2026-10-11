@@ -2,7 +2,7 @@ import { PALETTE } from '../render/palette';
 import { getFeltBg } from '../render/renderer';
 import { drawSprite } from '../render/sprite-cache';
 import { drawText } from '../render/text';
-import { Buttons } from './widgets';
+import { Buttons, anyAffordable, drawBuyDot } from './widgets';
 import type { App, Screen } from './app';
 
 const P = PALETTE;
@@ -70,12 +70,13 @@ export class TitleScreen implements Screen {
 
     const pulse = Math.floor(now * 2) % 2;
     this.buttons.set([
-      { id: 'play', x: 40, y: 262, w: 100, h: 26, label: 'PLAY', scale: 3, style: pulse ? 'green' : 'green' },
-      { id: 'shop', x: 16, y: 294, w: 74, h: 16, label: 'UPGRADES', style: 'blue' },
-      { id: 'settings', x: 94, y: 294, w: 70, h: 16, label: 'SETTINGS', style: 'gray' },
+      { id: 'play', x: 40, y: 258, w: 100, h: 28, label: 'PLAY', scale: 3, style: pulse ? 'green' : 'green' },
+      { id: 'shop', x: 16, y: 292, w: 74, h: 20, label: 'UPGRADES', style: 'blue' },
+      { id: 'settings', x: 94, y: 292, w: 70, h: 20, label: 'SETTINGS', style: 'gray' },
     ]);
     this.buttons.draw(ctx);
-    drawText(ctx, 'V0.1', 4, 313, { color: P['2'] });
+    if (anyAffordable(this.app)) drawBuyDot(ctx, this.buttons.list[1]);
+    drawText(ctx, 'V0.1', 4, 314, { color: P['2'] });
   }
 
   down(x: number, y: number): void {

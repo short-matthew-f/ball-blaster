@@ -2,7 +2,7 @@
 import type { RunResult, RunState, Vec } from '../core/types';
 import { CANCEL_RADIUS, FAST_FORWARD_MULT, MAX_PULL, SIM_DT, TABLE } from '../core/types';
 import { PALETTE } from '../render/palette';
-import { drawHud, drawWorld } from '../render/renderer';
+import { drawHud, drawWorld, ringDots } from '../render/renderer';
 import { stageById } from '../core/tuning';
 import { Fx } from '../render/fx';
 import { drawText } from '../render/text';
@@ -13,6 +13,8 @@ import type { Button } from './widgets';
 const P = PALETTE;
 const FF_RECT = { x: 138, y: 296, w: 32, h: 18 };
 const OVER_DELAY = 0.8;
+const BAND_Y = 293; // tap anywhere at/below this y toggles fast-forward
+const PULSE_T = 0.7;
 
 export class RunScreen implements Screen {
   state: RunState | null = null;
@@ -25,6 +27,11 @@ export class RunScreen implements Screen {
   private drag: { sx: number; sy: number; cx: number; cy: number } | null = null;
   private ffPressed = false;
   private buttons = new Buttons();
+  private prevPhase = '';
+  private pulse = 0;
+  private bossBlink = 0;
+  private firstRun = false;
+  private blinkDone = false;
 
   constructor(private app: App) {}
 
@@ -38,10 +45,16 @@ export class RunScreen implements Screen {
     this.finished = false;
     this.drag = null;
     this.bestFill = this.app.save.bestFill[state.stage] ?? 0;
+    this.prevPhase = '';
+    this.pulse = 0;
+    this.bossBlink = 0;
+    this.firstRun = this.app.save.stats.runs === 0;
+    this.blinkDone = false;
   }
 
   enter(): void {
     this.fx.shakeEnabled = this.app.save.settings.shake;
+    this.fx.flashEnabled = this.app.save.settings.flash;
   }
 
   private ffAvailable(): boolean {
@@ -56,6 +69,12 @@ export class RunScreen implements Screen {
     dt = Math.min(dt, 0.1);
     this.fx.update(dt);
     sfx.beginFrame();
+    this.pulse = Math.max(0, this.pulse - dt);
+    this.bossBlink = Math.max(0, this.bossBlink - dt);
+    if (s.phase === 'aim' && this.prevPhase !== '' && this.prevPhase !== 'aim') this.pulse = PULSE_T;
+    this.prevPhase = s.phase;
+    const mb = s.balls.find((b) => b.kind === 'main');
+    this.fx.ballPos = mb ? { x: mb.x, y: mb.y } : null;
 
     if (s.phase === 'over') {
       this.overTimer += dt;
@@ -79,7 +98,13 @@ export class RunScreen implements Screen {
       const ev = sim.step(s, SIM_DT);
       if (ev.length) {
         this.fx.consume(ev);
-        for (const e of ev) all.push(e);
+        for (const e of ev) {
+          all.push(e);
+          if (e.t === 'kill' && this.firstRun && !this.blinkDone) {
+            this.blinkDone = true;
+            this.bossBlink = 1.5;
+          }
+        }
       }
       if (this.fx.hitStop > 0 || (s.phase as string) === 'over') {
         this.acc = 0;
@@ -101,10 +126,13 @@ export class RunScreen implements Screen {
     const sh = this.fx.shakeOffset();
     ctx.save();
     ctx.translate(sh.x, sh.y);
-    drawWorld(ctx, s, now);
+    const flash = this.app.save.settings.flash;
+    drawWorld(ctx, s, now, flash);
+    this.drawHint(ctx, s, now);
     this.drawAim(ctx, s);
     this.fx.draw(ctx);
-    drawHud(ctx, s, this.bestFill, now);
+    drawHud(ctx, s, this.bestFill, now, { bossBlink: this.bossBlink > 0, flash });
+    this.drawPips(ctx, s);
     this.fx.drawOverlay(ctx);
     ctx.restore();
 
@@ -178,24 +206,68 @@ export class RunScreen implements Screen {
     ctx.fillRect(ex - 1, ey - 1, 4, 4);
     ctx.fillStyle = color;
     ctx.fillRect(ex, ey, 2, 2);
-    // power pips near the ball
+  }
+
+  /** Power pips and cost sit beside the energy bar so the thumb never covers them. */
+  private drawPips(ctx: CanvasRenderingContext2D, s: RunState): void {
+    const pull = this.pull();
+    if (!pull || s.phase !== 'aim') return;
+    const len = Math.hypot(pull.x, pull.y);
+    if (len <= CANCEL_RADIUS) return;
+    const power = Math.min(1, len / MAX_PULL);
+    const color = power < 0.4 ? P.E : power < 0.75 ? P.Y : P.R;
     const lit = Math.max(1, Math.round(power * 5));
     for (let i = 0; i < 5; i++) {
-      const px = tx - 12 + i * 5;
+      const px = 110 + i * 5;
       ctx.fillStyle = P['0'];
-      ctx.fillRect(px - 1, ty - 1, 5, 5);
+      ctx.fillRect(px - 1, 3, 5, 5);
       ctx.fillStyle = i < lit ? color : P['2'];
-      ctx.fillRect(px, ty, 3, 3);
+      ctx.fillRect(px, 4, 3, 3);
     }
-    ctx.globalAlpha = 0.5;
-    drawText(ctx, `-${s.stats.releaseCost}`, tx + 15, ty - 1, { color: P.B, shadow: P['0'] });
+    drawText(ctx, `-${s.stats.releaseCost}`, 110, 10, { color: P.B, shadow: P['0'] });
+  }
+
+  /** Ring pulse round the ball + first-session ghost pull demo. */
+  private drawHint(ctx: CanvasRenderingContext2D, s: RunState, now: number): void {
+    if (s.phase !== 'aim') return;
+    const main = s.balls.find((b) => b.kind === 'main');
+    if (!main) return;
+    const bx = Math.round(main.x), by = Math.round(main.y);
+    const teaching = !this.app.save.hints.shotTaught;
+    if (this.drag) return;
+    let k = -1;
+    if (teaching) k = (now % 1.4) / 1.4;
+    else if (this.pulse > 0) k = 1 - this.pulse / PULSE_T;
+    if (k >= 0) {
+      ctx.globalAlpha = 1 - k * 0.8;
+      ringDots(ctx, bx, by, 8 + k * 4, P['5'], 0, 0.5);
+      ctx.globalAlpha = 1;
+    }
+    if (!teaching) return;
+    // ghost pull line demo from mid-table, growing and repeating
+    const t = (now % 2) / 2;
+    const gx = 90, gy = 185;
+    const L = Math.min(1, t / 0.7) * 36;
+    ctx.globalAlpha = 0.8;
+    ctx.fillStyle = P.E;
+    for (let d = 8; d <= L; d += 3) ctx.fillRect(gx, gy + d, 2, 2);
+    ctx.fillStyle = P['5'];
+    ctx.fillRect(gx - 1, gy - 1, 4, 4);
+    ctx.fillRect(gx - 1, gy + Math.round(L) - 1, 4, 4);
     ctx.globalAlpha = 1;
+    // dark plate so the hint stays legible over targets
+    ctx.globalAlpha = 0.75;
+    ctx.fillStyle = P['0'];
+    ctx.fillRect(28, 144, 124, 32);
+    ctx.globalAlpha = 1;
+    drawText(ctx, 'DRAG ANYWHERE', 90, 150, { align: 'center', scale: 2, color: P['5'], shadow: P['0'] });
+    drawText(ctx, 'RELEASE TO SHOOT', 90, 168, { align: 'center', color: P['3'], shadow: P['0'] });
   }
 
   down(x: number, y: number): void {
     const s = this.state;
     if (!s) return;
-    if (this.ffAvailable() && inRect(x, y, FF_RECT.x, FF_RECT.y, FF_RECT.w, FF_RECT.h)) {
+    if (this.ffAvailable() && (y >= BAND_Y || inRect(x, y, FF_RECT.x, FF_RECT.y, FF_RECT.w, FF_RECT.h))) {
       this.ffPressed = true;
       this.buttons.down(x, y);
       return;
@@ -214,7 +286,8 @@ export class RunScreen implements Screen {
     const s = this.state;
     if (this.ffPressed) {
       this.ffPressed = false;
-      if (this.buttons.up(x, y) === 'ff') {
+      const hit = this.buttons.up(x, y) === 'ff';
+      if (hit || (y >= BAND_Y && this.ffAvailable())) {
         this.ff = !this.ff;
         this.app.sfx.ui();
       }
@@ -225,8 +298,16 @@ export class RunScreen implements Screen {
     if (!s || !d || s.phase !== 'aim') return;
     const pull = { x: d.sx - x, y: d.sy - y };
     const len = Math.hypot(pull.x, pull.y);
-    if (len <= CANCEL_RADIUS) return;
+    if (len <= CANCEL_RADIUS) {
+      this.pulse = PULSE_T; // acknowledge a cancelled tap
+      return;
+    }
     if (this.app.sim.shoot(s, pull)) {
+      const hints = this.app.save.hints;
+      if (!hints.shotTaught) {
+        hints.shotTaught = true;
+        this.app.persist();
+      }
       this.app.sfx.shoot(Math.min(1, len / MAX_PULL));
       this.acc = 0;
     }

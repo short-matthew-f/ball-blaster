@@ -2,6 +2,7 @@
 import { PALETTE } from '../render/palette';
 import { drawText, textWidth } from '../render/text';
 import { drawSprite } from '../render/sprite-cache';
+import type { App } from './app';
 
 const P = PALETTE;
 
@@ -27,6 +28,8 @@ export interface Button {
   disabled?: boolean;
   /** Draw a highlighted outline (toggled/selected). */
   active?: boolean;
+  /** Extra hit-test padding in px around the drawn rect (default 3). */
+  hitPad?: number;
 }
 
 export function inRect(px: number, py: number, x: number, y: number, w: number, h: number): boolean {
@@ -75,9 +78,15 @@ export class Buttons {
   }
 
   private hit(x: number, y: number): Button | undefined {
+    // exact rect wins; otherwise fall back to the padded zone
     for (let i = this.list.length - 1; i >= 0; i--) {
       const b = this.list[i];
       if (!b.disabled && inRect(x, y, b.x, b.y, b.w, b.h)) return b;
+    }
+    for (let i = this.list.length - 1; i >= 0; i--) {
+      const b = this.list[i];
+      const p = b.hitPad ?? 3;
+      if (!b.disabled && inRect(x, y, b.x - p, b.y - p, b.w + 2 * p, b.h + 2 * p)) return b;
     }
     return undefined;
   }
@@ -128,4 +137,37 @@ export function drawBar(ctx: CanvasRenderingContext2D, x: number, y: number, w: 
     ctx.fillStyle = P['5'];
     ctx.fillRect(gx, y - 2, 1, h + 4);
   }
+}
+
+/** Set the one-shot tab reveal flags when their conditions are first met. Persists on change. */
+export function syncHints(app: App): void {
+  const { save, meta } = app;
+  const has = (pred: (t: string) => boolean): boolean => meta.NODES.some((n) => pred(n.tree) && (save.levels[n.id] ?? 0) > 0);
+  const want: Record<string, boolean> = {
+    'tab:combo': save.cash >= 40 || has((t) => t === 'combo'),
+    'tab:emerald': save.emeralds > 0 || has((t) => t === 'emerald'),
+    'tab:stage': save.unlocked > 0 || save.cash >= 100 || has((t) => t.startsWith('stage:')),
+  };
+  let changed = false;
+  for (const k of Object.keys(want)) {
+    if (want[k] && !save.hints[k]) {
+      save.hints[k] = true;
+      changed = true;
+    }
+  }
+  if (changed) app.persist();
+}
+
+/** True when any revealed upgrade node is currently buyable. */
+export function anyAffordable(app: App): boolean {
+  syncHints(app);
+  return app.meta.NODES.some((n) => app.meta.buyState(app.save, n) === 'ok');
+}
+
+/** 3x3 yellow "something to buy" dot at a button's top-right corner. */
+export function drawBuyDot(ctx: CanvasRenderingContext2D, b: Button): void {
+  ctx.fillStyle = P['0'];
+  ctx.fillRect(b.x + b.w - 5, b.y - 1, 5, 5);
+  ctx.fillStyle = P.Y;
+  ctx.fillRect(b.x + b.w - 4, b.y, 3, 3);
 }

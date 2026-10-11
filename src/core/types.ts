@@ -26,7 +26,7 @@ import type { Rng } from './rng';
 // ---------- Sim constants ----------
 export const MAX_PULL = 60; // px of drag for full power
 export const MAX_LAUNCH_SPEED = 480; // px/s
-export const CANCEL_RADIUS = 6; // release within this drag length = cancel, no cost
+export const CANCEL_RADIUS = 12; // release within this drag length = cancel, no cost
 export const STOP_SPEED = 6; // px/s; below this a ball snaps to rest
 export const SPEED_DMG_REF = 200; // px/s per +speedDamage
 export const FAST_FORWARD_MULT = 4;
@@ -351,7 +351,10 @@ export interface SaveData {
   bossKills: Partial<Record<StageId, number>>;
   /** Equipped ball type (must be unlocked in emerald tree). */
   ballType: BallType;
-  settings: { sound: boolean; shake: boolean };
+  /** flash: false = reduced flashing (alpha fades, solid bolts, slow shimmer). Default from prefers-reduced-motion. */
+  settings: { sound: boolean; shake: boolean; flash: boolean };
+  /** One-shot onboarding / disclosure flags, e.g. 'shotTaught', 'tab:combo', 'tab:emerald', 'tab:stage'. */
+  hints: Record<string, boolean>;
   stats: { runs: number; kills: number; shots: number };
 }
 

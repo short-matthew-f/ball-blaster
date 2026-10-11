@@ -13,7 +13,8 @@ export function newSave(): SaveData {
     bestFill: {},
     bossKills: {},
     ballType: 'standard',
-    settings: { sound: true, shake: true },
+    settings: { sound: true, shake: true, flash: !prefersReducedMotion() },
+    hints: {},
     stats: { runs: 0, kills: 0, shots: 0 },
   };
 }
@@ -57,8 +58,10 @@ export function sanitize(raw: unknown): SaveData | null {
     settings: {
       sound: typeof settings.sound === 'boolean' ? settings.sound : true,
       shake: typeof settings.shake === 'boolean' ? settings.shake : true,
+      flash: typeof settings.flash === 'boolean' ? settings.flash : !prefersReducedMotion(),
     },
     stats: { runs: num(st.runs, 0), kills: num(st.kills, 0), shots: num(st.shots, 0) },
+    hints: boolMap(r.hints),
   };
 }
 
@@ -91,4 +94,18 @@ export function importSave(text: string): SaveData | null {
   } catch {
     return null;
   }
+}
+
+function prefersReducedMotion(): boolean {
+  try {
+    return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    return false;
+  }
+}
+
+function boolMap(v: unknown): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) if (typeof x === 'boolean') out[k] = x;
+  return out;
 }

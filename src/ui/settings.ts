@@ -43,7 +43,7 @@ function showOverlay(title: string, text: string, readOnly: boolean, actions: { 
 
 export class SettingsScreen implements Screen {
   private buttons = new Buttons();
-  private confirmUntil = 0;
+  private confirming = false;
   private toast = '';
   private toastUntil = 0;
   private now = 0;
@@ -51,7 +51,7 @@ export class SettingsScreen implements Screen {
   constructor(private app: App) {}
 
   enter(): void {
-    this.confirmUntil = 0;
+    this.confirming = false;
     this.toast = '';
   }
 
@@ -65,17 +65,23 @@ export class SettingsScreen implements Screen {
     ctx.drawImage(getMenuBg(), 0, 0);
     const set = this.app.save.settings;
     drawText(ctx, 'SETTINGS', 90, 16, { align: 'center', scale: 3, color: P['5'], shadow: P['0'], shadowOff: 2 });
-    const confirming = now < this.confirmUntil;
+    const confirming = this.confirming;
     this.buttons.set([
       { id: 'sound', x: 20, y: 56, w: 140, h: 22, label: `SOUND: ${set.sound ? 'ON' : 'OFF'}`, scale: 1, style: set.sound ? 'green' : 'gray' },
       { id: 'shake', x: 20, y: 86, w: 140, h: 22, label: `SHAKE: ${set.shake ? 'ON' : 'OFF'}`, style: set.shake ? 'green' : 'gray' },
-      { id: 'export', x: 20, y: 126, w: 140, h: 22, label: 'EXPORT SAVE', style: 'blue' },
-      { id: 'import', x: 20, y: 156, w: 140, h: 22, label: 'IMPORT SAVE', style: 'blue' },
-      { id: 'reset', x: 20, y: 196, w: 140, h: 22, label: confirming ? 'TAP AGAIN TO CONFIRM' : 'RESET SAVE', style: 'red' },
+      { id: 'flash', x: 20, y: 116, w: 140, h: 22, label: `FLASH: ${set.flash ? 'ON' : 'OFF'}`, style: set.flash ? 'green' : 'gray' },
+      { id: 'export', x: 20, y: 156, w: 140, h: 22, label: 'EXPORT SAVE', style: 'blue' },
+      { id: 'import', x: 20, y: 186, w: 140, h: 22, label: 'IMPORT SAVE', style: 'blue' },
+      ...(confirming
+        ? [
+            { id: 'resetYes', x: 20, y: 226, w: 66, h: 22, label: 'YES, RESET', style: 'red' as const },
+            { id: 'resetNo', x: 94, y: 226, w: 66, h: 22, label: 'CANCEL', style: 'gray' as const },
+          ]
+        : [{ id: 'reset', x: 20, y: 226, w: 140, h: 22, label: 'RESET SAVE', style: 'red' as const }]),
       { id: 'back', x: 50, y: 270, w: 80, h: 22, label: 'BACK', scale: 2, style: 'gray' },
     ]);
     this.buttons.draw(ctx);
-    if (now < this.toastUntil) drawText(ctx, this.toast, 90, 236, { align: 'center', color: P.Y, shadow: P['0'] });
+    if (now < this.toastUntil) drawText(ctx, this.toast, 90, 254, { align: 'center', color: P.Y, shadow: P['0'] });
   }
 
   down(x: number, y: number): void {
@@ -95,6 +101,9 @@ export class SettingsScreen implements Screen {
     } else if (id === 'shake') {
       set.shake = !set.shake;
       app.persist();
+    } else if (id === 'flash') {
+      set.flash = !set.flash;
+      app.persist();
     } else if (id === 'export') {
       const code = app.meta.exportSave(app.save);
       const nav = navigator.clipboard;
@@ -113,11 +122,13 @@ export class SettingsScreen implements Screen {
         },
       }]);
     } else if (id === 'reset') {
-      if (this.now < this.confirmUntil) {
-        app.replaceSave(app.meta.newSave());
-        this.confirmUntil = 0;
-        this.say('SAVE RESET');
-      } else this.confirmUntil = this.now + 3;
+      this.confirming = true;
+    } else if (id === 'resetNo') {
+      this.confirming = false;
+    } else if (id === 'resetYes') {
+      app.replaceSave(app.meta.newSave());
+      this.confirming = false;
+      this.say('SAVE RESET');
     } else if (id === 'back') app.go(app.settingsFrom);
   }
   cancel(): void {
