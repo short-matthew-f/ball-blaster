@@ -39,9 +39,9 @@ export interface Screen {
   cancel?(): void;
 }
 
-/** FAST ENEMIES setting (default ON). save.settings.fastEnemies is not in SaveData yet, so read/write it loosely. */
+/** FAST ENEMIES setting (default OFF: the charges are the point of the enemy phase; players can opt into 4x). */
 export function fastEnemiesOn(save: SaveData): boolean {
-  return (save.settings as unknown as { fastEnemies?: boolean }).fastEnemies ?? true;
+  return save.settings.fastEnemies ?? false;
 }
 export function setFastEnemies(save: SaveData, v: boolean): void {
   (save.settings as unknown as { fastEnemies?: boolean }).fastEnemies = v;

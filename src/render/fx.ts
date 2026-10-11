@@ -91,6 +91,11 @@ export class Fx {
   }
 
   /** Newly staggered enemy: small star burst. */
+  /** Per-shot hit count, shown on settle regardless of the Chain unlock so multi-hit shots always read. */
+  hits(x: number, y: number, n: number): void {
+    this.floater(x, y - 14, `${n} HITS`, n >= 3 ? P.Y : P['4']);
+  }
+
   stagger(x: number, y: number): void {
     this.burst(x, y, [P.Y, P['5']], 6, 35, 0.4, 0, 2);
   }

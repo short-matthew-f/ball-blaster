@@ -87,6 +87,10 @@ export class RunScreen implements Screen {
       this.app.persist();
       this.phaseHint = 2.2;
     }
+    if (this.prevPhase === 'resolve' && s.phase !== 'resolve' && s.combo.hits >= 2) {
+      const h = s.balls.find((b) => b.kind === 'main');
+      if (h) this.fx.hits(h.x, h.y, s.combo.hits);
+    }
     this.prevPhase = s.phase;
     const mb = s.balls.find((b) => b.kind === 'main');
     this.fx.ballPos = mb ? { x: mb.x, y: mb.y } : null;
@@ -268,8 +272,8 @@ export class RunScreen implements Screen {
     if (!teaching) return;
     // ghost pull line demo from mid-table, growing and repeating
     const t = (now % 2) / 2;
-    const gx = 90, gy = 185;
-    const L = Math.min(1, t / 0.7) * 36;
+    const gx = 90, gy = 168;
+    const L = Math.min(1, t / 0.7) * 24;
     ctx.globalAlpha = 0.8;
     ctx.fillStyle = P.E;
     for (let d = 8; d <= L; d += 3) ctx.fillRect(gx, gy + d, 2, 2);
@@ -280,10 +284,10 @@ export class RunScreen implements Screen {
     // dark plate so the hint stays legible over targets
     ctx.globalAlpha = 0.75;
     ctx.fillStyle = P['0'];
-    ctx.fillRect(28, 144, 124, 32);
+    ctx.fillRect(28, 196, 124, 32);
     ctx.globalAlpha = 1;
-    drawText(ctx, 'DRAG ANYWHERE', 90, 150, { align: 'center', scale: 2, color: P['5'], shadow: P['0'] });
-    drawText(ctx, 'RELEASE TO SHOOT', 90, 168, { align: 'center', color: P['3'], shadow: P['0'] });
+    drawText(ctx, 'DRAG ANYWHERE', 90, 202, { align: 'center', scale: 2, color: P['5'], shadow: P['0'] });
+    drawText(ctx, 'RELEASE TO SHOOT', 90, 220, { align: 'center', color: P['3'], shadow: P['0'] });
   }
 
   down(x: number, y: number): void {

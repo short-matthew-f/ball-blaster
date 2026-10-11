@@ -133,7 +133,7 @@ export const ELITE_CASH_MULT = 2;
 /** Elite Swift: soft-roll distance (+25 %). Hardy: HP multiplier. */
 export const SWIFT_ADVANCE_DIST = 75;
 export const HARDY_HP_MULT = 1.5;
-/** Old Eight: phase 1 Attack, phase 2 Slam (after Charge; full-table, banks once). */
+/** Big Stripe: phase 1 Attack, phase 2 Slam (after Charge; full-table, banks once). */
 export const BOSS_ATTACK = 4;
 export const BOSS_SLAM = 8;
 
@@ -222,7 +222,7 @@ export const STAGES: StageDef[] = [
     hpScale: 1,
     cashScale: 0.5,
     emeraldReward: 5,
-    boss: { name: 'Old Eight', hp: 60, r: 23, phases: [0.5], cadre: 0 },
+    boss: { name: 'Big Stripe', hp: 60, r: 23, phases: [0.5], cadre: 0 },
   },
   {
     id: 'ice',

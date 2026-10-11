@@ -120,7 +120,7 @@ Big enemies (brute, hive, boss) anchor the back of a formation; grunts and bombe
 
 **Elite:** from wave 3, one enemy per wave is an elite: a visible crown, one modifier (Spiky = thorns 1, Hardy = +50 % HP, Swift = Advance 50 px), double cash.
 
-**Boss — Old Eight:** r 23, 40 HP, stagger 4, mass 20. Phase 1 (above 50 %): Attack 4 (reach 90) / Advance / Summon grub. Phase 2: Charge → Slam 8 (a full-table charge that banks once) / Attack 4. Ice boss keeps its cadre shield.
+**Boss — Big Stripe:** r 23, 40 HP, stagger 4, mass 20. Phase 1 (above 50 %): Attack 4 (reach 90) / Advance / Summon grub. Phase 2: Charge → Slam 8 (a full-table charge that banks once) / Attack 4. Ice boss keeps its cadre shield.
 
 **Existing actives map cleanly:** Warden = Cleric, Hive = Hive, Frost = Frost (a frozen enemy ignores soft hits *and* skips its intent — freeze is now a trade, not pure protection).
 
