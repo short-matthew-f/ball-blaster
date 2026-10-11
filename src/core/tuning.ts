@@ -1,43 +1,115 @@
 // All balance numbers live here. Sim and meta both read from this file.
-import type { RunStats, StageDef, StageId, TargetDef, TargetKind } from './types';
+import type { RunStats, StageDef, StageId, TargetDef, TargetKind, WaveDef } from './types';
 
+// Roster (DESIGN-v0.2.md "Roster (Felt Hall)"). Masses: hero 1, grub 1.5, grunt 3, bouncer 2, brute 8, boss 20.
+// reach = edge-to-edge gap (px) within which an Attack charges; beyond it, Attack executes as Advance.
 export const TARGET_DEFS: Record<TargetKind, TargetDef> = {
-  basic: { hp: 3, r: 6, cash: 6, drain: 0, meter: 1, bounce: 1 },
-  armored: { hp: 8, r: 7, cash: 12, drain: 2, meter: 1, bounce: 0.9 },
-  bouncy: { hp: 4, r: 7, cash: 6, drain: 0, meter: 1, bounce: 1.3 },
-  moving: { hp: 3, r: 6, cash: 6, drain: 0, meter: 1, bounce: 1, drift: 12 },
-  splitting: { hp: 4, r: 7, cash: 6, drain: 0, meter: 1, bounce: 1, splitsInto: { kind: 'mini', count: 2 } },
-  volatile: { hp: 2, r: 6, cash: 7, drain: 0, meter: 1, bounce: 1, explodeR: 24, explodeDmg: 3 },
-  mini: { hp: 1, r: 4, cash: 2, drain: 0, meter: 1, bounce: 1 },
-  cadre: { hp: 6, r: 5, cash: 4, drain: 0, meter: 0, bounce: 1 },
-  boss: { hp: 36, r: 14, cash: 60, drain: 1, meter: 0, bounce: 0.9 },
-  // Active tier (DECISIONS.md "Active target tier").
-  warden: { hp: 5, r: 7, cash: 10, drain: 0, meter: 1, bounce: 1 },
-  hive: { hp: 6, r: 8, cash: 14, drain: 0, meter: 1, bounce: 0.9 },
-  spore: { hp: 1, r: 4, cash: 1, drain: 0, meter: 0, bounce: 1 },
-  frost: { hp: 4, r: 7, cash: 12, drain: 0, meter: 1, bounce: 0.8 },
+  grunt: {
+    hp: 3, r: 12, mass: 3, cash: 4, bounce: 1, staggerAt: 1, chargeSpeed: 260, reach: 90,
+    intents: [{ t: 'attack', n: 2, weight: 50 }, { t: 'advance', weight: 35 }, { t: 'rest', weight: 15 }],
+  },
+  skirmisher: {
+    hp: 3, r: 12, mass: 3, cash: 5, bounce: 1, staggerAt: 1, chargeSpeed: 0, reach: 0,
+    intents: [{ t: 'shoot', n: 1, weight: 60 }, { t: 'advance', weight: 40 }], // advance = sideways reposition
+  },
+  bouncer: {
+    hp: 4, r: 14, mass: 2, cash: 7, bounce: 1.3, staggerAt: 2, chargeSpeed: 300, reach: 140,
+    intents: [{ t: 'attack', n: 1, weight: 60 }, { t: 'rest', weight: 40 }],
+  },
+  bomber: {
+    hp: 2, r: 13, mass: 2.5, cash: 7, bounce: 1, staggerAt: 1, chargeSpeed: 0, reach: 0, explodes: true,
+    intents: [], // fixed cycle: advance, advance, detonate
+  },
+  broodmother: {
+    hp: 5, r: 15, mass: 4, cash: 8, bounce: 1, staggerAt: 2, chargeSpeed: 220, reach: 80,
+    splitsInto: { kind: 'grub', count: 2 },
+    intents: [{ t: 'attack', n: 2, weight: 60 }, { t: 'rest', weight: 40 }],
+  },
+  grub: {
+    hp: 1, r: 10, mass: 1.5, cash: 1, bounce: 1, staggerAt: 1, chargeSpeed: 240, reach: 80,
+    intents: [{ t: 'attack', n: 1, weight: 70 }, { t: 'advance', weight: 30 }],
+  },
+  thornback: {
+    hp: 5, r: 14, mass: 4, cash: 9, bounce: 1, staggerAt: 2, chargeSpeed: 240, reach: 85, thorns: 1,
+    intents: [{ t: 'attack', n: 2, weight: 50 }, { t: 'guard', weight: 50 }],
+  },
+  brute: {
+    hp: 8, r: 19, mass: 8, cash: 14, bounce: 0.8, staggerAt: 3, chargeSpeed: 200, chargedSpeed: 300, reach: 70,
+    chargedAttack: 5,
+    intents: [], // scripted: Charge -> Attack 5 (Advance while out of reach, keeping the charge)
+  },
+  cleric: {
+    hp: 5, r: 14, mass: 3, cash: 10, bounce: 1, staggerAt: 2, chargeSpeed: 0, reach: 0,
+    intents: [{ t: 'guard', weight: 60 }, { t: 'shoot', n: 1, weight: 40 }], // guard = shield an ally
+  },
+  hive: {
+    hp: 6, r: 17, mass: 6, cash: 14, bounce: 0.9, staggerAt: 3, chargeSpeed: 0, reach: 0,
+    intents: [{ t: 'summon', weight: 50 }, { t: 'rest', weight: 50 }],
+  },
+  boss: {
+    hp: 40, r: 23, mass: 20, cash: 60, bounce: 0.9, staggerAt: 4, chargeSpeed: 240, chargedSpeed: 400, reach: 90,
+    intents: [], // scripted per phase (sim/enemy.ts)
+  },
 };
 
-/** Active tier: kinds that run the telegraph -> execute cycle in the enemy phase. */
-export const ACTIVE_KINDS: readonly TargetKind[] = ['warden', 'hive', 'frost'];
-/** Max distance (centre to centre) a warden/frost can pick a target from. */
-export const ACTIVE_RANGE = 40;
-/** Board caps: live shielded targets, live frozen targets, live spores. */
-export const SHIELD_CAP = 2;
-export const FREEZE_CAP = 2;
-export const SPORE_CAP = 4;
-/** Enemy phases a freeze lasts. */
-export const FREEZE_PHASES = 3;
-/** Pre-impact ball speed (px/s) at or above which a frozen target shatters. */
-export const SHATTER_SPEED = 160;
-/** Shatter blast radius (plus the victim's r) and damage. */
-export const SHATTER_R = 20;
-export const SHATTER_DMG = 2;
-/** Restitution off a frozen target. */
-export const FROZEN_BOUNCE = 1.1;
+// ---------- v0.2 physics + enemy phase ----------
+/** Enemy friction and rolling deceleration = this x the stage's hero values. */
+export const ENEMY_FRICTION_MULT = 1.5;
+/** Pair restitution = BASE_RESTITUTION x kind bounce of each enemy involved, capped at MAX_RESTITUTION. */
+export const BASE_RESTITUTION = 0.9;
+export const MAX_RESTITUTION = 1.3;
+/** Enemy-wall restitution = this x the kind's bounce (bouncers bank, others die on the rail). */
+export const ENEMY_WALL_BOUNCE = 0.6;
+/** Enemy-enemy bump: 1 damage + 1 stagger to the bumped body above this relative impact speed (px/s). */
+export const BUMP_DMG_SPEED = 60;
+/** Ball contact on an enemy counts as a hit above this approach speed (px/s). */
+export const HIT_MIN_SPEED = 15;
+/** A pair must separate and wait this long (s) before another hit counts. */
+export const HIT_COOLDOWN = 0.1;
+/** Soft roll (Advance / reposition) launch speed: carries ~40 px. */
+/**
+ * A charger stops dead when its blow lands (the hero keeps the full knock). Without it heavy chargers (brute, boss)
+ * plough on and pin the hero into rails/corners: jams 0.6-1.1/run -> <= 0.1/run in the step-1 bot.
+ */
+export const CHARGE_STOPS_ON_HIT = true;
+export const ADVANCE_SPEED = 120;
+/** An Advance stops this far (edge gap, px) short of the hero instead of shoving it. */
+export const ADVANCE_STANDOFF = 6;
+/** Hero must have a clear corridor of this many px in some direction before aim, or it is nudged. */
+export const JAM_CLEAR = 24;
+/** Bottom spawn-only zone height (formations never enter it). */
+export const SPAWN_ZONE = 60;
+export const FORMATION_JITTER = 6;
+/** Regulars may cover at most this fraction of the table. */
+export const AREA_CAP = 0.1;
+export const REGULAR_CAP = 6;
+export const SUMMON_CAP = 3;
+export const HIVE_GRUB_CAP = 4;
+/** Detonate / bomber death: damage to the hero within HERO_R (edge gap), to enemies within ENEMY_R. */
+export const BLAST_HERO_R = 60;
+export const BLAST_HERO_DMG = 4;
+export const BLAST_ENEMY_R = 40;
+export const BLAST_ENEMY_DMG = 3;
+export const CLERIC_RANGE = 60;
+export const WAVES_PER_STAGE = 3;
+export const WAVE_CASH = 8; // x wave number
+export const WAVE_HEAL = 3; // via the heal curve
+/** Enrage starts at turn ENRAGE_BASE + ENRAGE_PER_WAVE x wave; +1 attack per turn after. */
+export const ENRAGE_BASE = 8;
+export const ENRAGE_PER_WAVE = 2;
+export const OVERTIME_CASH_MULT = 2;
+export const ELITE_CASH_MULT = 2;
+/** Elite Swift: soft-roll speed (carries ~50 px). Hardy: HP multiplier. */
+export const SWIFT_ADVANCE_SPEED = 135;
+export const HARDY_HP_MULT = 1.5;
+/** Old Eight: phase 1 Attack, phase 2 Slam (after Charge; full-table, banks once). */
+export const BOSS_ATTACK = 4;
+export const BOSS_SLAM = 8;
 
 /** Base stats before any upgrade. meta/stats.ts clones this and applies nodes. */
 export const BASE_STATS: RunStats = {
+  maxHp: 20,
+  armor: 0,
   damage: 1,
   speedDamage: 0,
   maxEnergy: 72,
@@ -76,20 +148,23 @@ export const BASE_STATS: RunStats = {
   cashMult: 1,
 };
 
+/** Hero ball types. The hero is always r 12; types change mass, speed and damage. Sticky = stun shot. */
+export const HERO_R = 12;
 export const BALL_TYPES = {
-  standard: { r: 3.5, mass: 1, speedMult: 1, dmgBonus: 0 },
-  heavy: { r: 4.5, mass: 2, speedMult: 0.8, dmgBonus: 1 },
-  light: { r: 2.5, mass: 0.6, speedMult: 1.25, dmgBonus: 0 },
-  sticky: { r: 3.5, mass: 1, speedMult: 1, dmgBonus: 0 }, // sticks briefly to a hit target, hitting it again on release
+  standard: { r: HERO_R, mass: 1, speedMult: 1, dmgBonus: 0 },
+  heavy: { r: HERO_R, mass: 2, speedMult: 0.8, dmgBonus: 1 },
+  light: { r: HERO_R, mass: 0.6, speedMult: 1.25, dmgBonus: 0 },
+  sticky: { r: HERO_R, mass: 1, speedMult: 1, dmgBonus: 0 }, // stops dead on first enemy contact, +1 stagger
 } as const;
 
 export const SPIT_LIFE_CAP = 3;
 export const EMERALD_REPEAT_DECAY = 0.68; // reward = max(1, round(base * decay^priorKills)); felt 5 -> 5,3,2,2,1...
-/** Base refill (via the shared curve) when the last regular target on the board dies during a shot. */
-export const BOARD_CLEAR_REFILL = 4;
-/** Sticky ball: seconds held on a hit target, and release speed as a fraction of the impact speed. */
-export const STICKY_HOLD_SECONDS = 0.25;
-export const STICKY_RELEASE_MULT = 0.6;
+
+const FELT_WAVES: WaveDef[] = [
+  { slots: ['grunt', 'grunt', 'grunt', 'skirmisher'], formations: ['rack', 'wall', 'pincer'] },
+  { slots: ['grunt', 'grunt', 'skirmisher', ['bouncer', 'thornback'], 'brute'], formations: ['rack', 'wall', 'pincer', 'ring'] },
+  { slots: ['grunt', 'skirmisher', 'bomber', ['broodmother', 'hive'], 'brute'], formations: ['rack', 'wall', 'pincer', 'ring', 'scatter'], elite: 4 },
+];
 
 export const STAGES: StageDef[] = [
   {
@@ -99,31 +174,12 @@ export const STAGES: StageDef[] = [
     friction: 0.6,
     rollDecel: 70,
     wallBounce: 0.75,
-    openingBoard: ['basic', 'basic', 'armored'],
-    pool: [
-      { kind: 'basic', weight: 50 },
-      { kind: 'armored', weight: 15 },
-      { kind: 'bouncy', weight: 10 },
-      { kind: 'moving', weight: 10 },
-      { kind: 'volatile', weight: 10 },
-      { kind: 'splitting', weight: 5 },
-      { kind: 'warden', weight: 8, minEnemyCount: 5, maxLive: 2 },
-      { kind: 'hive', weight: 6, minEnemyCount: 6, maxLive: 1 },
-    ],
-    densityCap: 8,
+    waves: FELT_WAVES,
+    bossWave: { slots: ['boss', 'grunt', 'cleric'], formations: ['rack'] },
     hpScale: 1,
     cashScale: 1,
-    meterKills: 14,
     emeraldReward: 5,
-    boss: {
-      name: 'Old Eight',
-      hp: 36,
-      r: 14,
-      phases: [0.5],
-      phaseFx: [[], ['drain', 'spawnMini']],
-      cadre: 0,
-      moves: false,
-    },
+    boss: { name: 'Old Eight', hp: 40, r: 23, phases: [0.5] },
   },
   {
     id: 'ice',
@@ -132,30 +188,12 @@ export const STAGES: StageDef[] = [
     friction: 0.4,
     rollDecel: 45,
     wallBounce: 0.92,
-    openingBoard: ['basic', 'armored', 'volatile', 'basic'],
-    pool: [
-      { kind: 'basic', weight: 40 },
-      { kind: 'armored', weight: 20 },
-      { kind: 'bouncy', weight: 10 },
-      { kind: 'moving', weight: 15 },
-      { kind: 'volatile', weight: 10 },
-      { kind: 'splitting', weight: 5 },
-      { kind: 'frost', weight: 12, maxLive: 2 },
-    ],
-    densityCap: 9,
-    hpScale: 2.5,
+    waves: FELT_WAVES,
+    bossWave: { slots: ['boss', 'grunt', 'cleric'], formations: ['rack'] },
+    hpScale: 2,
     cashScale: 2.2,
-    meterKills: 14,
     emeraldReward: 6,
-    boss: {
-      name: 'Rime Golem',
-      hp: 36,
-      r: 14,
-      phases: [0.6, 0.3],
-      phaseFx: [[], ['bouncy'], ['bouncy', 'spawnMini']],
-      cadre: 3,
-      moves: false,
-    },
+    boss: { name: 'Rime Golem', hp: 40, r: 23, phases: [0.5] },
   },
 ];
 

@@ -1,16 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { CURVE_CAP, FAST_FORWARD_MULT, MAX_PULL, SIM_DT, type Ball, type FxEvent, type RunState, type Vec } from '../src/core/types';
-import { BASE_STATS, BOARD_CLEAR_REFILL } from '../src/core/tuning';
-import { canFastForward, createRun, previewShot, refill, shoot, step } from '../src/sim/index';
-import { makeTarget } from '../src/sim/spawn';
+import { FAST_FORWARD_MULT, MAX_LAUNCH_SPEED, MAX_PULL, MIN_POWER, SIM_DT, TABLE, type FxEvent, type RunState, type TargetKind, type Vec } from '../src/core/types';
+import { BASE_STATS, SPAWN_ZONE, TARGET_DEFS, WAVE_CASH } from '../src/core/tuning';
+import { Rng } from '../src/core/rng';
+
+const SPAWN_ZONE_Y = TABLE.y + TABLE.h - SPAWN_ZONE;
+import { canFastForward, createRun, heal, previewShot, shoot, step } from '../src/sim/index';
+import { makeEnemy, placeFormation } from '../src/sim/spawn';
+import { maxOverlap } from '../src/sim/physics';
+import { rageLevel } from '../src/sim/enemy';
+import { hasCorridor, jamRule } from '../src/sim/run';
 
 const SHOTS: Vec[] = [
-  { x: 0, y: 60 },
-  { x: 20, y: 50 },
-  { x: -35, y: 40 },
-  { x: 10, y: -60 },
-  { x: -50, y: 10 },
-  { x: 40, y: 40 },
+  { x: 0, y: -60 },
+  { x: 20, y: -50 },
+  { x: -35, y: -40 },
+  { x: 10, y: 60 },
+  { x: -50, y: -10 },
+  { x: 40, y: -40 },
 ];
 
 function untilSettled(s: RunState, dt = SIM_DT, max = 240 * 60): FxEvent[] {
@@ -32,24 +38,33 @@ function play(seed: number, dt = SIM_DT) {
 }
 
 function snapshot(s: RunState) {
-  return { balls: s.balls, targets: s.targets, energy: s.energy, cash: s.cash, t: s.t, phase: s.phase, refilled: s.refilled };
+  return { balls: s.balls, targets: s.targets, hp: s.hp, cash: s.cash, t: s.t, phase: s.phase, wave: s.wave };
 }
 
-/** A clean resolve-phase state with one target in front of the resting main ball and no other targets. */
-function lab(): { s: RunState; main: Ball } {
+/** Empty table with the hero at (x,y), resting. */
+function lab(x = 90, y = 240): RunState {
   const s = createRun('felt', { ...BASE_STATS }, 42);
   s.targets = [];
   s.obstacles = [];
-  const main = s.balls[0];
-  s.targets.push(makeTarget(s, 'armored', 90, 100, 0));
-  s.phase = 'resolve';
-  return { s, main };
+  s.balls[0].x = x;
+  s.balls[0].y = y;
+  return s;
 }
 
-function extraBall(s: RunState, kind: 'split' | 'spat', x: number, y: number, vy: number): Ball {
-  const b: Ball = { id: s.nextId++, kind, x, y, vx: 0, vy, r: kind === 'split' ? 2.5 : 2, mass: 0.5, life: kind === 'spat' ? 3 : Infinity, resting: false, banked: false };
-  s.balls.push(b);
-  return b;
+function put(s: RunState, kind: TargetKind, x: number, y: number) {
+  const e = makeEnemy(s, kind, x, y);
+  s.targets.push(e);
+  return e;
+}
+
+/** Run one enemy phase directly from aim (no hero shot). */
+function enemyPhaseOnly(s: RunState): FxEvent[] {
+  // A zero-length resolve: shoot then immediately stop the hero, so the machine runs resolve -> enemy -> aim.
+  shoot(s, { x: 0, y: 20 });
+  s.balls[0].vx = 0;
+  s.balls[0].vy = 0;
+  s.balls[0].resting = true;
+  return untilSettled(s);
 }
 
 describe('sim determinism', () => {
@@ -58,7 +73,6 @@ describe('sim determinism', () => {
     expect(snapshot(play(123))).toEqual(snapshot(play(123)));
   });
   it('fast-forward stepping (dt multiples) matches single steps', () => {
-    // Only idle 'aim' time can differ (a coarse step overshoots into aim); the physics is bit-identical.
     const { t: _a, ...ff } = snapshot(play(9, SIM_DT * FAST_FORWARD_MULT));
     const { t: _b, ...normal } = snapshot(play(9));
     expect(ff).toEqual(normal);
@@ -71,303 +85,228 @@ describe('sim determinism', () => {
 });
 
 describe('shooting', () => {
-  it('cancel (drag < CANCEL_RADIUS) costs nothing and stays in aim', () => {
+  it('cancel (drag < CANCEL_RADIUS) stays in aim', () => {
     const s = createRun('felt', BASE_STATS, 1);
     expect(shoot(s, { x: 3, y: 2 })).toBe(false);
-    expect(s.energy).toBe(BASE_STATS.maxEnergy);
     expect(s.phase).toBe('aim');
     expect(s.shots).toBe(0);
   });
-  it('release pays the flat release cost regardless of power', () => {
+  it('shots are free and fire at >= MIN_POWER', () => {
     const s = createRun('felt', BASE_STATS, 1);
-    expect(shoot(s, { x: 0, y: 20 })).toBe(true);
-    expect(s.energy).toBe(BASE_STATS.maxEnergy - BASE_STATS.releaseCost);
-    expect(s.phase).toBe('resolve');
+    expect(shoot(s, { x: 0, y: -13 })).toBe(true);
+    const b = s.balls[0];
+    expect(Math.hypot(b.vx, b.vy)).toBeCloseTo(MIN_POWER * MAX_LAUNCH_SPEED, 6);
+    expect(s.hp).toBe(BASE_STATS.maxHp);
     expect(shoot(s, { x: 0, y: MAX_PULL })).toBe(false); // no shooting while balls move
-    const fx = step(s, SIM_DT);
-    expect(fx.some((f) => f.t === 'shoot')).toBe(true);
+    expect(step(s, SIM_DT).some((f) => f.t === 'shoot')).toBe(true);
   });
   it('previewShot is empty without the upgrade and a polyline with it', () => {
     const s = createRun('felt', BASE_STATS, 1);
-    expect(previewShot(s, { x: 0, y: 40 })).toEqual([]);
+    expect(previewShot(s, { x: 0, y: -40 })).toEqual([]);
     s.stats.aimPreview = 2;
     s.targets = [];
-    const pts = previewShot(s, { x: 30, y: 40 });
-    expect(pts.length).toBe(4); // start + 2 bounces + end
+    expect(previewShot(s, { x: 30, y: -40 }).length).toBe(4);
   });
 });
 
-describe('energy', () => {
-  it('main-ball hit costs hitCost + drain', () => {
-    const { s, main } = lab();
-    main.x = 90;
-    main.y = 130;
-    main.vy = -200;
-    main.resting = false;
-    const e0 = s.energy;
-    for (let i = 0; i < 40; i++) step(s, SIM_DT);
-    expect(s.targets[0].hp).toBeLessThan(s.targets[0].maxHp);
-    expect(e0 - s.energy).toBe(BASE_STATS.hitCost + 2);
-  });
-  it('split and spat hits cost no energy but deal damage', () => {
-    for (const kind of ['split', 'spat'] as const) {
-      const { s } = lab();
-      extraBall(s, kind, 90, 130, -300);
-      const e0 = s.energy;
-      for (let i = 0; i < 40; i++) step(s, SIM_DT);
-      expect(s.targets[0].hp).toBe(s.targets[0].maxHp - BASE_STATS.damage);
-      expect(s.energy).toBe(e0);
-    }
-  });
-  it('fast balls do not tunnel through the smallest target', () => {
-    const { s } = lab();
-    s.targets = [makeTarget(s, 'mini', 90, 100, 0)];
-    extraBall(s, 'spat', 90, 200, -600);
-    for (let i = 0; i < 120; i++) step(s, SIM_DT);
-    expect(s.targets[0].dead || s.targets.length === 0 || s.kills === 1).toBe(true);
-  });
-  it('shared refill curve caps total refills at CURVE_CAP * maxEnergy', () => {
-    const s = createRun('felt', BASE_STATS, 1);
-    let total = 0;
-    for (let i = 0; i < 2000; i++) {
-      s.energy = 0;
-      total += refill(s, 25);
-    }
-    expect(total).toBeLessThanOrEqual(CURVE_CAP * BASE_STATS.maxEnergy + 1e-9);
-    expect(total).toBeGreaterThan(CURVE_CAP * BASE_STATS.maxEnergy * 0.95);
-    expect(s.refilled).toBeCloseTo(total, 9);
-    // Each refill is worth less than the last.
-    const t = createRun('felt', BASE_STATS, 1);
-    t.energy = 0;
-    const a = refill(t, 10);
-    const b = refill(t, 10);
-    expect(b).toBeLessThan(a);
-  });
-});
-
-describe('turn machine', () => {
-  it("ends 'over' once energy < releaseCost and every ball has stopped; runOver emitted once", () => {
-    const s = createRun('felt', BASE_STATS, 3);
-    s.energy = BASE_STATS.releaseCost;
-    expect(shoot(s, { x: 0, y: MAX_PULL })).toBe(true);
-    const fx = untilSettled(s);
-    expect(s.phase).toBe('over');
-    expect(s.balls.every((b) => b.resting)).toBe(true);
-    expect(fx.filter((f) => f.t === 'runOver').length).toBe(1);
-    expect(s.result).toBeDefined();
-    expect(s.result!.shots).toBe(1);
-    expect(step(s, SIM_DT)).toEqual([]);
-  });
-  it('energy can hit 0 mid-roll and the machine keeps running', () => {
-    const { s, main } = lab();
-    s.energy = 1;
-    main.x = 90;
-    main.y = 130;
-    main.vy = -300;
-    main.resting = false;
-    for (let i = 0; i < 40; i++) step(s, SIM_DT);
-    expect(s.energy).toBe(0);
+describe('physics', () => {
+  it('hero contact deals flat damage once per enemy per contact (no machine-gun while overlapping)', () => {
+    const s = lab(90, 200);
+    const brute = put(s, 'brute', 90, 120);
+    shoot(s, { x: 0, y: -MAX_PULL });
     untilSettled(s);
-    expect(s.phase).toBe('over');
+    expect(brute.maxHp - brute.hp).toBe(1);
+    expect(s.combo.hits).toBe(1);
   });
-  it('boss spawns only in the enemy phase', () => {
-    const s = createRun('felt', BASE_STATS, 5);
-    shoot(s, { x: 0, y: MAX_PULL });
-    s.bossPending = true;
-    while (s.phase === 'resolve') {
-      step(s, SIM_DT);
-      if (s.phase === 'resolve') expect(s.targets.some((t) => t.kind === 'boss')).toBe(false);
+  it('an enemy knocked into another bumps it: 1 damage, counts in the chain', () => {
+    const s = lab(90, 230);
+    const a = put(s, 'grunt', 90, 170);
+    const b = put(s, 'grunt', 90, 140);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    // stop before the enemy phase so intents don't interfere
+    while (s.phase === 'resolve') step(s, SIM_DT);
+    expect(a.hp).toBe(a.maxHp - 1);
+    expect(b.hp).toBe(b.maxHp - 1);
+    expect(s.combo.hits).toBe(2);
+  });
+  it('heavier enemies slide less; everything settles and nothing overlaps at rest', () => {
+    const slide = (kind: TargetKind) => {
+      const s = lab(90, 230);
+      const e = put(s, kind, 90, 150);
+      shoot(s, { x: 0, y: -MAX_PULL });
+      while (s.phase === 'resolve') step(s, SIM_DT);
+      expect(maxOverlap(s)).toBeLessThan(0.5);
+      return 150 - e.y;
+    };
+    expect(slide('brute')).toBeLessThan(slide('grunt'));
+  });
+  it('thornback pricks the hero on contact', () => {
+    const s = lab(90, 230);
+    put(s, 'thornback', 90, 150);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    while (s.phase === 'resolve') step(s, SIM_DT);
+    expect(s.hp).toBe(BASE_STATS.maxHp - 1);
+  });
+});
+
+describe('enemy phase', () => {
+  it('Attack within reach charges and deals N on first contact', () => {
+    const s = lab(90, 240);
+    const g = put(s, 'grunt', 90, 170); // gap 46 < reach 90
+    g.intent = { t: 'attack', n: 2 };
+    const fx = enemyPhaseOnly(s);
+    expect(s.hp).toBe(BASE_STATS.maxHp - 2);
+    expect(fx.filter((f) => f.t === 'heroHit').length).toBe(1);
+  });
+  it('a blocked charge deals nothing to the hero and bumps the cover', () => {
+    const s = lab(90, 250);
+    const g = put(s, 'grunt', 90, 160);
+    g.intent = { t: 'attack', n: 2 };
+    const cover = put(s, 'brute', 90, 205);
+    cover.intent = { t: 'rest' };
+    enemyPhaseOnly(s);
+    expect(s.hp).toBe(BASE_STATS.maxHp);
+    expect(cover.hp).toBe(cover.maxHp - 1);
+  });
+  it('Attack beyond reach executes as Advance (soft roll that stops short of the hero)', () => {
+    const s = lab(90, 270);
+    const g = put(s, 'grunt', 90, 60);
+    g.intent = { t: 'attack', n: 2 };
+    enemyPhaseOnly(s);
+    expect(s.hp).toBe(BASE_STATS.maxHp);
+    expect(g.y - 60).toBeGreaterThan(30);
+    expect(g.y - 60).toBeLessThan(50);
+  });
+  it('staggered enemies skip and keep their intent; stagger clears after the phase', () => {
+    const s = lab(90, 240);
+    const g = put(s, 'grunt', 90, 170);
+    g.intent = { t: 'attack', n: 2 };
+    g.stagger = TARGET_DEFS.grunt.staggerAt;
+    enemyPhaseOnly(s);
+    expect(s.hp).toBe(BASE_STATS.maxHp);
+    expect(g.intent).toEqual({ t: 'attack', n: 2 });
+    expect(g.stagger).toBe(0);
+  });
+  it('Shoot is instant; armor reduces damage to a minimum of 1', () => {
+    const s = lab(90, 240);
+    s.stats.armor = 3;
+    const k = put(s, 'skirmisher', 90, 60);
+    k.intent = { t: 'shoot', n: 1 };
+    enemyPhaseOnly(s);
+    expect(s.hp).toBe(BASE_STATS.maxHp - 1);
+  });
+  it('bomber Detonate: 4 to the hero within 60 px, 3 to nearby enemies; it dies without paying', () => {
+    const s = lab(90, 240);
+    const b = put(s, 'bomber', 90, 190);
+    b.intent = { t: 'detonate' };
+    const g = put(s, 'grunt', 125, 190);
+    g.intent = { t: 'rest' };
+    put(s, 'grunt', 30, 60).intent = { t: 'rest' }; // keeps the wave alive (no wave-clear heal)
+    enemyPhaseOnly(s);
+    expect(s.hp).toBe(BASE_STATS.maxHp - 4);
+    expect(g.dead).toBe(true);
+    expect(s.targets.includes(b)).toBe(false);
+  });
+  it('enemy-phase duration stays under the 4 s stall guard', () => {
+    const s = lab(90, 240);
+    for (const [k, x, y] of [['grunt', 40, 150], ['bouncer', 90, 120], ['brute', 140, 150]] as const) {
+      const e = put(s, k, x, y);
+      e.intent = k === 'brute' ? { t: 'attack', n: 5 } : { t: 'attack', n: 1 };
     }
-    expect(s.phase).toBe('enemy');
-    expect(s.targets.some((t) => t.kind === 'boss' && !t.dead)).toBe(true);
-    expect(s.bossSpawned).toBe(true);
-    expect(s.bossPending).toBe(false);
+    const t0 = s.t;
+    enemyPhaseOnly(s);
+    expect(s.t - t0).toBeLessThanOrEqual(4.01);
+    expect(maxOverlap(s)).toBeLessThan(0.5);
   });
-  it('canFastForward only when the main ball rests and an extra ball moves', () => {
-    const { s, main } = lab();
+  it('enrage: +1 per turn from turn 8 + 2 x wave', () => {
+    const s = lab();
+    s.wave = 1;
+    s.waveTurn = 8; // phase number 9
+    expect(rageLevel(s)).toBe(0);
+    s.waveTurn = 9; // turn 10
+    expect(rageLevel(s)).toBe(1);
+    s.waveTurn = 11;
+    expect(rageLevel(s)).toBe(3);
+  });
+});
+
+describe('waves, health, run end', () => {
+  it('clearing a wave spawns the next in the following enemy phase with 8 x wave cash', () => {
+    const s = createRun('felt', BASE_STATS, 3);
+    for (const t of s.targets) t.dead = true;
+    const fx = enemyPhaseOnly(s);
+    expect(s.wave).toBe(2);
+    expect(s.cash).toBe(WAVE_CASH * 1);
+    expect(fx.some((f) => f.t === 'waveStart')).toBe(true);
+    expect(s.targets.filter((t) => !t.dead).length).toBeGreaterThanOrEqual(4);
+  });
+  it('heals share one diminishing curve capped at 1x max HP per run', () => {
+    const s = lab();
+    s.hp = 1;
+    let total = 0;
+    for (let i = 0; i < 500; i++) total += heal(s, 5);
+    expect(total).toBeLessThanOrEqual(s.maxHp + 1e-9);
+    expect(s.hp).toBeLessThanOrEqual(s.maxHp);
+  });
+  it("death is checked after the enemy phase; runOver once; 'over' is terminal", () => {
+    const s = lab(90, 240);
+    s.hp = 2;
+    const g = put(s, 'grunt', 90, 170);
+    g.intent = { t: 'attack', n: 5 };
+    const fx = enemyPhaseOnly(s);
+    expect(s.phase).toBe('over');
+    expect(fx.filter((f) => f.t === 'runOver').length).toBe(1);
+    expect(s.result?.wave).toBe(1);
+    expect(step(s, SIM_DT).length).toBe(0);
+  });
+  it('canFastForward only while the hero rests and something else moves', () => {
+    const s = lab();
     expect(canFastForward(s)).toBe(false);
-    extraBall(s, 'spat', 30, 200, -100);
-    expect(main.resting).toBe(true);
+    const g = put(s, 'grunt', 90, 100);
+    shoot(s, { x: 0, y: 40 });
+    s.balls[0].resting = true;
+    g.resting = false;
+    g.vx = 50;
     expect(canFastForward(s)).toBe(true);
   });
 });
 
-describe('fully upgraded smoke run', () => {
-  const STRONG = {
-    ...BASE_STATS,
-    damage: 3,
-    speedDamage: 1,
-    maxEnergy: 160,
-    killRefillChance: 0.3,
-    killRefillAmount: 4,
-    bossRefillPct: 0.3,
-    enemyCount: 8,
-    respawnPerTurn: 2,
-    aimPreview: 2,
-    lightningChance: 0.4,
-    lightningArcs: 2,
-    lightningRange: 40,
-    lightningDamage: 1,
-    splitCount: 2,
-    spitInterval: 0.3,
-    spitLife: 2,
-    spitDamage: 1,
-    comboMultiKill: 0.25,
-    comboBank: 0.5,
-    comboBumperChain: 0.25,
-    comboChainReaction: 0.5,
-    comboEnergy: 2,
-    bumpers: 3,
-    crates: 2,
-    chests: 1,
-    shrineChance: 1,
-    strayEmeraldChance: 0.05,
-  };
-  for (const stage of ['felt', 'ice'] as const) {
-    it(`${stage}: terminates with sane state and reaches the boss`, () => {
-      let bosses = 0;
-      for (let seed = 1; seed <= 6; seed++) {
-        const s = createRun(stage, STRONG, seed);
-        const seen = new Set<string>();
-        for (let shot = 0; shot < 200 && s.phase !== 'over'; shot++) {
-          const main = s.balls.find((b) => b.kind === 'main')!;
-          const t = s.targets.find((x) => !x.dead && x.kind !== 'cadre') ?? s.targets[0];
-          const d = t ? Math.hypot(t.x - main.x, t.y - main.y) || 1 : 1;
-          const pull = t ? { x: ((t.x - main.x) / d) * MAX_PULL, y: ((t.y - main.y) / d) * MAX_PULL } : { x: 0, y: -MAX_PULL };
-          expect(shoot(s, pull)).toBe(true);
-          for (const f of untilSettled(s)) seen.add(f.t);
-          for (const b of s.balls) expect(Number.isFinite(b.x) && Number.isFinite(b.y)).toBe(true);
-          expect(s.energy).toBeGreaterThanOrEqual(0);
-          expect(s.energy).toBeLessThanOrEqual(STRONG.maxEnergy);
-          expect(s.refilled).toBeLessThanOrEqual(STRONG.maxEnergy + 1e-9);
+describe('formations and the jam rule', () => {
+  it('every formation places every enemy above the spawn zone with no overlaps (40 seeds each)', () => {
+    const kinds: TargetKind[] = ['grunt', 'skirmisher', 'bomber', 'broodmother', 'brute'];
+    for (const f of ['rack', 'wall', 'pincer', 'ring', 'scatter'] as const) {
+      for (let seed = 1; seed <= 40; seed++) {
+        const s = lab();
+        s.rng = new Rng(seed);
+        const slots = placeFormation(s, kinds, f);
+        expect(slots.length, f).toBe(kinds.length);
+        for (let i = 0; i < slots.length; i++) {
+          const a = slots[i];
+          expect(a.y + a.r, f).toBeLessThanOrEqual(SPAWN_ZONE_Y + 1e-6);
+          expect(a.x - a.r).toBeGreaterThanOrEqual(TABLE.x);
+          expect(a.x + a.r).toBeLessThanOrEqual(TABLE.x + TABLE.w);
+          for (let j = i + 1; j < slots.length; j++) {
+            const b = slots[j];
+            expect(Math.hypot(a.x - b.x, a.y - b.y), f).toBeGreaterThanOrEqual(a.r + b.r);
+          }
         }
-        expect(s.phase).toBe('over');
-        expect(s.result!.seconds).toBe(s.t);
-        if (s.bossSpawned) bosses++;
-        expect(seen.has('split')).toBe(true);
-        expect(seen.has('spit')).toBe(true);
-      }
-      expect(bosses).toBeGreaterThan(0);
-    });
-  }
-});
-
-describe('design review rules', () => {
-  it('boss arrival refill applies before the run-over check (no anticlimax)', () => {
-    const s = createRun('felt', BASE_STATS, 5);
-    expect(shoot(s, { x: 0, y: MAX_PULL })).toBe(true);
-    s.energy = 0;
-    s.bossPending = true;
-    untilSettled(s);
-    expect(s.bossSpawned).toBe(true);
-    expect(s.phase).toBe('aim');
-    expect(s.energy).toBeCloseTo(0.25 * BASE_STATS.maxEnergy, 6);
-  });
-  it('empty board refills immediately in the enemy phase', () => {
-    const s = createRun('felt', { ...BASE_STATS, respawnPerTurn: 0 }, 8);
-    s.targets = [];
-    s.obstacles = [];
-    shoot(s, { x: 0, y: -20 });
-    untilSettled(s);
-    expect(s.targets.filter((t) => !t.dead).length).toBe(2);
-  });
-  it('killing the last regular target emits boardClear once and refills via the curve', () => {
-    const { s, main } = lab();
-    s.targets = [makeTarget(s, 'mini', 90, 100, 0)];
-    s.energy = 50;
-    main.x = 90;
-    main.y = 130;
-    main.vy = -200;
-    main.resting = false;
-    const fx: FxEvent[] = [];
-    for (let i = 0; i < 40; i++) fx.push(...step(s, SIM_DT));
-    expect(fx.filter((f) => f.t === 'boardClear').length).toBe(1);
-    expect(s.refilled).toBeCloseTo(BOARD_CLEAR_REFILL, 6);
-    expect(s.energy).toBe(50 - BASE_STATS.hitCost + BOARD_CLEAR_REFILL);
-  });
-  it('shielded boss costs only hitCost; drain phase surcharges boss hits only', () => {
-    const hit = (kind: 'boss' | 'basic', shielded: boolean, phase: number) => {
-      const { s, main } = lab();
-      const t = makeTarget(s, kind, 90, 100, 0);
-      t.shielded = shielded;
-      t.phase = phase;
-      s.targets = [t];
-      if (kind === 'basic') {
-        const boss = makeTarget(s, 'boss', 30, 50, 0);
-        boss.phase = phase;
-        s.targets.push(boss);
-      }
-      main.x = 90;
-      main.y = 130;
-      main.vy = -200;
-      main.resting = false;
-      const e0 = s.energy;
-      for (let i = 0; i < 40; i++) step(s, SIM_DT);
-      return e0 - s.energy;
-    };
-    const h = BASE_STATS.hitCost;
-    expect(hit('boss', true, 1)).toBe(h);
-    expect(hit('boss', false, 0)).toBe(h + 1);
-    expect(hit('boss', false, 1)).toBe(h + 2); // felt phase 1 = drain
-    expect(hit('basic', false, 1)).toBe(h);
-  });
-  it('sticky ball holds 0.25 s, releases at 60% reflected speed and hits again for free', () => {
-    const { s, main } = lab();
-    s.stats.ballType = 'sticky';
-    const t = s.targets[0];
-    main.x = 90;
-    main.y = 130;
-    main.vy = -200;
-    main.resting = false;
-    let fx: FxEvent[] = [];
-    let n = 0;
-    while (!main.stuck && n++ < 100) fx = step(s, SIM_DT);
-    expect(main.stuck).toBeGreaterThan(0);
-    const hp1 = t.hp;
-    const e1 = s.energy;
-    expect(hp1).toBe(t.maxHp - BASE_STATS.damage);
-    const held = { x: main.x, y: main.y };
-    const holdSteps = Math.round(0.25 / SIM_DT);
-    for (let i = 0; i < holdSteps - 2; i++) step(s, SIM_DT);
-    expect(main.x).toBe(held.x);
-    expect(main.y).toBe(held.y);
-    expect(main.resting).toBe(false);
-    for (let i = 0; i < 4; i++) fx.push(...step(s, SIM_DT));
-    expect(main.stuck).toBeFalsy();
-    expect(t.hp).toBe(hp1 - BASE_STATS.damage);
-    expect(s.energy).toBe(e1);
-    expect(main.vy).toBeGreaterThan(0); // reflected away from the target
-    expect(Math.hypot(main.vx, main.vy)).toBeGreaterThan(0.6 * 200 * 0.85);
-    expect(Math.hypot(main.vx, main.vy)).toBeLessThanOrEqual(0.6 * 200 + 1e-6);
-    untilSettled(s);
-    expect(['aim', 'over']).toContain(s.phase);
-  });
-  it('sticky runs stay deterministic and terminate', () => {
-    const run = () => {
-      const s = createRun('felt', { ...BASE_STATS, ballType: 'sticky' }, 77);
-      for (const p of SHOTS) {
-        if (s.phase !== 'aim') break;
-        shoot(s, p);
-        untilSettled(s);
-      }
-      return snapshot(s);
-    };
-    expect(run()).toEqual(run());
-  });
-  it('full-power shots settle in under 4 s on felt and ice (empty table)', () => {
-    for (const stage of ['felt', 'ice'] as const) {
-      for (const p of [{ x: 0, y: -MAX_PULL }, { x: MAX_PULL, y: 0 }, { x: 20, y: -MAX_PULL }]) {
-        const s = createRun(stage, BASE_STATS, 1);
-        s.targets = [];
-        s.obstacles = [];
-        shoot(s, p);
-        let t = 0;
-        while (s.phase === 'resolve') {
-          step(s, SIM_DT);
-          t += SIM_DT;
-        }
-        expect(t).toBeLessThan(4);
       }
     }
+  });
+  it('does not fire at run start; nudges a boxed-in hero to an open spot', () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const s = createRun('felt', BASE_STATS, seed);
+      expect(hasCorridor(s, s.balls[0].x, s.balls[0].y)).toBe(true);
+    }
+    const s = lab(90, 150);
+    const ring = 6;
+    for (let i = 0; i < ring; i++) {
+      const a = (i / ring) * Math.PI * 2;
+      put(s, 'grunt', 90 + Math.cos(a) * 25, 150 + Math.sin(a) * 25);
+    }
+    expect(hasCorridor(s, 90, 150)).toBe(false);
+    expect(jamRule(s, [])).toBe(true);
+    expect(s.jams).toBe(1);
+    expect(hasCorridor(s, s.balls[0].x, s.balls[0].y)).toBe(true);
   });
 });

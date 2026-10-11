@@ -5,6 +5,7 @@ import { stageById } from '../core/tuning';
 import { PALETTE } from './palette';
 import { drawSprite, spriteSize, WHITE } from './sprite-cache';
 import { drawText } from './text';
+import { SPRITES } from './sprites';
 import { drawBar } from '../ui/widgets';
 
 const P = PALETTE;
@@ -119,9 +120,18 @@ export function ringDots(ctx: CanvasRenderingContext2D, x: number, y: number, r:
   }
 }
 
+/** v0.1 sprites stand in until the v0.2 sprite pass lands (render shim; sizes come from the fallback disc). */
+const LEGACY_SPRITE: Record<string, string> = {
+  grunt: 'target_basic', skirmisher: 'target_moving', bouncer: 'target_bouncy', bomber: 'target_volatile',
+  broodmother: 'target_splitting', grub: 'target_mini', thornback: 'target_armored', brute: 'target_armored',
+  cleric: 'target_warden', hive: 'target_hive',
+};
+
 export function targetSprite(t: Target, stage: string): string {
-  if (t.kind === 'boss') return stage === 'ice' ? 'boss_ice' : 'boss_felt';
-  return `target_${t.kind}`;
+  if (t.kind === 'boss') return SPRITES[`enemy_boss_${stage}`] ? `enemy_boss_${stage}` : stage === 'ice' ? 'boss_ice' : 'boss_felt';
+  if (SPRITES[`enemy_${t.kind}`]) return `enemy_${t.kind}`;
+  if (SPRITES[`target_${t.kind}`]) return `target_${t.kind}`;
+  return LEGACY_SPRITE[t.kind] ?? 'target_basic';
 }
 
 function drawTarget(ctx: CanvasRenderingContext2D, t: Target, stage: string, now: number, flash: boolean): void {
@@ -139,6 +149,13 @@ function drawTarget(ctx: CanvasRenderingContext2D, t: Target, stage: string, now
     ctx.fillRect(sx - 1, sy, 3, 1);
     ctx.fillRect(sx, sy - 1, 1, 3);
     return;
+  }
+  // Fallback body disc at the true physics radius until sprites match the v0.2 sizes.
+  if (Math.max(w, h) < t.r * 2 - 2) {
+    ctx.fillStyle = P['1'];
+    ctx.beginPath();
+    ctx.arc(t.x, t.y, t.r, 0, Math.PI * 2);
+    ctx.fill();
   }
   drawSprite(ctx, name, t.x, t.y, t.flash > 0 ? { tint: WHITE } : {});
   if (t.frozen && t.frozen > 0 && !(t.flash > 0)) drawSprite(ctx, name, t.x, t.y, { tint: P.c, alpha: 0.5 });
@@ -174,7 +191,7 @@ function drawTelegraph(ctx: CanvasRenderingContext2D, s: RunState, t: Target, no
   if (d < 1) return;
   const ux = dx / d, uy = dy / d;
   const march = flash ? Math.floor(now * 4) % 3 : 0;
-  ctx.fillStyle = t.kind === 'frost' ? P.c : P.M;
+  ctx.fillStyle = P.M;
   for (let k = t.r + 2 + march; k < d - a.r - 1; k += 3) {
     ctx.fillRect(Math.round(t.x + ux * k), Math.round(t.y + uy * k), 1, 1);
   }
@@ -225,20 +242,18 @@ export interface HudOpts {
 export function drawHud(ctx: CanvasRenderingContext2D, s: RunState, bestFill: number, now: number, opts: HudOpts = {}): void {
   const st = stageById(s.stage);
   const flash = opts.flash !== false;
-  // energy bar (2x number)
-  const frac = s.stats.maxEnergy > 0 ? s.energy / s.stats.maxEnergy : 0;
-  const low = frac < 0.2 && Math.floor(now * (flash ? 4 : 2)) % 2 === 0;
-  drawBar(ctx, 5, 3, 100, 12, frac, low ? P.R : P.B, low ? P.p : P.c, P['2']);
-  drawText(ctx, `${Math.ceil(Math.max(0, s.energy))}/${s.stats.maxEnergy}`, 55, 4, { align: 'center', scale: 2, color: P['5'], shadow: P['0'] });
-  // shots left (2x, right)
-  const shots = s.stats.releaseCost > 0 ? Math.floor(s.energy / s.stats.releaseCost) : 0;
-  drawText(ctx, `x${Math.max(0, shots)}`, 175, 4, { align: 'right', scale: 2, color: P['5'], shadow: P['0'] });
+  // HP bar (2x number)
+  const frac = s.maxHp > 0 ? s.hp / s.maxHp : 0;
+  const low = frac < 0.25 && Math.floor(now * (flash ? 4 : 2)) % 2 === 0;
+  drawBar(ctx, 5, 3, 100, 12, frac, low ? P.p : P.R, low ? P.R : P.p, P['2']);
+  drawText(ctx, `HP ${Math.ceil(Math.max(0, s.hp))}/${s.maxHp}`, 55, 4, { align: 'center', scale: 2, color: P['5'], shadow: P['0'] });
+  // wave (2x, right)
+  drawText(ctx, `W${s.wave}`, 175, 4, { align: 'right', scale: 2, color: P['5'], shadow: P['0'] });
   // row 2: cash, emeralds, cost per shot
   drawSprite(ctx, 'coin', 9, 21);
   drawText(ctx, String(Math.floor(s.cash)), 16, 18, { color: P.Y, shadow: P['0'] });
   drawSprite(ctx, 'emerald', 62, 21);
   drawText(ctx, String(s.emeralds), 69, 18, { color: P.E, shadow: P['0'] });
-  drawText(ctx, `-${s.stats.releaseCost}/SHOT`, 175, 18, { align: 'right', color: P['4'] });
 
   // bottom meter band (x 10..130)
   const bx = TABLE.x, bw = 120, by = 308, bh = 8, ly = 294;
@@ -255,7 +270,8 @@ export function drawHud(ctx: CanvasRenderingContext2D, s: RunState, bestFill: nu
     drawBar(ctx, bx, by, bw, bh, 1, P.M, P['5'], P.m);
   } else {
     const on = !opts.bossBlink || Math.floor(now * (flash ? 4 : 2)) % 2 === 0;
-    if (on) drawText(ctx, `BOSS ${s.meterKills}/${st.meterKills}`, bx, ly, { scale: 2, color: opts.bossBlink ? P.Y : P.M });
-    drawBar(ctx, bx, by, bw, bh, s.meterKills / st.meterKills, P.m, P.M, P['2'], bestFill);
+    const waves = st.waves.length + 1;
+    if (on) drawText(ctx, `WAVE ${s.wave}/${st.waves.length}`, bx, ly, { scale: 2, color: opts.bossBlink ? P.Y : P.M });
+    drawBar(ctx, bx, by, bw, bh, (s.wave - 1) / waves, P.m, P.M, P['2'], bestFill);
   }
 }

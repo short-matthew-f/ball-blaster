@@ -17,7 +17,7 @@ export const VIEW_H = 320;
 
 /** Playfield inner rect (inside the rails). Balls and targets live inside this. */
 export const TABLE = { x: 10, y: 34, w: 160, h: 252 } as const;
-// HUD band: y 0..TABLE.y-6 (energy, cash). Boss meter band: y TABLE.y+TABLE.h+6..VIEW_H.
+// HUD band: y 0..TABLE.y-6 (HP, cash). Boss meter band: y TABLE.y+TABLE.h+6..VIEW_H.
 
 export const SIM_DT = 1 / 240;
 
@@ -30,10 +30,14 @@ export const CANCEL_RADIUS = 12; // release within this drag length = cancel, no
 export const STOP_SPEED = 6; // px/s; below this a ball snaps to rest
 export const SPEED_DMG_REF = 200; // px/s per +speedDamage
 export const FAST_FORWARD_MULT = 4;
-export const ENEMY_PHASE_SECONDS = 0.4;
 export const SHIMMER_SECONDS = 0.5;
 export const MAX_RESOLVE_SECONDS = 12; // stall guard: force rest
-export const CURVE_CAP = 1.0; // total refill per run <= CURVE_CAP * maxEnergy
+/** Enemy phase stall guard (seconds) and launch spacing. */
+export const MAX_ENEMY_SECONDS = 4;
+export const LAUNCH_GAP = 0.15;
+/** Minimum shot power (fraction of full) for any release past the cancel radius. */
+export const MIN_POWER = 0.25;
+export const CURVE_CAP = 1.0; // total healing per run <= CURVE_CAP * maxHp
 /** Boss arrival zone (cleared of regular targets on arrival). */
 export const BOSS_ZONE = { x: 50, y: 50, w: 80, h: 60 } as const;
 
@@ -46,45 +50,44 @@ export interface Vec {
 
 export type StageId = 'felt' | 'ice' | 'clock' | 'bog';
 
+export type Formation = 'rack' | 'wall' | 'pincer' | 'ring' | 'scatter';
+
+/** One wave: each slot is a kind, or a list of alternatives rolled with s.rng. */
+export interface WaveDef {
+  slots: (TargetKind | TargetKind[])[];
+  formations: Formation[];
+  /** Index into `slots` of the elite (from wave 3), or -1/absent for none. */
+  elite?: number;
+}
+
 export interface StageDef {
   id: StageId;
   index: number; // 0-based order
   name: string;
-  /** Proportional speed decay per second (v *= 1 - friction*dt). */
+  /** Hero proportional speed decay per second (v *= 1 - friction*dt). Enemies use ENEMY_FRICTION_MULT x this. */
   friction: number;
-  /** Constant rolling deceleration in px/s^2 (kills the exponential tail). */
+  /** Hero constant rolling deceleration in px/s^2 (kills the exponential tail). */
   rollDecel: number;
-  /** Guaranteed kinds for the first spawns of a run (before the pool is used). */
-  openingBoard: TargetKind[];
-  /** Wall restitution 0..1. */
+  /** Wall restitution 0..1 (hero). Enemies use ENEMY_WALL_BOUNCE x their kind bounce. */
   wallBounce: number;
-  /** Weighted spawn pool for regular targets. */
-  pool: { kind: TargetKind; weight: number; minEnemyCount?: number; maxLive?: number }[];
-  /** Max live regular targets regardless of enemyCount stat. */
-  densityCap: number;
+  /** Regular waves, then the boss wave (last entry). */
+  waves: WaveDef[];
+  bossWave: WaveDef;
   /** Multiplier on all enemy HP for this stage (stage balance). */
   hpScale: number;
   /** Cash per kill multiplier. */
   cashScale: number;
-  /** Kills needed to fill the boss meter. */
-  meterKills: number;
   boss: BossDef;
   /** Emeralds for first boss kill; repeats pay less (see tuning). */
   emeraldReward: number;
 }
 
-export type BossPhaseFx = 'drain' | 'spawnMini' | 'bouncy';
-
 export interface BossDef {
   name: string;
   hp: number;
   r: number;
-  /** HP fractions where the boss enters its next phase, descending, e.g. [0.66, 0.33]. */
+  /** HP fractions where the boss enters its next phase, descending, e.g. [0.5]. */
   phases: number[];
-  /** Behaviours active in each phase (index 0 = before first threshold). Length = phases.length + 1. */
-  phaseFx: BossPhaseFx[][];
-  cadre: number; // number of shield minions, 0 = none
-  moves: boolean;
 }
 
 // ---------- Entities ----------
@@ -116,49 +119,76 @@ export interface Ball {
 }
 
 export type TargetKind =
-  | 'basic'
-  | 'armored'
-  | 'bouncy'
-  | 'moving'
-  | 'splitting'
-  | 'volatile'
-  | 'mini' // spawned by 'splitting'
-  | 'boss'
-  | 'cadre' // boss shield minion
-  // Active tier (see DECISIONS.md "Active target tier")
-  | 'warden' // shields a nearby regular target
-  | 'hive' // spawns non-regular spores
-  | 'spore' // spawned by 'hive'; not a regular target
-  | 'frost'; // freezes a nearby regular target
+  | 'grunt'
+  | 'skirmisher'
+  | 'bouncer'
+  | 'bomber'
+  | 'broodmother'
+  | 'grub' // summon (broodmother split, hive, boss); never counts for wave clear
+  | 'thornback'
+  | 'brute'
+  | 'cleric'
+  | 'hive'
+  | 'boss';
 
+/** Alias: v0.2 enemies are physics bodies. `Target` is kept so render/ui keep compiling. */
+export type EnemyKind = TargetKind;
+
+export type IntentType = 'attack' | 'shoot' | 'advance' | 'charge' | 'guard' | 'detonate' | 'summon' | 'rest';
+
+export interface Intent {
+  t: IntentType;
+  /** Damage for attack/shoot (already includes charge doubling; enrage is added on execute). */
+  n?: number;
+}
+
+export type EliteMod = 'spiky' | 'hardy' | 'swift';
+
+/** An enemy: a ball with mass, friction, HP and a visible intent. */
 export interface Target {
   id: number;
   kind: TargetKind;
   x: number;
   y: number;
-  r: number;
-  hp: number;
-  maxHp: number;
-  /** Drift velocity for 'moving' targets / moving bosses (applied during enemy phase). */
   vx: number;
   vy: number;
-  /** Seconds of spawn shimmer remaining; > 0 means not yet solid. */
+  r: number;
+  mass: number;
+  hp: number;
+  maxHp: number;
+  resting: boolean;
+  /** Visible intent, executed in the enemy phase unless staggered. */
+  intent: Intent;
+  /** Contact hits taken since the last enemy phase; >= the kind's threshold = skips its intent. */
+  stagger: number;
+  /** Seconds of spawn shimmer remaining (render only; spawns are solid immediately). */
   shimmer: number;
   /** Seconds of hit-flash remaining (render only). */
   flash: number;
   /** Boss: current phase index (0-based). */
   phase: number;
-  /** Boss shielded by live cadre. */
+  /** Boss shielded by live cadre (unused in Felt). */
   shielded: boolean;
   dead: boolean;
-  /** Active targets: 2 = ready to pick, 1 = telegraphed (executes next enemy phase). Absent for non-actives. */
-  act?: number;
-  /** Active targets: id of the target telegraphed for shield/freeze (renderer skips the link if not found). */
-  aimId?: number;
-  /** Warden shield on this target: 1 = absorbs the next damaging hit, 0/absent = none. */
+  /** 1-hit shield (Guard intent / cleric): the next damaging hit is absorbed and strips it. */
   shield?: number;
-  /** Frost: enemy phases left frozen (> 0 = frozen). */
+  /** Enemy phases left frozen (> 0 = frozen: static body, skips intent). */
   frozen?: number;
+  /** Legacy active-tier telegraph fields (cleric guard target uses aimId). */
+  act?: number;
+  aimId?: number;
+  /** Damage this body deals on its first hero contact during the current charge (0/absent = not charging). */
+  chargeDmg?: number;
+  /** Charge intent executed: the next attack is doubled and faster. */
+  charged?: boolean;
+  /** Fixed-cycle position (bomber). */
+  cycle?: number;
+  /** Elite modifier (double cash, crown). */
+  elite?: EliteMod;
+  /** Summons (grubs) never count for wave clear. */
+  summon?: boolean;
+  /** Overtime: extra attack per action. */
+  atkBonus?: number;
 }
 
 export type ObstacleKind = 'bumper' | 'crate' | 'chest' | 'shrine';
@@ -180,9 +210,11 @@ export type TurnPhase =
   | 'aim' // waiting for player input; all balls at rest
   | 'resolve' // balls moving
   | 'enemy' // enemy phase animating (moves, respawns, boss arrival)
-  | 'over'; // after settle + enemy phase, energy < releaseCost; summary pending
+  | 'over'; // hero HP <= 0 after an enemy phase (or a shot); summary pending
 
 export interface ComboTally {
+  /** Contact hits this shot (hero/split/spat contacts, enemy-enemy bumps, lightning, explosions). */
+  hits: number;
   kills: number;
   bankKills: number;
   bumperHits: number;
@@ -194,18 +226,26 @@ export interface ComboTally {
 export interface TargetDef {
   hp: number;
   r: number;
+  mass: number;
   cash: number;
-  /** Extra energy drained when the main ball hits it (on top of hitCost). */
-  drain: number;
-  /** Boss-meter kills credited. */
-  meter: number;
-  /** Restitution multiplier on ball bounce (bouncy > 1). */
+  /** Restitution factor in collisions involving this body (bouncer 1.3, brute 0.8). */
   bounce: number;
-  explodeR?: number;
-  explodeDmg?: number;
-  /** px moved per enemy phase. */
-  drift?: number;
-  /** Kind + count spawned on death. */
+  /** Contact hits in one shot needed to skip its intent. */
+  staggerAt: number;
+  /** Weighted intent table (rolled after each enemy phase). Bomber/brute/boss use scripted cycles. */
+  intents: { t: IntentType; n?: number; weight: number }[];
+  /** Charge launch speed (px/s) and reach (edge-to-edge px) for Attack. */
+  chargeSpeed: number;
+  reach: number;
+  /** Charge speed when charged (Charge intent). Defaults to chargeSpeed * 1.25. */
+  chargedSpeed?: number;
+  /** Attack value after a Charge (default: 2x the base attack). */
+  chargedAttack?: number;
+  /** Damage to the hero per hero contact (thornback). */
+  thorns?: number;
+  /** On death: explode (bomber). */
+  explodes?: boolean;
+  /** On death: spawn these. */
   splitsInto?: { kind: TargetKind; count: number };
 }
 
@@ -217,14 +257,22 @@ export interface RunState {
   phase: TurnPhase;
   /** Sim time in seconds. */
   t: number;
-  energy: number;
-  /** Shared refill curve state: cumulative energy granted by refills this run. */
-  refilled: number;
+  /** Hero health. */
+  hp: number;
+  maxHp: number;
+  /** Shared heal curve state: cumulative HP healed this run. */
+  healed: number;
   cash: number;
   emeralds: number;
   kills: number;
-  meterKills: number;
   shots: number;
+  /** Current wave: 1..wavesPerStage = regular waves, wavesPerStage+1 = boss wave, beyond = Overtime. */
+  wave: number;
+  /** Enemy phases completed in the current wave (enrage clock). */
+  waveTurn: number;
+  /** Next wave spawns at the start of the next enemy phase. */
+  wavePending: boolean;
+  /** Kept for render compatibility: true once the boss wave is queued but not yet spawned. */
   bossPending: boolean;
   bossSpawned: boolean;
   bossKilled: boolean;
@@ -235,14 +283,21 @@ export interface RunState {
   combo: ComboTally;
   bestCombo: number;
   splitUsed: boolean;
-  /** True once the board-clear bonus fired this shot (reset on shoot). */
-  boardCleared?: boolean;
+  /** Sticky ball: the stun stop already happened this shot. */
+  stickyUsed: boolean;
   spitTimer: number;
-  respawnAccum: number;
-  /** Countdown for enemy-phase animation. */
-  phaseTimer: number;
-  /** Seconds since release (stall guard). */
+  /** Enemy ids that executed an intent this enemy phase (they reroll; skipped ones keep theirs). */
+  acted: number[];
+  /** Seconds since release (resolve) or since the enemy phase began (enemy). */
   resolveTime: number;
+  /** Enemy phase: ids still to act, in array order, and the time of the next launch. */
+  enemyQueue: number[];
+  enemyNext: number;
+  /** Pair contact bookkeeping: "idA:idB" -> sim time of the last counted hit; and pairs touching last substep. */
+  lastHit: Record<string, number>;
+  touching: Record<string, boolean>;
+  /** Jam-rule triggers this run. */
+  jams: number;
   nextId: number;
   result?: RunResult;
   /** Fx queued outside step() (e.g. by shoot()); drained at the start of the next step. */
@@ -267,7 +322,9 @@ export interface RunResult {
   cash: number;
   emeralds: number;
   kills: number;
-  meterFill: number; // 0..1 best fill reached this run
+  meterFill: number; // 0..1 wave progress reached this run (waves reached / (waves + boss))
+  /** Highest wave reached. */
+  wave: number;
   bossKilled: boolean;
   shots: number;
   bestCombo: number;
@@ -304,16 +361,32 @@ export type FxEvent =
   | { t: 'shieldBreak'; x: number; y: number }
   | { t: 'freeze'; x: number; y: number }
   | { t: 'thaw'; x: number; y: number }
-  | { t: 'shatter'; x: number; y: number; r: number };
+  | { t: 'shatter'; x: number; y: number; r: number }
+  /** Hero took damage (charge, shot, explosion, thorns). */
+  | { t: 'heroHit'; x: number; y: number; dmg: number; src: TargetKind; how: 'charge' | 'shot' | 'blast' | 'thorns' }
+  | { t: 'heroHeal'; x: number; y: number; amount: number }
+  /** Enemy launched itself (charge / advance) in the enemy phase. */
+  | { t: 'launch'; id: number; x: number; y: number; intent: IntentType }
+  /** Ranged shot tracer. */
+  | { t: 'tracer'; x0: number; y0: number; x1: number; y1: number }
+  | { t: 'blocked'; x: number; y: number }
+  | { t: 'waveStart'; wave: number; overtime: boolean }
+  | { t: 'enrage'; level: number }
+  /** Jam rule nudged the hero from (x0,y0) to (x,y) before aim. */
+  | { t: 'jam'; x0: number; y0: number; x: number; y: number };
 
 // ---------- Derived per-run stats (meta -> sim contract) ----------
 
 /** Everything the sim needs from progression. meta/stats.ts builds this from SaveData. Zero = locked/off. */
 export interface RunStats {
+  /** Hero max HP and flat armor (damage taken = attack - armor, min 1). */
+  maxHp: number;
+  armor: number;
   damage: number;
   /** Extra damage per (impact speed / SPEED_DMG_REF), floored. 0 = locked. */
   speedDamage: number;
 
+  // --- Legacy v0.1 energy/board stats: unused by the v0.2 sim; meta trees are reworked in build step 5. ---
   maxEnergy: number;
   releaseCost: number;
   hitCost: number; // main-ball hit on a target

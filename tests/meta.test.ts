@@ -5,7 +5,7 @@ import { NODES, bankRun, buildStats, buy, buyState, exportSave, importSave, newS
 
 const node = (id: string) => NODES.find((n) => n.id === id)!;
 const run = (o: Partial<RunResult> = {}): RunResult => ({
-  stage: 'felt', cash: 0, emeralds: 0, kills: 0, meterFill: 0, bossKilled: false, shots: 0, bestCombo: 0, seconds: 0, ...o,
+  stage: 'felt', cash: 0, emeralds: 0, kills: 0, meterFill: 0, wave: 1, bossKilled: false, shots: 0, bestCombo: 0, seconds: 0, ...o,
 });
 
 describe('meta', () => {

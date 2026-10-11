@@ -1,11 +1,11 @@
 // Run state machine: createRun, step, shoot, previewShot, canFastForward.
+// aim -> (shoot) resolve -> (everything stopped) enemy -> (everything stopped) [death check] -> jam rule -> aim.
 import {
   CANCEL_RADIUS,
-  ENEMY_PHASE_SECONDS,
   MAX_LAUNCH_SPEED,
   MAX_PULL,
   MAX_RESOLVE_SECONDS,
-  SHIMMER_SECONDS,
+  MIN_POWER,
   SIM_DT,
   TABLE,
   type Ball,
@@ -16,18 +16,16 @@ import {
   type StageId,
   type Vec,
 } from '../core/types';
-import { BALL_TYPES, stageById } from '../core/tuning';
+import { BALL_TYPES, JAM_CLEAR, WAVES_PER_STAGE, stageById } from '../core/tuning';
 import { Rng } from '../core/rng';
-import { physicsStep, spawnSpat, unstick } from './physics';
+import { physicsStep, relaxAll, spawnSpat } from './physics';
 import { emptyCombo, evaluateCombos } from './combos';
-import { bossEnemyPhase, spawnBoss } from './boss';
-import { activePhase } from './active';
-import { liveRegulars, poolKind, regularCap, spawnObstacle, spawnRegular } from './spawn';
+import { enemyStep, startEnemyPhase } from './enemy';
+import { spawnObstacle, spawnWave } from './spawn';
+import { hero } from './damage';
 
 export function mainBall(s: RunState): Ball {
-  const b = s.balls.find((x) => x.kind === 'main');
-  if (!b) throw new Error('sim: main ball missing');
-  return b;
+  return hero(s);
 }
 
 export function createRun(stage: StageId, stats: RunStats, seed: number, _bestFill?: number): RunState {
@@ -40,13 +38,16 @@ export function createRun(stage: StageId, stats: RunStats, seed: number, _bestFi
     stats: { ...stats },
     phase: 'aim',
     t: 0,
-    energy: stats.maxEnergy,
-    refilled: 0,
+    hp: stats.maxHp,
+    maxHp: stats.maxHp,
+    healed: 0,
     cash: 0,
     emeralds: 0,
     kills: 0,
-    meterKills: 0,
     shots: 0,
+    wave: 1,
+    waveTurn: 0,
+    wavePending: false,
     bossPending: false,
     bossSpawned: false,
     bossKilled: false,
@@ -56,10 +57,15 @@ export function createRun(stage: StageId, stats: RunStats, seed: number, _bestFi
     combo: emptyCombo(),
     bestCombo: 0,
     splitUsed: false,
+    stickyUsed: false,
     spitTimer: 0,
-    respawnAccum: 0,
-    phaseTimer: 0,
+    acted: [],
     resolveTime: 0,
+    enemyQueue: [],
+    enemyNext: 0,
+    lastHit: {},
+    touching: {},
+    jams: 0,
     nextId: 1,
     pendingFx: [],
   };
@@ -76,9 +82,8 @@ export function createRun(stage: StageId, stats: RunStats, seed: number, _bestFi
     resting: true,
     banked: false,
   });
-
-  const n = regularCap(s);
-  for (let i = 0; i < n; i++) spawnRegular(s, st.openingBoard[i] ?? poolKind(s, true), false);
+  spawnWave(s, s.pendingFx!);
+  for (const t of s.targets) t.shimmer = 0;
 
   for (let i = 0; i < stats.bumpers; i++) spawnObstacle(s, 'bumper');
   for (let i = 0; i < stats.crates; i++) spawnObstacle(s, 'crate');
@@ -91,26 +96,24 @@ export function shoot(s: RunState, pull: Vec): boolean {
   if (s.phase !== 'aim') return false;
   const len = Math.hypot(pull.x, pull.y);
   if (len < CANCEL_RADIUS) return false;
-  if (s.energy < s.stats.releaseCost) return false;
   const b = mainBall(s);
-  const power = Math.min(len, MAX_PULL) / MAX_PULL;
+  // Minimum shot power: every release is a leave; no free micro-taps.
+  const power = Math.max(MIN_POWER, Math.min(len, MAX_PULL) / MAX_PULL);
   const speed = power * MAX_LAUNCH_SPEED * BALL_TYPES[s.stats.ballType].speedMult;
   b.vx = (pull.x / len) * speed;
   b.vy = (pull.y / len) * speed;
   b.resting = false;
   b.banked = false;
-  unstick(b);
-  s.energy -= s.stats.releaseCost;
   s.shots++;
   s.combo = emptyCombo();
   s.splitUsed = false;
-  s.boardCleared = false;
+  s.stickyUsed = false;
   s.spitTimer = s.stats.spitInterval;
   s.resolveTime = 0;
+  s.lastHit = {};
+  s.touching = {};
   s.phase = 'resolve';
-  const q = (s.pendingFx ??= []);
-  q.push({ t: 'shoot', power });
-  q.push({ t: 'energy', x: b.x, y: b.y, amount: -s.stats.releaseCost });
+  (s.pendingFx ??= []).push({ t: 'shoot', power });
   return true;
 }
 
@@ -122,6 +125,7 @@ export function canFastForward(s: RunState): boolean {
     if (b.kind === 'main') mainResting = b.resting;
     else if (!b.resting) otherMoving = true;
   }
+  for (const t of s.targets) if (!t.dead && !t.resting) otherMoving = true;
   return mainResting && otherMoving;
 }
 
@@ -150,7 +154,7 @@ function substep(s: RunState, h: number, fx: FxEvent[]): void {
   for (const o of s.obstacles) if (o.flash > 0) o.flash = Math.max(0, o.flash - h);
 
   if (s.phase === 'resolve') resolveStep(s, h, fx);
-  else if (s.phase === 'enemy') enemyStep(s, h, fx);
+  else if (s.phase === 'enemy' && enemyStep(s, h, fx, physicsStep)) endTurn(s, fx);
 }
 
 function resolveStep(s: RunState, h: number, fx: FxEvent[]): void {
@@ -168,17 +172,13 @@ function resolveStep(s: RunState, h: number, fx: FxEvent[]): void {
 
   for (const b of s.balls) if (b.kind === 'spat' && !b.resting) b.life -= h;
   if (s.resolveTime >= MAX_RESOLVE_SECONDS) {
-    for (const b of s.balls) {
-      b.vx = 0;
-      b.vy = 0;
-      b.resting = true;
-      unstick(b);
-    }
+    for (const b of s.balls) ((b.vx = 0), (b.vy = 0), (b.resting = true));
+    for (const t of s.targets) ((t.vx = 0), (t.vy = 0), (t.resting = true));
   }
   // Extra balls leave the table when they stop (or their life runs out).
   s.balls = s.balls.filter((b) => b.kind === 'main' || (!b.resting && b.life > 0));
 
-  if (s.balls.every((b) => b.resting)) endShot(s, fx);
+  if (s.balls.every((b) => b.resting) && s.targets.every((t) => t.dead || t.resting)) endShot(s, fx);
 }
 
 function endShot(s: RunState, fx: FxEvent[]): void {
@@ -186,85 +186,80 @@ function endShot(s: RunState, fx: FxEvent[]): void {
   evaluateCombos(s, main.x, main.y, fx);
   s.targets = s.targets.filter((t) => !t.dead);
   s.obstacles = s.obstacles.filter((o) => !o.dead);
-  startEnemy(s, fx);
+  relaxAll(s);
+  startEnemyPhase(s, fx);
 }
 
-function startEnemy(s: RunState, fx: FxEvent[]): void {
-  s.phase = 'enemy';
-  let spawned = false;
-  if (s.bossPending) spawnBoss(s, fx);
-
-  const cap = regularCap(s);
-  s.respawnAccum = Math.min(s.respawnAccum + s.stats.respawnPerTurn, Math.max(1, cap));
-  // Empty board (after any boss zone-clear): refill at least two targets right away.
-  if (liveRegulars(s) === 0) s.respawnAccum = Math.max(s.respawnAccum, Math.min(cap, 2));
-  while (s.respawnAccum >= 1 && liveRegulars(s) < cap) {
-    const t = spawnRegular(s, poolKind(s), true);
-    if (!t) break;
-    s.respawnAccum -= 1;
-    spawned = true;
-    fx.push({ t: 'shimmer', x: t.x, y: t.y });
-  }
-  if (activePhase(s, fx)) spawned = true;
-  if (bossEnemyPhase(s, fx)) spawned = true;
-  s.phaseTimer = spawned ? Math.max(ENEMY_PHASE_SECONDS, SHIMMER_SECONDS) : ENEMY_PHASE_SECONDS;
-}
-
-function enemyStep(s: RunState, h: number, fx: FxEvent[]): void {
-  driftTargets(s, h);
-  s.phaseTimer -= h;
-  if (s.phaseTimer > 1e-9) return;
-  s.phaseTimer = 0;
-  if (s.energy < s.stats.releaseCost) {
+/** After the enemy phase: death check, then the jam rule, then aim. */
+function endTurn(s: RunState, fx: FxEvent[]): void {
+  if (s.hp <= 0) {
     s.phase = 'over';
     s.result = buildResult(s);
     fx.push({ t: 'runOver' });
-  } else {
-    s.phase = 'aim';
+    return;
   }
+  jamRule(s, fx);
+  s.phase = 'aim';
 }
 
-/** Moving targets (and moving bosses) drift during the enemy phase, bouncing off rails and blockers. */
-function driftTargets(s: RunState, h: number): void {
-  for (const t of s.targets) {
-    if (t.dead || (t.vx === 0 && t.vy === 0)) continue;
-    const px = t.x;
-    const py = t.y;
-    t.x += t.vx * h;
-    t.y += t.vy * h;
-    if (t.x - t.r < TABLE.x || t.x + t.r > TABLE.x + TABLE.w) {
-      t.vx = -t.vx;
-      t.x = px;
+// ---------- Jam rule ----------
+
+const JAM_DIRS = 64;
+
+/** True if the hero at (x,y) could roll JAM_CLEAR px in at least one of JAM_DIRS directions without touching anything. */
+export function hasCorridor(s: RunState, x: number, y: number): boolean {
+  const h = mainBall(s);
+  for (let k = 0; k < JAM_DIRS; k++) {
+    const a = (k / JAM_DIRS) * Math.PI * 2;
+    const ux = Math.cos(a);
+    const uy = Math.sin(a);
+    let clear = true;
+    for (let d = 3; d <= JAM_CLEAR && clear; d += 3) {
+      if (!spotClear(s, h, x + ux * d, y + uy * d)) clear = false;
     }
-    if (t.y - t.r < TABLE.y || t.y + t.r > TABLE.y + TABLE.h) {
-      t.vy = -t.vy;
-      t.y = py;
-    }
-    let blocked = false;
-    for (const o of s.targets) {
-      if (o === t || o.dead) continue;
-      if (Math.hypot(o.x - t.x, o.y - t.y) < o.r + t.r) blocked = true;
-    }
-    for (const o of s.obstacles) if (!o.dead && Math.hypot(o.x - t.x, o.y - t.y) < o.r + t.r) blocked = true;
-    for (const b of s.balls) if (Math.hypot(b.x - t.x, b.y - t.y) < b.r + t.r) blocked = true;
-    if (blocked) {
-      t.x = px;
-      t.y = py;
-      t.vx = -t.vx;
-      t.vy = -t.vy;
+    if (clear) return true;
+  }
+  return false;
+}
+
+function spotClear(s: RunState, h: Ball, x: number, y: number): boolean {
+  const r = h.r;
+  if (x < TABLE.x + r - 1e-6 || x > TABLE.x + TABLE.w - r + 1e-6 || y < TABLE.y + r - 1e-6 || y > TABLE.y + TABLE.h - r + 1e-6) return false;
+  for (const t of s.targets) if (!t.dead && Math.hypot(t.x - x, t.y - y) < r + t.r - 0.01) return false;
+  for (const o of s.obstacles) if (!o.dead && Math.hypot(o.x - x, o.y - y) < r + o.r - 0.01) return false;
+  return true;
+}
+
+/** Before aim: a hero with no clear corridor is nudged to the nearest open spot (deterministic spiral search). */
+export function jamRule(s: RunState, fx: FxEvent[]): boolean {
+  const h = mainBall(s);
+  if (hasCorridor(s, h.x, h.y)) return false;
+  for (let rho = 2; rho <= 300; rho += 2) {
+    const n = Math.max(8, Math.ceil((2 * Math.PI * rho) / 3));
+    for (let k = 0; k < n; k++) {
+      const a = (k / n) * Math.PI * 2;
+      const x = h.x + Math.cos(a) * rho;
+      const y = h.y + Math.sin(a) * rho;
+      if (!spotClear(s, h, x, y) || !hasCorridor(s, x, y)) continue;
+      fx.push({ t: 'jam', x0: h.x, y0: h.y, x, y });
+      h.x = x;
+      h.y = y;
+      s.jams++;
+      return true;
     }
   }
+  return false;
 }
 
 function buildResult(s: RunState): RunResult {
-  const st = stageById(s.stage);
-  const meterFill = s.bossSpawned || s.bossPending ? 1 : Math.max(0, Math.min(1, s.meterKills / st.meterKills));
+  const meterFill = s.bossKilled ? 1 : Math.max(0, Math.min(1, (s.wave - 1) / (WAVES_PER_STAGE + 1)));
   return {
     stage: s.stage,
     cash: s.cash,
     emeralds: s.emeralds,
     kills: s.kills,
     meterFill,
+    wave: s.wave,
     bossKilled: s.bossKilled,
     shots: s.shots,
     bestCombo: s.bestCombo,
@@ -272,7 +267,7 @@ function buildResult(s: RunState): RunResult {
   };
 }
 
-/** Straight-line aim preview from the main ball with wall reflections only. */
+/** Straight-line aim preview from the hero with wall reflections only. */
 export function previewShot(s: RunState, pull: Vec): Vec[] {
   const bounces = s.stats.aimPreview;
   if (bounces <= 0 || s.phase !== 'aim') return [];
@@ -290,11 +285,10 @@ export function previewShot(s: RunState, pull: Vec): Vec[] {
   const y0 = TABLE.y + r;
   const y1 = TABLE.y + TABLE.h - r;
   const circles: { x: number; y: number; r: number }[] = [];
-  for (const t of s.targets) if (!t.dead && t.shimmer <= 0) circles.push(t);
+  for (const t of s.targets) if (!t.dead) circles.push(t);
   for (const o of s.obstacles) if (!o.dead) circles.push(o);
 
   for (let k = 0; k <= bounces; k++) {
-    // Nearest wall along the ray.
     let tw = Infinity;
     let axis: 'x' | 'y' = 'x';
     if (dx > 1e-9) tw = (x1 - px) / dx;
@@ -307,7 +301,6 @@ export function previewShot(s: RunState, pull: Vec): Vec[] {
       axis = 'y';
     }
     tw = Math.max(0, tw);
-    // Nearest circle along the ray.
     let tc = Infinity;
     for (const c of circles) {
       const R = c.r + r;
@@ -315,7 +308,7 @@ export function previewShot(s: RunState, pull: Vec): Vec[] {
       const fy = py - c.y;
       const bq = fx * dx + fy * dy;
       const cq = fx * fx + fy * fy - R * R;
-      if (cq <= 0) continue; // already overlapping
+      if (cq <= 0) continue;
       const disc = bq * bq - cq;
       if (disc < 0) continue;
       const tt = -bq - Math.sqrt(disc);

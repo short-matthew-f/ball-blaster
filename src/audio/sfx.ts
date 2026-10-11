@@ -2,7 +2,7 @@
 import type { FxEvent, TargetKind } from '../core/types';
 
 const HIT_PITCH: Record<TargetKind, number> = {
-  basic: 520, armored: 900, bouncy: 700, moving: 470, splitting: 400, volatile: 330, mini: 820, boss: 170, cadre: 600, warden: 760, hive: 360, spore: 1000, frost: 1100,
+  grunt: 520, skirmisher: 760, bouncer: 700, bomber: 330, broodmother: 400, grub: 820, thornback: 900, brute: 260, cleric: 600, hive: 360, boss: 170,
 };
 
 type Wave = OscillatorType;
@@ -110,7 +110,7 @@ export class Sfx {
             break;
           }
           if (!this.gate('hit')) break;
-          if (e.targetKind === 'armored') {
+          if (e.targetKind === 'brute') {
             this.tone(900, 0.07, 'square', 0.12, 700);
             this.tone(1350, 0.05, 'square', 0.08);
           } else if (e.targetKind === 'boss') {
@@ -118,7 +118,7 @@ export class Sfx {
             this.tone(340, 0.05, 'square', 0.08);
           } else {
             const f = HIT_PITCH[e.targetKind] ?? 500;
-            this.tone(f, 0.05, e.targetKind === 'volatile' ? 'sawtooth' : 'square', 0.14, f * (e.targetKind === 'bouncy' ? 1.4 : 0.8));
+            this.tone(f, 0.05, e.targetKind === 'bomber' ? 'sawtooth' : 'square', 0.14, f * (e.targetKind === 'bouncer' ? 1.4 : 0.8));
           }
           break;
         case 'kill':

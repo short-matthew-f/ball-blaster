@@ -1,4 +1,6 @@
-// Custom circle physics: integration, wall, static-circle (targets/obstacles) and ball-ball collisions.
+// v0.2 circle physics: every ball and every enemy is a body with mass. Integration, rails, obstacles,
+// circle-circle impulses for all pairs, positional relaxation (no body is ever left intersecting), friction.
+// Contact hits (damage, stagger, chain) are decided here and applied through sim/damage.ts.
 import {
   MAX_LAUNCH_SPEED,
   SPEED_DMG_REF,
@@ -12,28 +14,74 @@ import {
 } from '../core/types';
 import {
   BALL_TYPES,
-  FROZEN_BOUNCE,
-  SHATTER_SPEED,
+  BASE_RESTITUTION,
+  BUMP_DMG_SPEED,
+  CHARGE_STOPS_ON_HIT,
+  ENEMY_FRICTION_MULT,
+  ENEMY_WALL_BOUNCE,
+  HIT_COOLDOWN,
+  HIT_MIN_SPEED,
+  MAX_RESTITUTION,
   SPIT_LIFE_CAP,
-  STICKY_HOLD_SECONDS,
-  STICKY_RELEASE_MULT,
   TARGET_DEFS,
   stageById,
 } from '../core/tuning';
-import { refill, spend } from './energy';
-import { bossPhaseFx } from './boss';
-import { applyDamage, chainLightning, shatter } from './targets';
+import { chainLightning, heal, heroDamage, hitEnemy } from './damage';
 
 export const MAX_BALL_SPEED = MAX_LAUNCH_SPEED * 1.5;
-const BALL_RESTITUTION = 0.95;
 const OBSTACLE_RESTITUTION = 0.8;
 const BUMPER_MIN_KICK = 80;
+const BUMPER_STAGGER_R = 40;
 const SPLIT_R = 2.5;
 const SPLIT_MASS = 0.5;
 const SPAT_R = 2;
 const SPAT_MASS = 0.4;
+/** Pairs closer than r1 + r2 + this are "touching" (contact bookkeeping). */
+const TOUCH_SLOP = 0.5;
+const RELAX_ITERS = 6;
+const SHRINE_HEAL = 8;
 
-function capSpeed(b: Ball): void {
+/** A physics body: a ball or an enemy. */
+interface Body {
+  ball?: Ball;
+  en?: Target;
+  id: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  r: number;
+  im: number; // inverse mass (0 = static: frozen enemy)
+  resting: boolean;
+}
+
+function bodies(s: RunState): Body[] {
+  const out: Body[] = [];
+  for (const b of s.balls) out.push(wrapBall(b));
+  for (const t of s.targets) if (!t.dead) out.push(wrapEnemy(t));
+  return out;
+}
+
+// Bodies are thin views; write-back keeps Ball/Target as the single source of truth.
+function wrapBall(b: Ball): Body {
+  return { ball: b, id: b.id, x: b.x, y: b.y, vx: b.vx, vy: b.vy, r: b.r, im: 1 / b.mass, resting: b.resting };
+}
+function wrapEnemy(t: Target): Body {
+  const im = (t.frozen ?? 0) > 0 ? 0 : 1 / t.mass;
+  return { en: t, id: t.id, x: t.x, y: t.y, vx: t.vx, vy: t.vy, r: t.r, im, resting: t.resting };
+}
+function writeBack(list: Body[]): void {
+  for (const b of list) {
+    const o = (b.ball ?? b.en)!;
+    o.x = b.x;
+    o.y = b.y;
+    o.vx = b.vx;
+    o.vy = b.vy;
+    o.resting = b.resting;
+  }
+}
+
+function capSpeed(b: { vx: number; vy: number }): void {
   const sp = Math.hypot(b.vx, b.vy);
   if (sp > MAX_BALL_SPEED) {
     const k = MAX_BALL_SPEED / sp;
@@ -42,29 +90,12 @@ function capSpeed(b: Ball): void {
   }
 }
 
-/**
- * Resolve a moving ball against a static circle. Pushes the ball out and, if it was approaching,
- * reflects the normal component with restitution `e`. Returns the pre-impact speed if it was a real hit, else -1.
- */
-function collideStatic(b: Ball, cx: number, cy: number, cr: number, e: number, minKick = 0): number {
-  const dx = b.x - cx;
-  const dy = b.y - cy;
-  const min = cr + b.r;
-  const d2 = dx * dx + dy * dy;
-  if (d2 >= min * min) return -1;
-  const d = Math.sqrt(d2);
-  const nx = d > 1e-9 ? dx / d : 0;
-  const ny = d > 1e-9 ? dy / d : -1;
-  b.x = cx + nx * min;
-  b.y = cy + ny * min;
-  const vn = b.vx * nx + b.vy * ny;
-  if (vn >= 0) return -1;
-  const speed = Math.hypot(b.vx, b.vy);
-  const outN = Math.max(-vn * e, minKick);
-  b.vx += (outN - vn) * nx;
-  b.vy += (outN - vn) * ny;
-  capSpeed(b);
-  return speed;
+function kindBounce(b: Body): number {
+  return b.en ? TARGET_DEFS[b.en.kind].bounce : 1;
+}
+
+export function pairKey(a: number, b: number): string {
+  return a < b ? `${a}:${b}` : `${b}:${a}`;
 }
 
 function mainDamage(s: RunState, speed: number): number {
@@ -72,47 +103,201 @@ function mainDamage(s: RunState, speed: number): number {
   return s.stats.damage + bt.dmgBonus + Math.floor(speed / SPEED_DMG_REF) * s.stats.speedDamage;
 }
 
-function hitTarget(s: RunState, b: Ball, t: Target, speed: number, fx: FxEvent[]): void {
-  const def = TARGET_DEFS[t.kind];
-  const frozen = (t.frozen ?? 0) > 0;
-  const shattering = frozen && speed >= SHATTER_SPEED;
-  let dmg: number;
-  if (b.kind === 'main') {
-    // A hit that deals no damage (shielded boss, warden shield, frozen below shatter speed) costs only the flat
-    // hit cost (no drain, no drain-phase surcharge). A shatter is a damaging hit and pays drain as usual.
-    const noDamage = (t.kind === 'boss' && t.shielded) || (t.shield ?? 0) > 0 || (frozen && !shattering);
-    let cost = s.stats.hitCost;
-    if (!noDamage) {
-      cost += def.drain;
-      if (t.kind === 'boss' && bossPhaseFx(s).includes('drain')) cost += 1;
+/** True if this pair's contact may count as a new hit (separated since the last one, and the cooldown passed). */
+function eligible(s: RunState, key: string): boolean {
+  if (s.touching[key]) return false;
+  const last = s.lastHit[key];
+  return last === undefined || s.t - last >= HIT_COOLDOWN;
+}
+function markHit(s: RunState, key: string): void {
+  s.lastHit[key] = s.t;
+  s.touching[key] = true;
+}
+
+/** A ball (hero/split/spat) struck an enemy with approach speed `speed`. */
+function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEvent[]): void {
+  if (s.phase === 'enemy') {
+    // Enemy phase: a charging enemy deals its attack on first hero contact.
+    if (b.kind === 'main' && (t.chargeDmg ?? 0) > 0) {
+      heroDamage(s, t.chargeDmg ?? 0, t.kind, b.x, b.y, fx, 'charge');
+      t.chargeDmg = 0;
+      // The blow lands: the charger stops on contact (the hero keeps the full knock). Without this, heavy
+      // chargers (brute, boss) plough on and pin the hero into rails and corners.
+      if (CHARGE_STOPS_ON_HIT) {
+        t.vx = 0;
+        t.vy = 0;
+      }
     }
-    spend(s, cost, b.x, b.y, fx);
-    dmg = mainDamage(s, speed);
-  } else if (b.kind === 'spat') {
-    dmg = s.stats.spitDamage > 0 ? s.stats.spitDamage : s.stats.damage;
-  } else {
-    dmg = s.stats.damage;
+    return;
   }
-  if (shattering) shatter(s, t, b.kind, fx, b);
-  else applyDamage(s, t, dmg, b.kind, fx, b);
-  chainLightning(s, t, fx);
+  let dmg: number;
+  if (b.kind === 'main') dmg = mainDamage(s, speed);
+  else if (b.kind === 'spat') dmg = s.stats.spitDamage > 0 ? s.stats.spitDamage : s.stats.damage;
+  else dmg = s.stats.damage;
+  const sticky = b.kind === 'main' && s.stats.ballType === 'sticky' && !s.stickyUsed;
+  hitEnemy(s, t, dmg, b.kind, fx, b, sticky ? 2 : 1);
   if (b.kind === 'main') {
+    const thorns = (TARGET_DEFS[t.kind].thorns ?? 0) + (t.elite === 'spiky' ? 1 : 0);
+    if (thorns > 0 && !t.dead) heroDamage(s, thorns, t.kind, b.x, b.y, fx, 'thorns');
+    if (sticky) {
+      // Stun shot: stops dead on the first enemy contact of the shot.
+      s.stickyUsed = true;
+      b.vx = 0;
+      b.vy = 0;
+    }
     if (s.stats.splitCount > 0 && !s.splitUsed) {
       s.splitUsed = true;
       spawnSplit(s, b, fx);
     }
-    if (s.stats.ballType === 'sticky') {
-      // Hold on the target's surface; release later along the reflected direction at reduced speed.
-      const rs = Math.hypot(b.vx, b.vy);
-      const k = rs > 1e-9 ? (speed * STICKY_RELEASE_MULT) / rs : 0;
-      b.stuck = STICKY_HOLD_SECONDS;
-      b.stuckVx = b.vx * k;
-      b.stuckVy = b.vy * k;
-      b.stuckTarget = t.id;
-      b.stuckDmg = dmg;
-      b.vx = 0;
-      b.vy = 0;
+  }
+  chainLightning(s, t, fx);
+}
+
+/** Enemy-enemy bump: the slower body (pre-impact) is the bumped one; a charger that bumps anything is blocked. */
+function enemyBump(s: RunState, a: Target, b: Target, rel: number, spA: number, spB: number, fx: FxEvent[]): void {
+  for (const c of [a, b]) {
+    if ((c.chargeDmg ?? 0) > 0) {
+      c.chargeDmg = 0;
+      fx.push({ t: 'blocked', x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
     }
+  }
+  if (rel <= BUMP_DMG_SPEED) return;
+  const bumped = spA < spB ? a : spB < spA ? b : a.id < b.id ? a : b;
+  hitEnemy(s, bumped, 1, 'bump', fx);
+}
+
+function collidePair(s: RunState, A: Body, B: Body, fx: FxEvent[]): void {
+  if (A.resting && B.resting) return;
+  const dx = B.x - A.x;
+  const dy = B.y - A.y;
+  const min = A.r + B.r;
+  const d2 = dx * dx + dy * dy;
+  if (d2 >= min * min) return;
+  const sum = A.im + B.im;
+  if (sum <= 0) return;
+  const d = Math.sqrt(d2);
+  const nx = d > 1e-9 ? dx / d : 1;
+  const ny = d > 1e-9 ? dy / d : 0;
+  const overlap = min - d;
+  A.x -= nx * overlap * (A.im / sum);
+  A.y -= ny * overlap * (A.im / sum);
+  B.x += nx * overlap * (B.im / sum);
+  B.y += ny * overlap * (B.im / sum);
+  const rv = (B.vx - A.vx) * nx + (B.vy - A.vy) * ny;
+  if (rv >= 0) return;
+  const spA = Math.hypot(A.vx, A.vy);
+  const spB = Math.hypot(B.vx, B.vy);
+  const e = Math.min(MAX_RESTITUTION, BASE_RESTITUTION * kindBounce(A) * kindBounce(B));
+  const j = (-(1 + e) * rv) / sum;
+  A.vx -= j * A.im * nx;
+  A.vy -= j * A.im * ny;
+  B.vx += j * B.im * nx;
+  B.vy += j * B.im * ny;
+  if (A.im > 0) A.resting = false;
+  if (B.im > 0) B.resting = false;
+  capSpeed(A);
+  capSpeed(B);
+  const impact = -rv;
+  if (impact > 20) fx.push({ t: 'ballClack', x: (A.x + B.x) / 2, y: (A.y + B.y) / 2, speed: impact });
+
+  // Contact gameplay. Write positions/velocities back first so damage/fx see the post-impact state.
+  writeBack([A, B]);
+  const key = pairKey(A.id, B.id);
+  if (A.en && B.en) {
+    if (impact > HIT_MIN_SPEED && eligible(s, key)) {
+      markHit(s, key);
+      enemyBump(s, A.en, B.en, impact, spA, spB, fx);
+    }
+  } else if (A.ball && B.ball) {
+    // ball-ball: no gameplay
+  } else {
+    const ball = (A.ball ?? B.ball)!;
+    const en = (A.en ?? B.en)!;
+    if (impact > HIT_MIN_SPEED && eligible(s, key)) {
+      markHit(s, key);
+      ballHitsEnemy(s, ball, en, ball === A.ball ? spA : spB, fx);
+      // Sticky stop / landed charges change velocities; refresh the views.
+      for (const v of [A, B]) {
+        const o = (v.ball ?? v.en)!;
+        v.vx = o.vx;
+        v.vy = o.vy;
+      }
+    }
+  }
+}
+
+function wallBounceOf(s: RunState, b: Body): number {
+  if (b.en) return Math.min(1, ENEMY_WALL_BOUNCE * kindBounce(b));
+  return stageById(s.stage).wallBounce;
+}
+
+/** Clamp inside the rails; reflect velocity with restitution `e`. Returns the impact speed (0 if none). */
+function wallCollide(b: Body, e: number): number {
+  const x0 = TABLE.x + b.r;
+  const x1 = TABLE.x + TABLE.w - b.r;
+  const y0 = TABLE.y + b.r;
+  const y1 = TABLE.y + TABLE.h - b.r;
+  let speed = 0;
+  if (b.x < x0) {
+    b.x = x0;
+    if (b.vx < 0) ((speed = -b.vx), (b.vx = -b.vx * e));
+  } else if (b.x > x1) {
+    b.x = x1;
+    if (b.vx > 0) ((speed = b.vx), (b.vx = -b.vx * e));
+  }
+  if (b.y < y0) {
+    b.y = y0;
+    if (b.vy < 0) ((speed = Math.max(speed, -b.vy)), (b.vy = -b.vy * e));
+  } else if (b.y > y1) {
+    b.y = y1;
+    if (b.vy > 0) ((speed = Math.max(speed, b.vy)), (b.vy = -b.vy * e));
+  }
+  return speed;
+}
+
+/** Resolve a body against a static circle; returns pre-impact speed if it was approaching, else -1. */
+function collideStatic(b: Body, o: { x: number; y: number; r: number }, e: number, minKick = 0): number {
+  const dx = b.x - o.x;
+  const dy = b.y - o.y;
+  const min = o.r + b.r;
+  const d2 = dx * dx + dy * dy;
+  if (d2 >= min * min) return -1;
+  const d = Math.sqrt(d2);
+  const nx = d > 1e-9 ? dx / d : 0;
+  const ny = d > 1e-9 ? dy / d : -1;
+  b.x = o.x + nx * min;
+  b.y = o.y + ny * min;
+  const vn = b.vx * nx + b.vy * ny;
+  if (vn >= 0 || b.im === 0) return -1;
+  const speed = Math.hypot(b.vx, b.vy);
+  const outN = Math.max(-vn * e, minKick);
+  b.vx += (outN - vn) * nx;
+  b.vy += (outN - vn) * ny;
+  b.resting = false;
+  capSpeed(b);
+  return speed;
+}
+
+function hitObstacle(s: RunState, o: Obstacle, fx: FxEvent[]): void {
+  o.flash = 0.12;
+  if (o.kind === 'bumper') {
+    s.combo.bumperHits++;
+    fx.push({ t: 'bumper', x: o.x, y: o.y });
+    for (const t of s.targets) {
+      if (!t.dead && Math.hypot(t.x - o.x, t.y - o.y) <= BUMPER_STAGGER_R + t.r) t.stagger++;
+    }
+    return;
+  }
+  o.hp -= 1;
+  if (o.hp > 0) return;
+  o.dead = true;
+  if (o.kind === 'shrine') {
+    fx.push({ t: 'shrine', x: o.x, y: o.y });
+    heal(s, SHRINE_HEAL, o.x, o.y, fx);
+  } else {
+    const cash = Math.round((o.kind === 'chest' ? s.stats.chestCash : s.stats.crateCash) * s.stats.cashMult);
+    s.cash += cash;
+    fx.push({ t: 'chest', x: o.x, y: o.y, cash });
   }
 }
 
@@ -123,7 +308,6 @@ function spawnSplit(s: RunState, b: Ball, fx: FxEvent[]): void {
   const base = Math.atan2(b.vy, b.vx);
   const deg = Math.PI / 180;
   for (let i = 0; i < n; i++) {
-    // Fan alternately +25, -25, then wider: children spread around the parent's heading within ±25°.
     const side = i % 2 === 0 ? 1 : -1;
     const step = Math.floor(i / 2) + 1;
     const spread = Math.min(25, (25 * step) / Math.ceil(n / 2));
@@ -132,8 +316,8 @@ function spawnSplit(s: RunState, b: Ball, fx: FxEvent[]): void {
     s.balls.push({
       id: s.nextId++,
       kind: 'split',
-      x: b.x + Math.cos(a) * off,
-      y: b.y + Math.sin(a) * off,
+      x: clampIn(b.x + Math.cos(a) * off, TABLE.x + SPLIT_R, TABLE.x + TABLE.w - SPLIT_R),
+      y: clampIn(b.y + Math.sin(a) * off, TABLE.y + SPLIT_R, TABLE.y + TABLE.h - SPLIT_R),
       vx: Math.cos(a) * sp * 0.9,
       vy: Math.sin(a) * sp * 0.9,
       r: SPLIT_R,
@@ -157,8 +341,8 @@ export function spawnSpat(s: RunState, b: Ball, fx: FxEvent[]): void {
   s.balls.push({
     id: s.nextId++,
     kind: 'spat',
-    x: b.x + Math.cos(a) * off,
-    y: b.y + Math.sin(a) * off,
+    x: clampIn(b.x + Math.cos(a) * off, TABLE.x + SPAT_R, TABLE.x + TABLE.w - SPAT_R),
+    y: clampIn(b.y + Math.sin(a) * off, TABLE.y + SPAT_R, TABLE.y + TABLE.h - SPAT_R),
     vx: Math.cos(a) * Math.max(sp * 0.8, 120),
     vy: Math.sin(a) * Math.max(sp * 0.8, 120),
     r: SPAT_R,
@@ -170,166 +354,140 @@ export function spawnSpat(s: RunState, b: Ball, fx: FxEvent[]): void {
   fx.push({ t: 'spit', x: b.x, y: b.y });
 }
 
-function hitObstacle(s: RunState, b: Ball, o: Obstacle, fx: FxEvent[]): void {
-  o.flash = 0.12;
-  if (o.kind === 'bumper') {
-    s.combo.bumperHits++;
-    fx.push({ t: 'bumper', x: o.x, y: o.y });
-    refill(s, s.stats.bumperRefill, o.x, o.y, fx);
-    return;
-  }
-  o.hp -= 1;
-  if (o.hp > 0) return;
-  o.dead = true;
-  if (o.kind === 'shrine') {
-    fx.push({ t: 'shrine', x: o.x, y: o.y });
-    refill(s, s.stats.shrineEnergy, o.x, o.y, fx);
-  } else {
-    const cash = Math.round((o.kind === 'chest' ? s.stats.chestCash : s.stats.crateCash) * s.stats.cashMult);
-    s.cash += cash;
-    fx.push({ t: 'chest', x: o.x, y: o.y, cash });
-  }
-  void b;
+function clampIn(v: number, a: number, b: number): number {
+  return Math.max(a, Math.min(b, v));
 }
 
-function wallCollide(s: RunState, b: Ball, e: number, fx: FxEvent[]): void {
-  const x0 = TABLE.x + b.r;
-  const x1 = TABLE.x + TABLE.w - b.r;
-  const y0 = TABLE.y + b.r;
-  const y1 = TABLE.y + TABLE.h - b.r;
-  let hit = false;
-  let speed = 0;
-  if (b.x < x0) {
-    b.x = x0;
-    if (b.vx < 0) ((speed = Math.abs(b.vx)), (b.vx = -b.vx * e), (hit = true));
-  } else if (b.x > x1) {
-    b.x = x1;
-    if (b.vx > 0) ((speed = Math.abs(b.vx)), (b.vx = -b.vx * e), (hit = true));
-  }
-  if (b.y < y0) {
-    b.y = y0;
-    if (b.vy < 0) ((speed = Math.max(speed, Math.abs(b.vy))), (b.vy = -b.vy * e), (hit = true));
-  } else if (b.y > y1) {
-    b.y = y1;
-    if (b.vy > 0) ((speed = Math.max(speed, Math.abs(b.vy))), (b.vy = -b.vy * e), (hit = true));
-  }
-  if (hit) {
-    b.banked = true;
-    fx.push({ t: 'wall', x: b.x, y: b.y, speed });
-  }
-  void s;
-}
-
-/** Clear any sticky hold (new shot / stall guard). */
-export function unstick(b: Ball): void {
-  b.stuck = undefined;
-  b.stuckVx = undefined;
-  b.stuckVy = undefined;
-  b.stuckTarget = undefined;
-  b.stuckDmg = undefined;
-}
-
-/** Count down a sticky hold; on release, launch and hit the held target again (free: no energy cost). */
-function stickyStep(s: RunState, b: Ball, h: number, fx: FxEvent[]): void {
-  b.stuck = (b.stuck ?? 0) - h;
-  if (b.stuck > 1e-9) return;
-  const vx = b.stuckVx ?? 0;
-  const vy = b.stuckVy ?? 0;
-  const t = s.targets.find((x) => x.id === b.stuckTarget);
-  const dmg = b.stuckDmg ?? 0;
-  unstick(b);
-  b.vx = vx;
-  b.vy = vy;
-  if (t && !t.dead && dmg > 0) applyDamage(s, t, dmg, b.kind, fx, b);
-  if (Math.hypot(vx, vy) < STOP_SPEED) {
-    b.vx = 0;
-    b.vy = 0;
-    b.resting = true;
+/**
+ * Positional-only relaxation: push every overlapping pair apart by inverse mass, then clamp to the rails and
+ * obstacles. Never changes velocities or resting flags.
+ */
+function relaxList(s: RunState, list: Body[], iters: number): void {
+  for (let it = 0; it < iters; it++) {
+    let worst = 0;
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const A = list[i];
+        const B = list[j];
+        const sum = A.im + B.im;
+        if (sum <= 0) continue;
+        const dx = B.x - A.x;
+        const dy = B.y - A.y;
+        const min = A.r + B.r;
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= min * min) continue;
+        const d = Math.sqrt(d2);
+        // Coincident centres: separate along a deterministic axis.
+        const nx = d > 1e-9 ? dx / d : 1;
+        const ny = d > 1e-9 ? dy / d : 0;
+        const ov = min - d;
+        worst = Math.max(worst, ov);
+        A.x -= nx * ov * (A.im / sum);
+        A.y -= ny * ov * (A.im / sum);
+        B.x += nx * ov * (B.im / sum);
+        B.y += ny * ov * (B.im / sum);
+      }
+    }
+    for (const b of list) {
+      if (b.im === 0) continue;
+      for (const o of s.obstacles) {
+        if (o.dead) continue;
+        const dx = b.x - o.x;
+        const dy = b.y - o.y;
+        const min = o.r + b.r;
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= min * min) continue;
+        const d = Math.sqrt(d2);
+        const nx = d > 1e-9 ? dx / d : 0;
+        const ny = d > 1e-9 ? dy / d : -1;
+        b.x = o.x + nx * min;
+        b.y = o.y + ny * min;
+      }
+      b.x = clampIn(b.x, TABLE.x + b.r, TABLE.x + TABLE.w - b.r);
+      b.y = clampIn(b.y, TABLE.y + b.r, TABLE.y + TABLE.h - b.r);
+    }
+    if (worst < 0.01) break;
   }
 }
 
-function collideBalls(a: Ball, b: Ball, fx: FxEvent[]): void {
-  if (a.resting && b.resting) return;
-  if (a.stuck || b.stuck) return; // a held sticky ball is pinned to its target
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const min = a.r + b.r;
-  const d2 = dx * dx + dy * dy;
-  if (d2 >= min * min) return;
-  const d = Math.sqrt(d2);
-  const nx = d > 1e-9 ? dx / d : 1;
-  const ny = d > 1e-9 ? dy / d : 0;
-  const overlap = min - d;
-  const im = 1 / a.mass;
-  const jm = 1 / b.mass;
-  const sum = im + jm;
-  a.x -= nx * overlap * (im / sum);
-  a.y -= ny * overlap * (im / sum);
-  b.x += nx * overlap * (jm / sum);
-  b.y += ny * overlap * (jm / sum);
-  const rv = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
-  if (rv >= 0) return;
-  const j = (-(1 + BALL_RESTITUTION) * rv) / sum;
-  a.vx -= j * im * nx;
-  a.vy -= j * im * ny;
-  b.vx += j * jm * nx;
-  b.vy += j * jm * ny;
-  a.resting = false;
-  b.resting = false;
-  capSpeed(a);
-  capSpeed(b);
-  if (-rv > 20) fx.push({ t: 'ballClack', x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, speed: -rv });
+/** Relax every body in the state (used at phase ends and after spawns). */
+export function relaxAll(s: RunState, iters = 40): void {
+  const list = bodies(s);
+  relaxList(s, list, iters);
+  writeBack(list);
 }
 
-/** One fixed physics substep of `h` seconds for the resolve phase. */
+/** Largest overlap between any two live bodies (px). */
+export function maxOverlap(s: RunState): number {
+  const list = bodies(s);
+  let worst = 0;
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      const A = list[i];
+      const B = list[j];
+      worst = Math.max(worst, A.r + B.r - Math.hypot(B.x - A.x, B.y - A.y));
+    }
+  }
+  return worst;
+}
+
+/** One fixed physics substep of `h` seconds (resolve and enemy phases). */
 export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
   const st = stageById(s.stage);
-  const bouncyBoss = bossPhaseFx(s).includes('bouncy');
+  const list = bodies(s);
 
-  for (const b of s.balls) {
-    if (b.resting) continue;
-    if (b.stuck) {
-      stickyStep(s, b, h, fx);
-      continue;
-    }
+  for (const b of list) {
+    if (b.resting || b.im === 0) continue;
     b.x += b.vx * h;
     b.y += b.vy * h;
-    wallCollide(s, b, st.wallBounce, fx);
-
-    for (const t of s.targets) {
-      if (t.dead || t.shimmer > 0) continue;
-      let e = TARGET_DEFS[t.kind].bounce;
-      if (t.kind === 'boss' && bouncyBoss) e = 1.3;
-      if ((t.frozen ?? 0) > 0) e = FROZEN_BOUNCE;
-      const sp = collideStatic(b, t.x, t.y, t.r, e);
-      if (sp >= 0) hitTarget(s, b, t, sp, fx);
-      if (b.stuck) break;
-    }
-    if (b.stuck) {
-      wallCollide(s, b, st.wallBounce, fx);
-      continue;
+    const sp = wallCollide(b, wallBounceOf(s, b));
+    if (sp > 0 && b.ball) {
+      b.ball.banked = true;
+      fx.push({ t: 'wall', x: b.x, y: b.y, speed: sp });
     }
     for (const o of s.obstacles) {
       if (o.dead) continue;
       const bumper = o.kind === 'bumper';
-      const sp = collideStatic(b, o.x, o.y, o.r, bumper ? s.stats.bumperBounce : OBSTACLE_RESTITUTION, bumper ? BUMPER_MIN_KICK : 0);
-      if (sp >= 0) hitObstacle(s, b, o, fx);
+      const e = bumper ? s.stats.bumperBounce : OBSTACLE_RESTITUTION;
+      const hit = collideStatic(b, o, e, bumper ? BUMPER_MIN_KICK : 0);
+      if (hit >= 0 && b.ball) hitObstacle(s, o, fx);
     }
-    // Re-clamp in case a static push moved the ball through a rail.
-    wallCollide(s, b, st.wallBounce, fx);
+  }
+  writeBack(list);
+
+  // Touching bookkeeping: a pair "separates" once it is more than TOUCH_SLOP apart.
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      const A = list[i];
+      const B = list[j];
+      const key = pairKey(A.id, B.id);
+      if (!s.touching[key]) continue;
+      if (Math.hypot(B.x - A.x, B.y - A.y) > A.r + B.r + TOUCH_SLOP) delete s.touching[key];
+    }
   }
 
-  for (let i = 0; i < s.balls.length; i++) {
-    for (let j = i + 1; j < s.balls.length; j++) collideBalls(s.balls[i], s.balls[j], fx);
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      const A = list[i];
+      const B = list[j];
+      if (A.en?.dead || B.en?.dead) continue;
+      collidePair(s, A, B, fx);
+    }
   }
+  // Damage may have killed enemies (and spawned grubs/splits); relax only the survivors in this list.
+  const live = list.filter((b) => !b.en || !b.en.dead);
+  relaxList(s, live, RELAX_ITERS);
 
-  for (const b of s.balls) {
-    if (b.resting || b.stuck) continue;
-    const k = Math.max(0, 1 - st.friction * h);
+  for (const b of live) {
+    if (b.resting || b.im === 0) continue;
+    const enemy = !!b.en;
+    const fr = enemy ? st.friction * ENEMY_FRICTION_MULT : st.friction;
+    const rd = enemy ? st.rollDecel * ENEMY_FRICTION_MULT : st.rollDecel;
+    const k = Math.max(0, 1 - fr * h);
     b.vx *= k;
     b.vy *= k;
     const sp = Math.hypot(b.vx, b.vy);
-    const ns = sp - st.rollDecel * h;
+    const ns = sp - rd * h;
     if (ns < STOP_SPEED) {
       b.vx = 0;
       b.vy = 0;
@@ -339,4 +497,5 @@ export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
       b.vy *= ns / sp;
     }
   }
+  writeBack(live);
 }

@@ -13,19 +13,17 @@ interface Ring { x: number; y: number; r: number; life: number; max: number; col
 
 const P = PALETTE;
 const KIND_COLORS: Record<TargetKind, string[]> = {
-  basic: [P.R, P.p, P.r],
-  armored: [P['3'], P['4'], P['2']],
-  bouncy: [P.E, P.e, P.h],
-  moving: [P.B, P.c, P.b],
-  splitting: [P.M, P.m, P.p],
-  volatile: [P.o, P.Y, P.R],
-  mini: [P.p, P.R],
-  boss: [P['0'], P['3'], P['5'], P.Y],
-  cadre: [P.c, P.B, P['3']],
-  warden: [P.M, P.m, P.B],
+  grunt: [P.R, P.p, P.r],
+  skirmisher: [P.B, P.c, P.b],
+  bouncer: [P.E, P.e, P.h],
+  bomber: [P.o, P.Y, P.R],
+  broodmother: [P.M, P.m, P.p],
+  grub: [P.p, P.R],
+  thornback: [P['3'], P.E, P['2']],
+  brute: [P['3'], P['4'], P['2']],
+  cleric: [P.M, P.m, P.B],
   hive: [P.o, P.y, P.Y],
-  spore: [P.o, P.Y],
-  frost: [P.c, P['5'], P.b],
+  boss: [P['0'], P['3'], P['5'], P.Y],
 };
 
 const rnd = (a: number, b: number): number => a + Math.random() * (b - a);

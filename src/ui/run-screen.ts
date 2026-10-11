@@ -224,7 +224,6 @@ export class RunScreen implements Screen {
       ctx.fillStyle = i < lit ? color : P['2'];
       ctx.fillRect(px, 4, 3, 3);
     }
-    drawText(ctx, `-${s.stats.releaseCost}`, 110, 10, { color: P.B, shadow: P['0'] });
   }
 
   /** Ring pulse round the ball + first-session ghost pull demo. */
@@ -323,6 +322,6 @@ export class RunScreen implements Screen {
 function fallbackResult(s: RunState): RunResult {
   return {
     stage: s.stage, cash: s.cash, emeralds: s.emeralds, kills: s.kills,
-    meterFill: 0, bossKilled: s.bossKilled, shots: s.shots, bestCombo: s.bestCombo, seconds: s.t,
+    meterFill: 0, wave: s.wave, bossKilled: s.bossKilled, shots: s.shots, bestCombo: s.bestCombo, seconds: s.t,
   };
 }
