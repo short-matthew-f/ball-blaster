@@ -1,5 +1,6 @@
 // Pre-renders sprites once to offscreen canvases; tinted/silhouette variants cached per color.
-import { SPRITES } from './sprites';
+import { SPRITES as SPRITES_V1 } from './sprites';
+import { SPRITES_V2 } from './sprites-v2';
 import { PALETTE } from './palette';
 
 interface Entry {
@@ -8,6 +9,9 @@ interface Entry {
   norm: HTMLCanvasElement;
   tinted: Map<string, HTMLCanvasElement>;
 }
+
+/** v2 art wins on key collision. */
+const SPRITES: Record<string, { w: number; h: number; rows: string[] }> = { ...SPRITES_V1, ...SPRITES_V2 };
 
 const cache = new Map<string, Entry>();
 export const WHITE = '#ffffff';
@@ -59,6 +63,10 @@ function entry(name: string): Entry {
   return e;
 }
 
+export function hasSprite(name: string): boolean {
+  return !!SPRITES[name];
+}
+
 export function spriteSize(name: string): { w: number; h: number } {
   const e = entry(name);
   return { w: e.w, h: e.h };
@@ -86,6 +94,9 @@ export function getTinted(name: string, color: string): HTMLCanvasElement {
 
 export interface SpriteOpts {
   scale?: number;
+  /** Non-uniform squash/stretch (multiplies scale). */
+  sx?: number;
+  sy?: number;
   tint?: string;
   alpha?: number;
 }
@@ -94,11 +105,13 @@ export interface SpriteOpts {
 export function drawSprite(ctx: CanvasRenderingContext2D, name: string, cx: number, cy: number, o: SpriteOpts = {}): void {
   const e = entry(name);
   const s = o.scale ?? 1;
+  const sw = Math.round(e.w * s * (o.sx ?? 1));
+  const sh = Math.round(e.h * s * (o.sy ?? 1));
   const img = o.tint ? getTinted(name, o.tint) : e.norm;
-  const x0 = Math.round(cx - (e.w * s) / 2);
-  const y0 = Math.round(cy - (e.h * s) / 2);
+  const x0 = Math.round(cx - sw / 2);
+  const y0 = Math.round(cy - sh / 2);
   const prev = ctx.globalAlpha;
   if (o.alpha !== undefined) ctx.globalAlpha = prev * o.alpha;
-  ctx.drawImage(img, x0, y0, e.w * s, e.h * s);
+  ctx.drawImage(img, x0, y0, sw, sh);
   ctx.globalAlpha = prev;
 }

@@ -3,10 +3,15 @@ import { PALETTE } from '../render/palette';
 import { getMenuBg } from '../render/renderer';
 import { drawSprite } from '../render/sprite-cache';
 import { drawText } from '../render/text';
-import { Buttons, anyAffordable, drawBar, drawBuyDot, drawPanel } from './widgets';
+import { Buttons, anyAffordable, drawBuyDot, drawPanel } from './widgets';
 import type { App, Screen } from './app';
 
 const P = PALETTE;
+
+/** Best-wave marker slot 1..4 (0/none = no marker). */
+function prevBestMark(b: number): number {
+  return b >= 1 ? Math.min(4, Math.round(b)) : 0;
+}
 
 export class SummaryScreen implements Screen {
   private buttons = new Buttons();
@@ -30,35 +35,54 @@ export class SummaryScreen implements Screen {
     drawText(ctx, r.bossKilled ? 'BOSS DOWN!' : 'RUN OVER', 90, 14, { align: 'center', scale: 3, color: r.bossKilled ? P.Y : P.p, shadow: P['0'], shadowOff: 2 });
     drawText(ctx, st.name.toUpperCase(), 90, 42, { align: 'center', color: P['3'] });
 
-    drawPanel(ctx, 14, 54, 152, 110);
+    const em = r.emeralds + sum.bossEmeralds;
+    drawPanel(ctx, 14, 54, 152, 124);
     const rows: [string, string, string][] = [
       ['KILLS', String(r.kills), P['4']],
       ['CASH EARNED', String(Math.floor(r.cash)), P.Y],
-      ['BEST COMBO', String(r.bestCombo), P.M],
+      ['BEST CHAIN', String(r.bestCombo), P.M],
       ['SHOTS', String(r.shots), P['4']],
+      ['BOSS', r.bossKilled ? 'KILLED' : 'NO', r.bossKilled ? P.Y : P['3']],
     ];
+    if (r.bossKilled || r.overtimeWaves > 0) rows.push(['OVERTIME WAVES', String(r.overtimeWaves), P.o]);
     rows.forEach(([k, v, c], i) => {
-      drawText(ctx, k, 22, 62 + i * 12, { color: P['3'] });
-      drawText(ctx, v, 158, 62 + i * 12, { color: c, align: 'right', shadow: P['0'] });
+      drawText(ctx, k, 22, 61 + i * 11, { color: P['3'] });
+      drawText(ctx, v, 158, 61 + i * 11, { color: c, align: 'right', shadow: P['0'] });
     });
-    const em = r.emeralds + sum.bossEmeralds;
-    drawText(ctx, 'EMERALDS', 22, 110, { color: P['3'] });
-    drawSprite(ctx, 'emerald', 130, 113);
-    drawText(ctx, `+${em}`, 158, 110, { color: P.E, align: 'right', shadow: P['0'] });
-    if (sum.bossEmeralds > 0) drawText(ctx, `(BOSS +${sum.bossEmeralds})`, 158, 120, { color: P.e, align: 'right' });
+    let y = 61 + rows.length * 11;
+    drawText(ctx, 'EMERALDS', 22, y, { color: P['3'] });
+    drawSprite(ctx, 'emerald', 130, y + 3);
+    drawText(ctx, `+${em}`, 158, y, { color: P.E, align: 'right', shadow: P['0'] });
+    y += 11;
+    if (sum.bossEmeralds > 0) {
+      drawText(ctx, `(BOSS +${sum.bossEmeralds})`, 158, y - 1, { color: P.e, align: 'right' });
+      y += 7;
+    }
 
-    // meter fill vs ghost
-    drawText(ctx, 'BOSS METER', 22, 134, { color: P['3'] });
-    const fill = Math.min(r.meterFill, this.t * 1.2);
-    drawBar(ctx, 22, 145, 136, 8, fill, P.m, P.M, P['2'], sum.prevBest);
-    drawText(ctx, `${Math.round(r.meterFill * 100)}%`, 158, 134, { color: P.M, align: 'right' });
-    if (r.meterFill > sum.prevBest + 0.001) drawText(ctx, 'NEW BEST', 22, 156, { color: P.Y });
+    // waves cleared vs best: pip track with the previous-best marker
+    y += 3;
+    drawText(ctx, `WAVES CLEARED ${r.wavesCleared}/4`, 22, y, { color: P['3'] });
+    const shown = Math.min(r.wavesCleared, Math.floor(this.t * 6));
+    const pipY = y + 14;
+    for (let i = 0; i < 4; i++) {
+      const cx = 30 + i * 18;
+      const done = i < shown;
+      drawSprite(ctx, i === 3 ? 'pip_boss' : done ? 'pip_done' : 'pip_todo', cx, pipY, { alpha: i === 3 && !done ? 0.5 : 1 });
+      if (prevBestMark(sum.prevBest) === i + 1) {
+        ctx.fillStyle = P['5'];
+        ctx.fillRect(cx, pipY + 6, 1, 1);
+        ctx.fillRect(cx - 1, pipY + 7, 3, 1);
+        ctx.fillRect(cx - 2, pipY + 8, 5, 1);
+      }
+    }
+    drawText(ctx, `BEST ${Math.max(sum.prevBest, 0)}`, 158, pipY - 2, { color: P['3'], align: 'right' });
+    if (r.wave > sum.prevBest) drawText(ctx, 'NEW BEST', 158, pipY + 6, { color: P.Y, align: 'right' });
 
     if (sum.unlocked) {
       const blink = Math.floor(now * 3) % 2 === 0;
-      drawPanel(ctx, 14, 176, 152, 40, P.g, P.h);
-      drawText(ctx, 'NEW STAGE!', 90, 184, { align: 'center', scale: 2, color: blink ? P.Y : P['5'], shadow: P['0'] });
-      drawText(ctx, sum.unlocked === 'ice' ? 'ICE CAVERN' : sum.unlocked.toUpperCase(), 90, 204, { align: 'center', color: P.E });
+      drawPanel(ctx, 14, 184, 152, 40, P.g, P.h);
+      drawText(ctx, 'NEW STAGE!', 90, 192, { align: 'center', scale: 2, color: blink ? P.Y : P['5'], shadow: P['0'] });
+      drawText(ctx, sum.unlocked === 'ice' ? 'ICE CAVERN' : sum.unlocked.toUpperCase(), 90, 212, { align: 'center', color: P.E });
     }
 
     drawSprite(ctx, 'coin', 70, 236);

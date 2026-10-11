@@ -146,7 +146,7 @@ export function syncHints(app: App): void {
   const want: Record<string, boolean> = {
     'tab:combo': save.cash >= 40 || has((t) => t === 'combo'),
     'tab:emerald': save.emeralds > 0 || has((t) => t === 'emerald'),
-    'tab:stage': save.unlocked > 0 || save.cash >= 100 || has((t) => t.startsWith('stage:')),
+    'tab:stage': save.unlocked > 0 || has((t) => t.startsWith('stage:')),
   };
   let changed = false;
   for (const k of Object.keys(want)) {

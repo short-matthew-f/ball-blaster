@@ -2,8 +2,11 @@
 // physics as the hero), in array order LAUNCH_GAP apart; the phase ends when every body has stopped (stall guard).
 import { LAUNCH_GAP, MAX_ENEMY_SECONDS, TABLE, type Ball, type FxEvent, type RunState, type Target } from '../core/types';
 import {
-  ADVANCE_SPEED,
+  ADVANCE_DIST,
   ADVANCE_STANDOFF,
+  FREEZE_CAP,
+  FREEZE_PHASES,
+  FROST_RANGE,
   ENEMY_FRICTION_MULT,
   stageById,
   CLERIC_RANGE,
@@ -11,10 +14,9 @@ import {
   ENRAGE_PER_WAVE,
   HIVE_GRUB_CAP,
   SUMMON_CAP,
-  SWIFT_ADVANCE_SPEED,
+  SWIFT_ADVANCE_DIST,
   TARGET_DEFS,
   WAVE_CASH,
-  WAVE_HEAL,
   WAVES_PER_STAGE,
 } from '../core/tuning';
 import { heal, hero, heroDamage, kill } from './damage';
@@ -40,9 +42,17 @@ export function startEnemyPhase(s: RunState, fx: FxEvent[]): void {
   s.touching = {};
   s.acted = [];
   for (const t of s.targets) t.chargeDmg = 0;
+  // Freezes tick down first, so a freeze set this phase lasts FREEZE_PHASES full phases.
+  for (const t of s.targets) {
+    if (t.dead || !((t.frozen ?? 0) > 0)) continue;
+    t.frozen = (t.frozen ?? 0) - 1;
+    if (t.frozen <= 0) fx.push({ t: 'thaw', x: t.x, y: t.y });
+  }
 
   const fresh = advanceWave(s, fx);
-  s.enemyQueue = s.targets.filter((t) => !t.dead && !fresh.has(t.id)).map((t) => t.id);
+  // Reflex: the first enemy phase of each wave is skipped.
+  const reflex = s.stats.reflex > 0 && s.waveTurn === 0 && fresh.size === 0;
+  s.enemyQueue = reflex ? [] : s.targets.filter((t) => !t.dead && !fresh.has(t.id)).map((t) => t.id);
   s.enemyNext = s.t;
 }
 
@@ -55,7 +65,12 @@ function advanceWave(s: RunState, fx: FxEvent[]): Set<number> {
     s.cash += WAVE_CASH * cleared;
     const h = hero(s);
     fx.push({ t: 'boardClear', x: h.x, y: h.y });
-    heal(s, WAVE_HEAL, h.x, h.y, fx);
+    heal(s, s.stats.waveHeal, h.x, h.y, fx);
+    // Sweep: every regular of the wave died within one shot (the one just played).
+    if (s.stats.comboSweep > 0 && s.waveKillShot === s.shots && s.shots > 0) {
+      s.cash += Math.round(s.stats.comboSweep * s.stats.cashMult);
+      fx.push({ t: 'combo', name: 'SWEEP', mult: 1, x: h.x, y: h.y });
+    }
   }
   s.wave++;
   s.wavePending = false;
@@ -106,7 +121,6 @@ function endEnemyPhase(s: RunState, fx: FxEvent[]): void {
   for (const t of s.targets) {
     if (acted.has(t.id)) rollIntent(s, t);
     t.stagger = 0;
-    if ((t.frozen ?? 0) > 0) t.frozen = (t.frozen ?? 0) - 1;
   }
   s.waveTurn++;
   relaxAll(s);
@@ -198,10 +212,9 @@ function speedFor(s: RunState, dist: number, vmax: number): number {
  * hero instead of shoving it (an advance is not an attack), so the roll is shortened when the hero is close.
  */
 function advance(s: RunState, e: Target, h: Ball, fx: FxEvent[]): boolean {
-  const vmax = e.elite === 'swift' ? SWIFT_ADVANCE_SPEED : ADVANCE_SPEED;
   let dx = h.x - e.x;
   let dy = h.y - e.y;
-  let dist = rollDistance(s, vmax);
+  let dist = e.elite === 'swift' ? SWIFT_ADVANCE_DIST : ADVANCE_DIST;
   if (e.kind === 'skirmisher') {
     const px = -dy;
     const py = dx;
@@ -214,8 +227,29 @@ function advance(s: RunState, e: Target, h: Ball, fx: FxEvent[]): boolean {
     dist = Math.min(dist, gap - ADVANCE_STANDOFF);
   }
   if (dist < 2) return false;
-  launch(e, dx, dy, speedFor(s, dist, vmax), fx, 'advance');
+  launch(e, dx, dy, speedFor(s, dist, 1000), fx, 'advance');
   return true;
+}
+
+/** Frost: freeze the nearest live ally within FROST_RANGE (not a frost, boss or cadre), up to FREEZE_CAP frozen. */
+function freezeAlly(s: RunState, e: Target, fx: FxEvent[]): void {
+  const frozen = s.targets.filter((t) => !t.dead && (t.frozen ?? 0) > 0).length;
+  if (frozen >= FREEZE_CAP) return;
+  let best: Target | undefined;
+  let bestD = Infinity;
+  for (const o of s.targets) {
+    if (o === e || o.dead || (o.frozen ?? 0) > 0 || o.kind === 'frost' || o.kind === 'boss' || o.kind === 'cadre') continue;
+    const d = Math.hypot(o.x - e.x, o.y - e.y) - o.r - e.r;
+    if (d <= FROST_RANGE && (d < bestD || (d === bestD && best && o.id < best.id))) ((best = o), (bestD = d));
+  }
+  if (!best) return;
+  best.frozen = FREEZE_PHASES;
+  best.vx = 0;
+  best.vy = 0;
+  best.resting = true;
+  best.chargeDmg = 0;
+  e.aimId = best.id;
+  fx.push({ t: 'freeze', x: best.x, y: best.y });
 }
 
 /** Execute `e`'s intent. Returns true if it launched (the next launch waits LAUNCH_GAP). */
@@ -240,13 +274,16 @@ function execute(s: RunState, e: Target, fx: FxEvent[]): boolean {
       return advance(s, e, h, fx);
     case 'shoot':
       fx.push({ t: 'tracer', x0: e.x, y0: e.y, x1: h.x, y1: h.y });
-      heroDamage(s, (it.n ?? 1) + rage, e.kind, h.x, h.y, fx, 'shot');
+      // Thick Skin: flat reduction on ranged damage (min 1), then armor.
+      heroDamage(s, Math.max(1, (it.n ?? 1) + rage - s.stats.rangedResist), e.kind, h.x, h.y, fx, 'shot');
       return false;
     case 'charge':
       e.charged = true;
       return false;
     case 'guard': {
-      if (e.kind === 'cleric') {
+      if (e.kind === 'frost') {
+        freezeAlly(s, e, fx);
+      } else if (e.kind === 'cleric') {
         let best: Target | undefined;
         let bestD = Infinity;
         for (const o of s.targets) {

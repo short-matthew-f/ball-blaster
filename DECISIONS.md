@@ -1,36 +1,48 @@
-# Implementation decisions (v0.1 slice)
+# Implementation decisions (v0.2 combat pivot)
 
-Resolves the design doc's open rule gaps. Do not reopen without a playtest reason.
+Resolves rule gaps in DESIGN-v0.2.md. Approved by the owner at step 1/2. Do not reopen without a playtest reason.
+The v0.1 energy-era decisions (release/hit costs, drains, respawns, boss meter, refills) are retired with energy.
+
+## Physics
 
 | Gap | Decision | Why |
 |---|---|---|
-| Split-ball loophole | Split triggers once per shot, on the main ball's first target hit. Children hit for free. | Caps the loophole: at most one free swarm per release cost. |
-| Draining targets vs extra balls | Drains follow the free-hit rule: only main-ball hits pay hit cost or armor drain. | Keeps extra-ball upgrades from becoming penalties. |
-| Respawn timing | Respawns happen only in the enemy phase, with a shimmer telegraph. | No ball is moving then; "never next to a moving ball" is automatic. Still enforce min distance from resting balls. |
-| Boss spawn timing | Meter fills mid-roll -> boss arrives in the next enemy phase (boss refill applies then). | Avoids spawning into a moving ball. |
-| Room for the boss | On arrival, clear the boss zone (top-centre) of regular targets (no rewards), and halve the regular-target cap while the boss lives. | Guarantees space on one fixed screen. |
-| Run end | The run ends when, after the shot settles and the enemy phase finishes, energy < releaseCost (doc says "zero"). | You cannot shoot below the release cost anyway; boss arrival and other enemy-phase refills land before the check. |
-| Boss arrival refill | Base 25% of max energy (BOSS JUICE raises it to 25% + 20%/level), via the shared curve, applied before the run-over check. | A boss arriving into an empty tank was an anticlimax. |
-| Empty board | If no live regular targets remain in the enemy phase, respawn at least min(cap, 2) at once. Killing the last regular target mid-shot fires `boardClear` (once per shot) and a small refill (4, shared curve). | Never leave the player with nothing to shoot; reward the clear. |
-| Shielded boss cost | A main-ball hit on a shielded boss costs only hitCost (no boss drain, no drain-phase surcharge). | It deals no damage; draining for it felt punitive. |
-| Boss 'drain' phase | Adds +1 energy cost only to main-ball hits on the boss itself, not every target. | Keeps the phase about the boss, not a global tax. |
-| Sticky ball | On a main-ball target hit, the ball is held on the target's surface for 0.25 s, then released along the reflected direction at 60% of its impact speed and deals the hit damage again (that second hit is free). The stall guard still forces rest. | Gives sticky a distinct physics identity (double hit, slower exit). |
+| What is a body | Hero, split/spat balls and every live enemy are circles with mass in one physics pass: integrate, rails, obstacles, pairwise impulses, positional relaxation (never leaves bodies intersecting), friction. Frozen enemies are static (infinite mass). | One system for everyone (doc pillar). |
+| Masses | Near-equal, pool-break style: hero 1 (x massMult), grub 0.8, grunt/skirmisher/bomber 1.2, bouncer 1, cleric/frost 1.5, broodmother/thornback 2, hive 3, brute 4, boss 8. | Step 1 used grunt 3 / brute 8 / boss 20: the hero rebounded off the rack instead of breaking it (1.3 hits/shot). |
+| Friction | Enemies use 1.3x the stage's hero friction and rolling deceleration. | Settles fast; a lighter board still slides. |
+| Restitution | Pair restitution = 0.9 x each enemy's kind bounce (bouncer 1.3, brute 0.8, frozen 1.1), capped 1.3. Enemy-rail = 0.6 x kind bounce. | Bouncers bank, others die on the rail. |
+| Hit dedupe | A pair's contact counts as a hit only after the pair separated (> 0.5 px) **and** 0.1 s passed since its last counted hit; approach speed must exceed 15 px/s. | No machine-gun damage while overlapping. |
+| Bumps | Enemy-enemy impact > 60 px/s: the slower body (pre-impact) is the bumped one and takes 1 damage + 1 stagger; counts in the chain. | Cascades both ways. |
+| Ghosts | A body killed mid-shot keeps its momentum for 0.25 s as an invisible ghost that can still bump live enemies (never balls). Removed at shot end. | Otherwise any killing first hit ended the cascade (mid-game chains collapsed). |
+| Jam rule | Before aim, the hero is jammed only if none of 64 directions offers a clear 24 px corridor; then it is moved to the nearest such spot (deterministic spiral). Never fires at run start. | "24 px clear all round" would fire constantly (charges end touching the hero). |
 
-## Scope of the v0.1 slice
-- Stage 1 (Felt hall) complete; Stage 2 (Ice cavern) as data-driven second stage.
-- Clockwork and Bog stages, stage sub-trees beyond Felt/Ice: deferred.
-- All art and sound are original and generated in code (sprite strings, bitmap font, WebAudio synthesis).
+## Enemy phase
 
-## Active target tier (warden / hive / frost)
-
-Targets that act in the enemy phase (`sim/active.ts`, run after respawns and before boss behaviours). Each active telegraphs one phase (`act = 1`, `aimId`, fx `telegraph`) and executes the next, so a fresh spawn gives two shots of warning.
-
-| Rule | Decision | Why |
+| Gap | Decision | Why |
 |---|---|---|
-| Warden shield | Shields the nearest eligible regular within 40 px (`shield = 1`). The next damaging hit from **any** source (ball, lightning, explosion) is absorbed and strips it (`shieldBreak`). No stacking; max 2 shields on the board. A warden's death strips every shield. | One strip per shield keeps it a tax, not a wall; killing the warden is the counterplay. |
-| Zero-damage hits | A main-ball hit that deals no damage (shielded boss, warden shield, frozen below shatter speed) pays `hitCost` only: no drain, no boss drain-phase surcharge. Shatter is a damaging hit and pays the frozen target's drain. | Generalises the shielded-boss rule; draining for a no-damage hit felt punitive. |
-| Sticky vs shield / ice | Sticky's free second hit goes through `applyDamage`, so it damages after the first hit strips a shield, and does nothing against a frozen target. | Falls out of putting the guards in `applyDamage`. |
-| Frost / frozen | Freezes the nearest eligible regular within 40 px for 3 enemy phases (max 2 frozen), zeroing its drift; thaw re-rolls drift. Frozen targets bounce at 1.1. Ball hits with pre-impact speed >= 160 px/s shatter (full kill rewards to the ball, then 2 explosion damage to targets within 20 + r, counted as chain kills); slower ball hits deal 0. Lightning thaws for 0 damage; explosions shatter. | Rewards hard shots; 160 is a third of max launch. Shatter-by-explosion makes ice chains a combo. |
-| Spores | Hive spawns one spore (1 hp, 1 cash, 0 meter) per two phases, cap 4 live. Spores are **not** regular: ignored by the regular cap, board clear and empty-board refill; cleared from the boss zone on arrival; they outlive their hive. | They are clutter that soaks hit cost and deflects shots, never a way to stall respawns or block a board clear. |
-| Eligibility | Shield/freeze candidates: live, solid, regular, not active, not shielded/frozen, not claimed by another live actor's `aimId`. At execute the aim must still be live and unshielded/unfrozen and the cap free (range is not re-checked); otherwise the action fizzles and the actor re-picks next phase. No target is both shielded and frozen. | Deterministic (array order, nearest then lowest id), cheap to telegraph. |
-| Gating | Pool entries can carry `minEnemyCount` and `maxLive`; `poolKind` filters them (empty -> `basic`). Felt: warden needs enemyCount >= 5 (max 2 live), hive >= 6 (max 1 live). Ice: frost (max 2 live), no wardens/hives. Actives are never placed on the initial board (createRun fills beyond `openingBoard` with actives excluded). | Keeps early-game pacing bit-identical for enemyCount < 5 (the filter removes nothing and `rng.pick` always takes one draw). |
+| Reach | Edge-to-edge gap between enemy and hero. Grunt 110, thornback/broodmother 100, bouncer 140, brute 70, boss 90. | Simple, size-independent. |
+| Charge lands | A charger stops dead when its blow lands (hero keeps the full knock). | Heavy chargers ploughed on and pinned the hero into corners (jams 0.6-1.1/run -> <= 0.1). |
+| Blocked | A charger that touches any other enemy first loses its charge (and bumps it per the bump rule). | Cover. |
+| Advance | Rolls 60 px (Swift elite 75 px), launch speed solved from friction; stops 6 px short of the hero instead of shoving it. Skirmisher's Advance is a sideways reposition toward the open side. | An advance is not an attack; shoving caused corner pins. |
+| Brute Charge | Brute's Charge -> Attack 5 at 300 px/s does not double (5 is the charged value). Boss Charge -> Slam 8 (= 2 x 4), full-table, banks once. Other kinds: Charge doubles the next Attack. | Brute's printed number is the hit you take. |
+| Staggered / frozen | Skip; the intent is kept. Stagger clears at the end of the enemy phase. Frozen enemies ignore hits below 160 px/s (no damage, no stagger), shatter at or above it (kill + 2 to neighbours), explosions shatter, lightning thaws. | Freeze is a trade. |
+| Waves | Next wave spawns at the start of the enemy phase after the last regular dies, or at the end of an enemy phase that emptied the board. New enemies act from the next phase; the arrival phase does not count toward enrage. Reflex skips each wave's first acting phase. | No empty aim states. |
+| Thorns | Thornback (and Spiky elites) prick the hero for 1 on every counted hero contact, in the shot and in the enemy phase, except the contact that lands the thornback's own charge. | |
+| Ice | Frost freezes the nearest ally within 60 px for 3 phases (max 2 frozen). Rime Golem arrives with 3 cadre; it takes no damage while any lives. | v0.1 active tier, adapted. |
+
+## Combos and heals
+
+| Gap | Decision |
+|---|---|
+| Chain | 3+ hits in one shot: + comboChain x shot cash per hit beyond 2 (at least 1 per extra hit). |
+| Bank | + comboBank x cash of kills made by the hero after a rail bounce. |
+| Cascade | A kill caused by a bump: +1 stagger to enemies within 50 px (instant). |
+| Sweep | comboSweep cash when every regular of a wave died within the shot just played. |
+| Lockdown | comboLockdown HP when every live enemy is staggered or frozen at shot end. |
+| Heals | Wave clear (waveHeal), shrine (shrineHeal), healOnKill, bossHeal (x maxHp at arrival) and Lockdown all use one diminishing curve, total <= 1x maxHp per run. |
+| Armor | Damage to the hero = attack - armor, min 1. rangedResist applies to Shoot first (min 1). |
+
+## Scope
+
+- Felt and Ice stages; Clockwork and Bog deferred.
+- All art and sound are original and generated in code.

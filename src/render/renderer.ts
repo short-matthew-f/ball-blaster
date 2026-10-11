@@ -1,11 +1,10 @@
 // Draws the run view (table, entities, HUD) from RunState. Read-only with respect to sim state.
 import type { RunState, Target } from '../core/types';
 import { BOSS_ZONE, TABLE, VIEW_H, VIEW_W } from '../core/types';
-import { stageById } from '../core/tuning';
+import { BLAST_HERO_R, ENRAGE_BASE, ENRAGE_PER_WAVE, TARGET_DEFS, WAVES_PER_STAGE, stageById } from '../core/tuning';
 import { PALETTE } from './palette';
 import { drawSprite, spriteSize, WHITE } from './sprite-cache';
 import { drawText } from './text';
-import { SPRITES } from './sprites';
 import { drawBar } from '../ui/widgets';
 
 const P = PALETTE;
@@ -120,26 +119,72 @@ export function ringDots(ctx: CanvasRenderingContext2D, x: number, y: number, r:
   }
 }
 
-/** v0.1 sprites stand in until the v0.2 sprite pass lands (render shim; sizes come from the fallback disc). */
-const LEGACY_SPRITE: Record<string, string> = {
-  grunt: 'target_basic', skirmisher: 'target_moving', bouncer: 'target_bouncy', bomber: 'target_volatile',
-  broodmother: 'target_splitting', grub: 'target_mini', thornback: 'target_armored', brute: 'target_armored',
-  cleric: 'target_warden', hive: 'target_hive',
-};
-
-export function targetSprite(t: Target, stage: string): string {
-  if (t.kind === 'boss') return SPRITES[`enemy_boss_${stage}`] ? `enemy_boss_${stage}` : stage === 'ice' ? 'boss_ice' : 'boss_felt';
-  if (SPRITES[`enemy_${t.kind}`]) return `enemy_${t.kind}`;
-  if (SPRITES[`target_${t.kind}`]) return `target_${t.kind}`;
-  return LEGACY_SPRITE[t.kind] ?? 'target_basic';
+/** Enemy sprite by kind (v2 names equal kinds); the boss is picked by stage. */
+export function enemySprite(t: Target, stage: string): string {
+  if (t.kind === 'boss') return stage === 'ice' ? 'boss_rime_golem' : 'boss_old_eight';
+  return t.kind === 'cadre' ? 'grunt' : t.kind;
 }
 
-function drawTarget(ctx: CanvasRenderingContext2D, t: Target, stage: string, now: number, flash: boolean): void {
-  const name = targetSprite(t, stage);
+export interface WorldView {
+  /** Seconds of hero hit-flash remaining. */
+  heroFlash?: number;
+}
+
+function segDist(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const vx = bx - ax;
+  const vy = by - ay;
+  const L2 = vx * vx + vy * vy;
+  const k = L2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / L2)) : 0;
+  return Math.hypot(px - (ax + vx * k), py - (ay + vy * k));
+}
+
+/** Reach readability: red = hero in reach with a clear line, amber = in reach but covered, grey = out of reach. */
+export type Reach = 'red' | 'amber' | 'grey';
+export function reachState(s: RunState, e: Target): Reach {
+  const h = s.balls.find((b) => b.kind === 'main');
+  if (!h) return 'grey';
+  const def = TARGET_DEFS[e.kind];
+  const gap = Math.hypot(h.x - e.x, h.y - e.y) - e.r - h.r;
+  const slam = e.kind === 'boss' && !!e.charged;
+  if (!slam && gap > def.reach) return 'grey';
+  for (const o of s.targets) {
+    if (o === e || o.dead) continue;
+    if (segDist(o.x, o.y, e.x, e.y, h.x, h.y) < e.r + o.r - 1) return 'amber';
+  }
+  for (const o of s.obstacles) {
+    if (o.dead || o.kind === 'shrine') continue;
+    if (segDist(o.x, o.y, e.x, e.y, h.x, h.y) < e.r + o.r - 1) return 'amber';
+  }
+  return 'red';
+}
+
+/** Enrage state for the next (or current) enemy phase: level >= 1 = raging; `inTurns` = phases until it starts. */
+export function rageInfo(s: RunState): { level: number; inTurns: number } {
+  const turn = s.waveTurn + 1;
+  const start = ENRAGE_BASE + ENRAGE_PER_WAVE * s.wave;
+  return { level: Math.max(0, turn - start + 1), inTurns: start - turn };
+}
+
+function trail(ctx: CanvasRenderingContext2D, x: number, y: number, vx: number, vy: number, r: number, color: string): void {
+  const sp = Math.hypot(vx, vy);
+  const ux = vx / sp, uy = vy / sp;
+  for (let k = 0; k < 3; k++) {
+    const d = r + 3 + k * 5;
+    ctx.globalAlpha = 0.65 - k * 0.2;
+    ctx.fillStyle = color;
+    const sz = 3 - (k > 1 ? 1 : 0);
+    ctx.fillRect(Math.round(x - ux * d) - 1, Math.round(y - uy * d) - 1, sz, sz);
+  }
+  ctx.globalAlpha = 1;
+}
+
+const FAST_TRAIL = 90;
+
+function drawEnemyBody(ctx: CanvasRenderingContext2D, t: Target, stage: string, now: number, flash: boolean): void {
+  const name = enemySprite(t, stage);
   const { w, h } = spriteSize(name);
   if (t.shimmer > 0) {
-    // spawn telegraph: flickering ghost + sparkles
-    // reduced flashing: steady ghost, shimmer rate <= 4 Hz
+    // spawn telegraph: flickering ghost + sparkles; reduced flashing: steady ghost, shimmer rate <= 4 Hz
     if (!flash || Math.floor(now * 18) % 2 === 0) drawSprite(ctx, name, t.x, t.y, { alpha: 0.45 });
     ringDots(ctx, t.x, t.y, Math.max(w, h) / 2 + 2, P['5'], now * 4, 0.5);
     const k = Math.floor(now * (flash ? 12 : 4)) % 4;
@@ -150,50 +195,99 @@ function drawTarget(ctx: CanvasRenderingContext2D, t: Target, stage: string, now
     ctx.fillRect(sx, sy - 1, 1, 3);
     return;
   }
-  // Fallback body disc at the true physics radius until sprites match the v0.2 sizes.
+  const speed = Math.hypot(t.vx, t.vy);
+  if (!t.resting && speed > FAST_TRAIL) trail(ctx, t.x, t.y, t.vx, t.vy, t.r, P['4']);
+  // Fallback body disc at the true physics radius if a sprite is missing or too small.
   if (Math.max(w, h) < t.r * 2 - 2) {
     ctx.fillStyle = P['1'];
     ctx.beginPath();
     ctx.arc(t.x, t.y, t.r, 0, Math.PI * 2);
     ctx.fill();
   }
+  const frozen = !!t.frozen && t.frozen > 0;
   drawSprite(ctx, name, t.x, t.y, t.flash > 0 ? { tint: WHITE } : {});
-  if (t.frozen && t.frozen > 0 && !(t.flash > 0)) drawSprite(ctx, name, t.x, t.y, { tint: P.c, alpha: 0.5 });
-  if (t.frozen && t.frozen > 0) ringDots(ctx, t.x, t.y, t.r + 3, P['5'], 0, 0.45);
+  if (frozen && !(t.flash > 0)) drawSprite(ctx, name, t.x, t.y, { tint: P.c, alpha: 0.5 });
+  if (frozen) ringDots(ctx, t.x, t.y, t.r + 3, P['5'], 0, 0.45);
   if (t.shield && t.shield > 0) ringDots(ctx, t.x, t.y, t.r + 3, P.B, now * 1.6, 0.4);
-  if (t.act === 1 && t.kind === 'hive') {
-    const sw = flash ? Math.floor(now * 4) % 2 : 0;
-    ringDots(ctx, t.x, t.y, t.r + 3 + sw, P.o, now * 2, 0.3);
-  }
   if (t.kind === 'boss' && t.shielded) {
     ringDots(ctx, t.x, t.y, t.r + 3, P.c, now * 2, 0.22);
     ringDots(ctx, t.x, t.y, t.r + 4, P.B, -now * 1.5, 0.4);
   }
-  if (t.kind !== 'boss' && t.maxHp > 1 && t.hp > 0) {
-    const n = Math.min(8, Math.ceil(t.maxHp));
-    const left = Math.min(n, Math.ceil(t.hp));
-    const totalW = n * 3 - 1;
-    const px = Math.round(t.x - totalW / 2);
-    const py = Math.round(t.y + h / 2 + 1);
-    for (let i = 0; i < n; i++) {
-      ctx.fillStyle = i < left ? P.Y : P['1'];
-      ctx.fillRect(px + i * 3, py, 2, 1);
-    }
-  }
 }
 
-/** Dotted actor -> aim line (1px on, 3px period), marching at 4 Hz; steady when flash is off. */
-function drawTelegraph(ctx: CanvasRenderingContext2D, s: RunState, t: Target, now: number, flash: boolean): void {
-  const a = s.targets.find((o) => o.id === t.aimId && !o.dead);
-  if (!a) return;
-  const dx = a.x - t.x, dy = a.y - t.y;
-  const d = Math.hypot(dx, dy);
-  if (d < 1) return;
-  const ux = dx / d, uy = dy / d;
-  const march = flash ? Math.floor(now * 4) % 3 : 0;
-  ctx.fillStyle = P.M;
-  for (let k = t.r + 2 + march; k < d - a.r - 1; k += 3) {
-    ctx.fillRect(Math.round(t.x + ux * k), Math.round(t.y + uy * k), 1, 1);
+const REACH_COLOR: Record<Reach, string> = { red: P.R, amber: P.o, grey: P['3'] };
+const REACH_NUM: Record<Reach, string> = { red: P.p, amber: P.Y, grey: P['3'] };
+
+/** Overlay layer for one enemy: crown, intent glyph + number, stagger stars, damage pips. */
+function drawEnemyOverlay(ctx: CanvasRenderingContext2D, s: RunState, t: Target, now: number, flash: boolean): void {
+  if (t.shimmer > 0) return;
+  const def = TARGET_DEFS[t.kind];
+  const staggered = t.stagger >= def.staggerAt;
+  const frozen = !!t.frozen && t.frozen > 0;
+  const elite = !!t.elite;
+  if (elite) drawSprite(ctx, 'elite_crown', t.x, t.y - t.r + 1);
+
+  // intent: hidden once acted this phase (it rerolls) and while frozen
+  const acted = s.phase === 'enemy' && s.acted.includes(t.id);
+  if (!acted && !frozen) {
+    const it = t.intent;
+    let reach: Reach = 'grey';
+    let neutral = false;
+    if (it.t === 'attack') reach = reachState(s, t);
+    else if (it.t === 'shoot') reach = 'red';
+    else if (it.t === 'detonate') {
+      const h = s.balls.find((b) => b.kind === 'main');
+      reach = h && Math.hypot(h.x - t.x, h.y - t.y) <= BLAST_HERO_R + h.r ? 'red' : 'grey';
+    } else neutral = true;
+    const col = neutral ? P['3'] : REACH_COLOR[reach];
+    const ncol = neutral ? P['4'] : REACH_NUM[reach];
+    const dim = staggered || (!neutral && reach === 'grey');
+    let num = '';
+    if ((it.t === 'attack' || it.t === 'shoot') && it.n !== undefined) {
+      const rage = rageInfo(s).level;
+      num = String(Math.max(1, it.n + rage - (s.stats.armor ?? 0)));
+    }
+    const nw = num ? num.length * 4 : 0;
+    const total = 11 + (nw ? nw + 1 : 0);
+    const gx0 = Math.round(t.x - total / 2);
+    const gy = Math.max(33, Math.round(t.y - t.r - 7 - (elite ? 3 : 0)));
+    ctx.globalAlpha = dim ? 0.6 : 1;
+    ctx.fillStyle = col;
+    ctx.fillRect(gx0, gy - 5, 11, 11);
+    ctx.fillStyle = P['0'];
+    ctx.fillRect(gx0 + 1, gy - 4, 9, 9);
+    drawSprite(ctx, `intent_${it.t}`, gx0 + 5.5, gy + 0.5);
+    if (num) drawText(ctx, num, gx0 + 13, gy - 2, { color: ncol, shadow: P['0'] });
+    ctx.globalAlpha = 1;
+  }
+
+  if (staggered && !frozen) {
+    for (let k = 0; k < 3; k++) {
+      const a = (flash ? now * 4 : 0) + k * 2.09;
+      const sx = Math.round(t.x + Math.cos(a) * (t.r * 0.55));
+      const sy = Math.round(t.y - t.r + 1 + Math.sin(a) * 3);
+      ctx.fillStyle = P['0'];
+      ctx.fillRect(sx - 2, sy, 5, 1);
+      ctx.fillRect(sx, sy - 2, 1, 5);
+      ctx.fillStyle = P.Y;
+      ctx.fillRect(sx - 1, sy, 3, 1);
+      ctx.fillRect(sx, sy - 1, 1, 3);
+    }
+  }
+
+  // damage pips below, only once damaged (the boss uses the bottom bar)
+  if (t.kind !== 'boss' && t.maxHp > 1 && t.hp > 0 && t.hp < t.maxHp) {
+    const n = Math.min(8, Math.ceil(t.maxHp));
+    const left = Math.max(1, Math.min(n, Math.ceil((t.hp / t.maxHp) * n)));
+    const totalW = n * 4 - 1;
+    const px = Math.round(t.x - totalW / 2);
+    const py = Math.round(t.y + t.r + 2);
+    ctx.fillStyle = P['0'];
+    ctx.fillRect(px - 1, py - 1, totalW + 2, 4);
+    for (let i = 0; i < n; i++) {
+      ctx.fillStyle = i < left ? P.Y : P['2'];
+      ctx.fillRect(px + i * 4, py, 3, 2);
+    }
   }
 }
 
@@ -217,61 +311,99 @@ function drawBossZone(ctx: CanvasRenderingContext2D, now: number): void {
 }
 
 /** Table contents. Call inside the shake translate. */
-export function drawWorld(ctx: CanvasRenderingContext2D, s: RunState, now: number, flash = true): void {
+export function drawWorld(ctx: CanvasRenderingContext2D, s: RunState, now: number, flash = true, view: WorldView = {}): void {
   ctx.drawImage(getTableBg(), 0, 0);
   if (s.bossPending && !s.bossSpawned) drawBossZone(ctx, now);
   for (const o of s.obstacles) {
     if (o.dead) continue;
     drawSprite(ctx, o.kind, o.x, o.y, o.flash > 0 ? { tint: WHITE } : {});
   }
-  for (const t of s.targets) if (!t.dead) drawTarget(ctx, t, s.stage, now, flash);
-  for (const t of s.targets) if (!t.dead && t.act === 1 && t.aimId !== undefined) drawTelegraph(ctx, s, t, now, flash);
-  const main = s.stats.ballType === 'standard' ? 'ball_main' : `ball_${s.stats.ballType}`;
+  for (const t of s.targets) if (!t.dead) drawEnemyBody(ctx, t, s.stage, now, flash);
   for (const b of s.balls) {
-    const name = b.kind === 'main' ? main : b.kind === 'split' ? 'ball_split' : 'ball_spat';
-    drawSprite(ctx, name, Math.round(b.x), Math.round(b.y));
+    const x = Math.round(b.x), y = Math.round(b.y);
+    if (b.kind === 'main') {
+      const sp = Math.hypot(b.vx, b.vy);
+      if (s.phase === 'enemy' && !b.resting && sp > 120) trail(ctx, b.x, b.y, b.vx, b.vy, b.r, P.p);
+      drawSprite(ctx, 'hero', x, y);
+      if ((view.heroFlash ?? 0) > 0) drawSprite(ctx, 'hero', x, y, { tint: P.R, alpha: 0.7 });
+    } else drawSprite(ctx, b.kind === 'split' ? 'ball_split' : 'ball_spat', x, y);
   }
+  for (const t of s.targets) if (!t.dead) drawEnemyOverlay(ctx, s, t, now, flash);
 }
 
 export interface HudOpts {
-  /** Blink the BOSS label (first kill of the first-ever run). */
-  bossBlink?: boolean;
   flash?: boolean;
 }
 
-export function drawHud(ctx: CanvasRenderingContext2D, s: RunState, bestFill: number, now: number, opts: HudOpts = {}): void {
+export function drawHud(ctx: CanvasRenderingContext2D, s: RunState, bestWave: number, now: number, opts: HudOpts = {}): void {
   const st = stageById(s.stage);
   const flash = opts.flash !== false;
-  // HP bar (2x number)
+  // Row 1: heart + HP bar with 2x number
   const frac = s.maxHp > 0 ? s.hp / s.maxHp : 0;
   const low = frac < 0.25 && Math.floor(now * (flash ? 4 : 2)) % 2 === 0;
-  drawBar(ctx, 5, 3, 100, 12, frac, low ? P.p : P.R, low ? P.R : P.p, P['2']);
-  drawText(ctx, `HP ${Math.ceil(Math.max(0, s.hp))}/${s.maxHp}`, 55, 4, { align: 'center', scale: 2, color: P['5'], shadow: P['0'] });
-  // wave (2x, right)
-  drawText(ctx, `W${s.wave}`, 175, 4, { align: 'right', scale: 2, color: P['5'], shadow: P['0'] });
-  // row 2: cash, emeralds, cost per shot
+  drawSprite(ctx, 'icon_hp', 10, 9);
+  drawBar(ctx, 17, 3, 90, 12, frac, low ? P.p : P.R, low ? P.R : P.p, P['2']);
+  drawText(ctx, `HP ${Math.ceil(Math.max(0, s.hp))}/${s.maxHp}`, 62, 4, { align: 'center', scale: 2, color: P['5'], shadow: P['0'] });
+  // Row 2: cash, emeralds, overtime tag; enrage on the right
+  const overtime = s.wave > WAVES_PER_STAGE + 1;
   drawSprite(ctx, 'coin', 9, 21);
   drawText(ctx, String(Math.floor(s.cash)), 16, 18, { color: P.Y, shadow: P['0'] });
   drawSprite(ctx, 'emerald', 62, 21);
   drawText(ctx, String(s.emeralds), 69, 18, { color: P.E, shadow: P['0'] });
+  if (overtime) drawText(ctx, 'X2', 88, 18, { color: P.o, shadow: P['0'] });
+  const rage = rageInfo(s);
+  if (s.phase !== 'over') {
+    const on = !flash || Math.floor(now * 3) % 2 === 0;
+    if (rage.level > 0) {
+      if (on) drawText(ctx, `RAGE +${rage.level}`, 175, 18, { align: 'right', color: P.p, shadow: P['0'] });
+    } else if (rage.inTurns >= 1 && rage.inTurns <= 2) {
+      drawText(ctx, `RAGE IN ${rage.inTurns}`, 175, 18, { align: 'right', color: P.o, shadow: P['0'] });
+    }
+  }
 
-  // bottom meter band (x 10..130)
-  const bx = TABLE.x, bw = 120, by = 308, bh = 8, ly = 294;
+  // Bottom band: wave track / boss bar / overtime
+  const bx = TABLE.x, bw = 120, ly = 294;
   const boss = s.targets.find((t) => t.kind === 'boss' && !t.dead);
-  if (s.bossKilled) {
-    drawText(ctx, 'STAGE CLEARED', bx, ly, { scale: 2, color: P.Y });
-    drawBar(ctx, bx, by, bw, bh, 1, P.Y, P['5'], P.y);
+  if (overtime) {
+    drawText(ctx, `OVERTIME +${s.wave - (WAVES_PER_STAGE + 1)}`, bx, ly, { scale: 2, color: P.Y, shadow: P['0'] });
+    drawText(ctx, '2X CASH', bx, 308, { color: P.o, shadow: P['0'] });
+  } else if (s.bossKilled) {
+    drawText(ctx, 'STAGE CLEARED', bx, ly, { scale: 2, color: P.Y, shadow: P['0'] });
   } else if (s.bossSpawned && boss) {
-    drawText(ctx, st.boss.name.toUpperCase(), bx, ly, { scale: 2, color: P.p });
-    drawBar(ctx, bx, by, bw, bh, boss.hp / boss.maxHp, P.R, P.p, P['2']);
-  } else if (s.bossPending || s.bossSpawned) {
+    drawText(ctx, st.boss.name.toUpperCase(), bx, ly, { scale: 2, color: P.p, shadow: P['0'] });
+    drawBar(ctx, bx, 308, bw, 8, boss.hp / boss.maxHp, P.R, P.p, P['2']);
+  } else if (s.bossPending) {
     const alt = Math.floor(now * (flash ? 4 : 2)) % 2;
     drawText(ctx, 'BOSS INCOMING', bx, ly, { scale: 2, color: alt ? P.R : P.p });
-    drawBar(ctx, bx, by, bw, bh, 1, P.M, P['5'], P.m);
   } else {
-    const on = !opts.bossBlink || Math.floor(now * (flash ? 4 : 2)) % 2 === 0;
-    const waves = st.waves.length + 1;
-    if (on) drawText(ctx, `WAVE ${s.wave}/${st.waves.length}`, bx, ly, { scale: 2, color: opts.bossBlink ? P.Y : P.M });
-    drawBar(ctx, bx, by, bw, bh, (s.wave - 1) / waves, P.m, P.M, P['2'], bestFill);
+    const slotsX: number[] = [];
+    let x = bx;
+    for (let i = 1; i <= WAVES_PER_STAGE; i++) {
+      drawText(ctx, `W${i}`, x, 297, { color: i === s.wave ? P['5'] : P['3'], shadow: P['0'] });
+      const cx = x + 10 + 3.5;
+      slotsX.push(cx);
+      drawSprite(ctx, i < s.wave ? 'pip_done' : 'pip_todo', cx, 300.5);
+      if (i === s.wave) {
+        ctx.fillStyle = P.Y;
+        ctx.fillRect(Math.round(cx) - 5, 296, 9, 1);
+        ctx.fillRect(Math.round(cx) - 5, 305, 9, 1);
+        ctx.fillRect(Math.round(cx) - 5, 297, 1, 8);
+        ctx.fillRect(Math.round(cx) + 3, 297, 1, 8);
+      }
+      x += 23;
+    }
+    drawText(ctx, 'BOSS', x, 297, { color: P['3'], shadow: P['0'] });
+    const bcx = x + 19 + 3.5;
+    slotsX.push(bcx);
+    drawSprite(ctx, 'pip_boss', bcx, 300.5, { alpha: s.wave > WAVES_PER_STAGE ? 1 : 0.5 });
+    // best-wave marker (the ghost line)
+    if (bestWave >= 1) {
+      const mcx = Math.round(slotsX[Math.min(slotsX.length, Math.round(bestWave)) - 1]);
+      ctx.fillStyle = P['5'];
+      ctx.fillRect(mcx, 307, 1, 1);
+      ctx.fillRect(mcx - 1, 308, 3, 1);
+      ctx.fillRect(mcx - 2, 309, 5, 1);
+      drawText(ctx, 'BEST', mcx, 311, { align: 'center', color: P['3'], shadow: P['0'] });
+    }
   }
 }

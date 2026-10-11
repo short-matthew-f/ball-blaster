@@ -30,6 +30,9 @@ interface RunLog {
   resolveSec: number[];
   dmgPerPhase: number[];
   charges: number;
+  restGap: number[];
+  bumps: number;
+  direct: number;
   connects: number;
   blockedCharges: number;
   attackAsAdvance: number;
@@ -57,7 +60,7 @@ function checkSane(s: RunState, where: string, problems: string[]): void {
 
 function playRun(seed: number, stats: RunStats, bot: Bot): RunLog {
   const s = createRun('felt', stats, seed);
-  const log: RunLog = { hits: [], kills: [], jams: 0, knock: [], enemySec: [], resolveSec: [], dmgPerPhase: [], charges: 0, connects: 0, blockedCharges: 0, attackAsAdvance: 0, shotsFired: 0, shots: 0, seconds: 0, cash: 0, wave: 0, terminated: false, problems: [] };
+  const log: RunLog = { hits: [], kills: [], jams: 0, knock: [], enemySec: [], resolveSec: [], dmgPerPhase: [], charges: 0, restGap: [], bumps: 0, direct: 0, connects: 0, blockedCharges: 0, attackAsAdvance: 0, shotsFired: 0, shots: 0, seconds: 0, cash: 0, wave: 0, terminated: false, problems: [] };
   checkSane(s, 'start', log.problems);
   while (s.phase === 'aim' && s.shots < SHOT_CAP) {
     const h = s.balls[0];
@@ -68,6 +71,12 @@ function playRun(seed: number, stats: RunStats, bot: Bot): RunLog {
     while ((s.phase as string) === 'resolve') step(s, SIM_DT);
     log.resolveSec.push(s.t - t0);
     log.hits.push(s.combo.hits);
+    log.bumps += s.combo.bumps ?? 0;
+    log.direct += s.combo.direct ?? 0;
+    {
+      const live = s.targets.filter((t) => !t.dead);
+      if (live.length) log.restGap.push(Math.min(...live.map((t) => Math.hypot(t.x - h.x, t.y - h.y) - t.r - h.r)));
+    }
     log.kills.push(s.combo.kills);
     const t1 = s.t;
     const hx = h.x;
@@ -124,6 +133,7 @@ describe('v0.2 prototype bot (30 seeds per config)', () => {
     const phaseTable: Record<string, Record<string, string | number>> = {};
     const runTable: Record<string, Record<string, string | number>> = {};
     const intentTable: Record<string, Record<string, string | number>> = {};
+    const leaveTable: Record<string, Record<string, string | number>> = {};
     for (const { c, logs } of results) {
       const hits = logs.flatMap((l) => l.hits);
       const kills = logs.flatMap((l) => l.kills);
@@ -164,6 +174,18 @@ describe('v0.2 prototype bot (30 seeds per config)', () => {
         'attack->advance/phase': f2(sum((l) => l.attackAsAdvance) / phases),
         'ranged hits/phase': f2(sum((l) => l.shotsFired) / phases),
       };
+      const gaps = logs.flatMap((l) => l.restGap);
+      const g = (lo: number, hi: number) => `${Math.round((100 * gaps.filter((x) => x >= lo && x < hi).length) / Math.max(1, gaps.length))}%`;
+      const totalHits = sum((l) => l.bumps + l.direct);
+      leaveTable[c.name] = {
+        'gap <2 (touching)': g(-1, 2),
+        '2-30': g(2, 30),
+        '30-60': g(30, 60),
+        '60-110': g(60, 110),
+        '110+': g(110, 1e9),
+        'gap median': f1(pct(gaps, 0.5)),
+        'bump share of hits': `${Math.round((100 * sum((l) => l.bumps)) / Math.max(1, totalHits))}%`,
+      };
       runTable[c.name] = {
         'shots mean': f1(mean(logs.map((l) => l.shots))),
         'shots p10-p90': `${pct(logs.map((l) => l.shots), 0.1)}-${pct(logs.map((l) => l.shots), 0.9)}`,
@@ -180,6 +202,8 @@ describe('v0.2 prototype bot (30 seeds per config)', () => {
     console.table(phaseTable);
     console.log('Enemy actions');
     console.table(intentTable);
+    console.log('Leave: hero edge gap to the nearest enemy after the shot; hit sources');
+    console.table(leaveTable);
     console.log('Runs');
     console.table(runTable);
   });

@@ -1,12 +1,13 @@
 // Run screen: fixed-step sim driving, hit-stop, aim input, HUD overlay.
 import type { RunResult, RunState, Vec } from '../core/types';
-import { CANCEL_RADIUS, FAST_FORWARD_MULT, MAX_PULL, SIM_DT, TABLE } from '../core/types';
+import { CANCEL_RADIUS, FAST_FORWARD_MULT, MAX_PULL, MIN_POWER, SIM_DT, TABLE } from '../core/types';
 import { PALETTE } from '../render/palette';
-import { drawHud, drawWorld, ringDots } from '../render/renderer';
-import { stageById } from '../core/tuning';
+import { drawHud, drawWorld, rageInfo, ringDots } from '../render/renderer';
+import { TARGET_DEFS, stageById } from '../core/tuning';
 import { Fx } from '../render/fx';
 import { drawText } from '../render/text';
 import { Buttons, inRect } from './widgets';
+import { fastEnemiesOn } from './app';
 import type { App, Screen } from './app';
 import type { Button } from './widgets';
 
@@ -23,15 +24,14 @@ export class RunScreen implements Screen {
   private ff = false;
   private overTimer = 0;
   private finished = false;
-  private bestFill = 0;
+  private bestWave = 0;
   private drag: { sx: number; sy: number; cx: number; cy: number } | null = null;
   private ffPressed = false;
   private buttons = new Buttons();
   private prevPhase = '';
   private pulse = 0;
-  private bossBlink = 0;
-  private firstRun = false;
-  private blinkDone = false;
+  private phaseHint = 0;
+  private staggered = new Set<number>();
 
   constructor(private app: App) {}
 
@@ -44,12 +44,11 @@ export class RunScreen implements Screen {
     this.overTimer = 0;
     this.finished = false;
     this.drag = null;
-    this.bestFill = this.app.save.bestFill[state.stage] ?? 0;
+    this.bestWave = this.app.save.bestWave[state.stage] ?? 0;
     this.prevPhase = '';
     this.pulse = 0;
-    this.bossBlink = 0;
-    this.firstRun = this.app.save.stats.runs === 0;
-    this.blinkDone = false;
+    this.phaseHint = 0;
+    this.staggered.clear();
   }
 
   enter(): void {
@@ -57,8 +56,21 @@ export class RunScreen implements Screen {
     this.fx.flashEnabled = this.app.save.settings.flash;
   }
 
+  private heroResting(s: RunState): boolean {
+    const mb = s.balls.find((b) => b.kind === 'main');
+    return !mb || mb.resting;
+  }
+
+  /** Fast-forward is offered while only extras move (resolve) or while the enemy phase plays out around a resting hero. */
   private ffAvailable(): boolean {
-    return !!this.state && this.state.phase !== 'over' && this.app.sim.canFastForward(this.state);
+    const s = this.state;
+    if (!s || s.phase === 'over') return false;
+    return this.app.sim.canFastForward(s) || (s.phase === 'enemy' && this.heroResting(s));
+  }
+
+  /** FAST ENEMIES: the enemy phase fast-forwards by itself once the hero is at rest (never over the first-time hint). */
+  private autoFast(s: RunState): boolean {
+    return s.phase === 'enemy' && this.phaseHint <= 0 && fastEnemiesOn(this.app.save) && this.heroResting(s);
   }
 
   update(dt: number): void {
@@ -70,8 +82,13 @@ export class RunScreen implements Screen {
     this.fx.update(dt);
     sfx.beginFrame();
     this.pulse = Math.max(0, this.pulse - dt);
-    this.bossBlink = Math.max(0, this.bossBlink - dt);
+    this.phaseHint = Math.max(0, this.phaseHint - dt);
     if (s.phase === 'aim' && this.prevPhase !== '' && this.prevPhase !== 'aim') this.pulse = PULSE_T;
+    if (s.phase === 'enemy' && this.prevPhase !== 'enemy' && !this.app.save.hints.phaseTaught) {
+      this.app.save.hints.phaseTaught = true;
+      this.app.persist();
+      this.phaseHint = 2.2;
+    }
     this.prevPhase = s.phase;
     const mb = s.balls.find((b) => b.kind === 'main');
     this.fx.ballPos = mb ? { x: mb.x, y: mb.y } : null;
@@ -89,22 +106,22 @@ export class RunScreen implements Screen {
       this.fx.hitStop--;
       return;
     }
-    const mult = this.ff && sim.canFastForward(s) ? FAST_FORWARD_MULT : 1;
+    const mult = (this.ff && this.ffAvailable()) || this.autoFast(s) ? FAST_FORWARD_MULT : 1;
     this.acc += dt * mult;
     const all = [] as ReturnType<typeof sim.step>;
     let guard = 0;
     while (this.acc >= SIM_DT && guard++ < 1000) {
       this.acc -= SIM_DT;
+      const was = s.phase;
       const ev = sim.step(s, SIM_DT);
+      // Enrage pulse even if the sim does not emit it: the enemy phase just began with the rage clock running.
+      if (was !== 'enemy' && s.phase === 'enemy' && !ev.some((e) => e.t === 'enrage')) {
+        const lvl = rageInfo(s).level;
+        if (lvl > 0) ev.push({ t: 'enrage', level: lvl });
+      }
       if (ev.length) {
         this.fx.consume(ev);
-        for (const e of ev) {
-          all.push(e);
-          if (e.t === 'kill' && this.firstRun && !this.blinkDone) {
-            this.blinkDone = true;
-            this.bossBlink = 1.5;
-          }
-        }
+        for (const e of ev) all.push(e);
       }
       if (this.fx.hitStop > 0 || (s.phase as string) === 'over') {
         this.acc = 0;
@@ -112,6 +129,19 @@ export class RunScreen implements Screen {
       }
     }
     if (all.length) sfx.handle(all);
+    // newly staggered enemies: dizzy blip + stars burst
+    let anyNew = false;
+    const now: Set<number> = new Set();
+    for (const t of s.targets) {
+      if (t.dead || t.stagger < TARGET_DEFS[t.kind].staggerAt) continue;
+      now.add(t.id);
+      if (!this.staggered.has(t.id)) {
+        anyNew = true;
+        this.fx.stagger(t.x, t.y - t.r);
+      }
+    }
+    this.staggered = now;
+    if (anyNew) sfx.stagger();
     if (s.phase === 'aim') this.acc = 0;
   }
 
@@ -127,29 +157,30 @@ export class RunScreen implements Screen {
     ctx.save();
     ctx.translate(sh.x, sh.y);
     const flash = this.app.save.settings.flash;
-    drawWorld(ctx, s, now, flash);
+    drawWorld(ctx, s, now, flash, { heroFlash: this.fx.heroFlash });
     this.drawHint(ctx, s, now);
     this.drawAim(ctx, s);
     this.fx.draw(ctx);
-    drawHud(ctx, s, this.bestFill, now, { bossBlink: this.bossBlink > 0, flash });
+    drawHud(ctx, s, this.bestWave, now, { flash });
     this.drawPips(ctx, s);
+    if (s.phase === 'over') {
+      ctx.globalAlpha = Math.min(0.55, this.overTimer);
+      ctx.fillStyle = P['0'];
+      ctx.fillRect(0, 0, 180, 320);
+      ctx.globalAlpha = 1;
+    }
+    this.drawPhaseHint(ctx);
     this.fx.drawOverlay(ctx);
     ctx.restore();
 
     const btns: Button[] = [];
     if (this.ffAvailable()) {
-      btns.push({ id: 'ff', ...FF_RECT, label: '>>', style: this.ff ? 'gold' : 'gray', scale: 2, active: this.ff });
+      const on = this.ff || this.autoFast(s);
+      btns.push({ id: 'ff', ...FF_RECT, label: '>>', style: on ? 'gold' : 'gray', scale: 2, active: on });
     }
     this.buttons.set(btns);
     this.buttons.draw(ctx);
 
-    if (s.phase === 'over') {
-      ctx.globalAlpha = Math.min(0.6, this.overTimer);
-      ctx.fillStyle = P['0'];
-      ctx.fillRect(0, 0, 180, 320);
-      ctx.globalAlpha = 1;
-      drawText(ctx, s.bossKilled ? 'STAGE CLEAR!' : 'OUT OF ENERGY', 90, 150, { align: 'center', scale: 2, color: s.bossKilled ? P.Y : P.p, shadow: P['0'] });
-    }
   }
 
   private drawAim(ctx: CanvasRenderingContext2D, s: RunState): void {
@@ -169,7 +200,7 @@ export class RunScreen implements Screen {
       ctx.globalAlpha = 1;
       return;
     }
-    const power = Math.min(1, len / MAX_PULL);
+    const power = Math.max(MIN_POWER, Math.min(1, len / MAX_PULL));
     const ux = pull.x / len, uy = pull.y / len;
     // preview polyline
     const pts = this.app.sim.previewShot(s, pull);
@@ -196,7 +227,7 @@ export class RunScreen implements Screen {
     }
     // pull line from the ball: dotted, color ramps with power
     const color = power < 0.4 ? P.E : power < 0.75 ? P.Y : P.R;
-    const L = Math.min(len, MAX_PULL);
+    const L = Math.max(Math.min(len, MAX_PULL), MIN_POWER * MAX_PULL);
     ctx.fillStyle = color;
     for (let d = 8; d <= L; d += 3) {
       ctx.fillRect(Math.round(bx + ux * d), Math.round(by + uy * d), 2, 2);
@@ -208,13 +239,13 @@ export class RunScreen implements Screen {
     ctx.fillRect(ex, ey, 2, 2);
   }
 
-  /** Power pips and cost sit beside the energy bar so the thumb never covers them. */
+  /** Power pips sit beside the HP bar so the thumb never covers them. Past the cancel radius they never show empty (25% floor). */
   private drawPips(ctx: CanvasRenderingContext2D, s: RunState): void {
     const pull = this.pull();
     if (!pull || s.phase !== 'aim') return;
     const len = Math.hypot(pull.x, pull.y);
     if (len <= CANCEL_RADIUS) return;
-    const power = Math.min(1, len / MAX_PULL);
+    const power = Math.max(MIN_POWER, Math.min(1, len / MAX_PULL));
     const color = power < 0.4 ? P.E : power < 0.75 ? P.Y : P.R;
     const lit = Math.max(1, Math.round(power * 5));
     for (let i = 0; i < 5; i++) {
@@ -224,6 +255,18 @@ export class RunScreen implements Screen {
       ctx.fillStyle = i < lit ? color : P['2'];
       ctx.fillRect(px, 4, 3, 3);
     }
+  }
+
+  /** One-time "THEY MOVE AFTER YOU" plate on the first enemy phase. */
+  private drawPhaseHint(ctx: CanvasRenderingContext2D): void {
+    if (this.phaseHint <= 0) return;
+    ctx.globalAlpha = Math.min(1, this.phaseHint / 0.4) * 0.8;
+    ctx.fillStyle = P['0'];
+    ctx.fillRect(24, 128, 132, 34);
+    ctx.globalAlpha = Math.min(1, this.phaseHint / 0.4);
+    drawText(ctx, 'THEY MOVE', 90, 132, { align: 'center', scale: 2, color: P['5'], shadow: P['0'] });
+    drawText(ctx, 'AFTER YOU', 90, 146, { align: 'center', scale: 2, color: P.Y, shadow: P['0'] });
+    ctx.globalAlpha = 1;
   }
 
   /** Ring pulse round the ball + first-session ghost pull demo. */
@@ -322,6 +365,6 @@ export class RunScreen implements Screen {
 function fallbackResult(s: RunState): RunResult {
   return {
     stage: s.stage, cash: s.cash, emeralds: s.emeralds, kills: s.kills,
-    meterFill: 0, wave: s.wave, bossKilled: s.bossKilled, shots: s.shots, bestCombo: s.bestCombo, seconds: s.t,
+    wave: Math.min(s.wave, 4), wavesCleared: Math.max(0, Math.min(s.wave, 4) - 1), overtimeWaves: Math.max(0, s.wave - 4),  bossKilled: s.bossKilled, shots: s.shots, bestCombo: s.bestCombo, seconds: s.t,
   };
 }

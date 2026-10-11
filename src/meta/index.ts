@@ -51,7 +51,8 @@ export function bankRun(save: SaveData, result: RunResult): { bossEmeralds: numb
       unlocked = next.id;
     }
   }
-  save.bestFill[result.stage] = Math.max(save.bestFill[result.stage] ?? 0, result.meterFill);
+  const cleared = Math.min(4, Math.max(0, result.wave - 1) + (result.bossKilled ? 1 : 0));
+  save.bestWave[result.stage] = Math.max(save.bestWave[result.stage] ?? 0, cleared);
   save.stats.runs++;
   save.stats.kills += result.kills;
   save.stats.shots += result.shots;

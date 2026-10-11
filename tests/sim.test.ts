@@ -9,6 +9,7 @@ import { makeEnemy, placeFormation } from '../src/sim/spawn';
 import { maxOverlap } from '../src/sim/physics';
 import { rageLevel } from '../src/sim/enemy';
 import { hasCorridor, jamRule } from '../src/sim/run';
+import { updateBossShield } from '../src/sim/damage';
 
 const SHOTS: Vec[] = [
   { x: 0, y: -60 },
@@ -37,8 +38,10 @@ function play(seed: number, dt = SIM_DT) {
   return s;
 }
 
+/** Sim state minus render-only timers (flash/shimmer tick during idle aim, so a coarse step overshoots them). */
 function snapshot(s: RunState) {
-  return { balls: s.balls, targets: s.targets, hp: s.hp, cash: s.cash, t: s.t, phase: s.phase, wave: s.wave };
+  const targets = s.targets.map(({ flash: _f, shimmer: _s, ...rest }) => rest);
+  return { balls: s.balls, targets, hp: s.hp, cash: s.cash, t: s.t, phase: s.phase, wave: s.wave };
 }
 
 /** Empty table with the hero at (x,y), resting. */
@@ -129,16 +132,21 @@ describe('physics', () => {
     expect(b.hp).toBe(b.maxHp - 1);
     expect(s.combo.hits).toBe(2);
   });
-  it('heavier enemies slide less; everything settles and nothing overlaps at rest', () => {
-    const slide = (kind: TargetKind) => {
+  it('heavier enemies are knocked slower; near-equal masses break (hero nearly stops); nothing overlaps at rest', () => {
+    const knock = (kind: TargetKind) => {
       const s = lab(90, 230);
       const e = put(s, kind, 90, 150);
       shoot(s, { x: 0, y: -MAX_PULL });
+      while (s.combo.hits === 0) step(s, SIM_DT);
+      const out = { enemy: Math.hypot(e.vx, e.vy), hero: Math.hypot(s.balls[0].vx, s.balls[0].vy) };
       while (s.phase === 'resolve') step(s, SIM_DT);
       expect(maxOverlap(s)).toBeLessThan(0.5);
-      return 150 - e.y;
+      return out;
     };
-    expect(slide('brute')).toBeLessThan(slide('grunt'));
+    const g = knock('grunt');
+    expect(knock('brute').enemy).toBeLessThan(g.enemy);
+    expect(g.enemy).toBeGreaterThan(300);
+    expect(g.hero).toBeLessThan(60);
   });
   it('thornback pricks the hero on contact', () => {
     const s = lab(90, 230);
@@ -174,8 +182,8 @@ describe('enemy phase', () => {
     g.intent = { t: 'attack', n: 2 };
     enemyPhaseOnly(s);
     expect(s.hp).toBe(BASE_STATS.maxHp);
-    expect(g.y - 60).toBeGreaterThan(30);
-    expect(g.y - 60).toBeLessThan(50);
+    expect(g.y - 60).toBeGreaterThan(50);
+    expect(g.y - 60).toBeLessThan(70);
   });
   it('staggered enemies skip and keep their intent; stagger clears after the phase', () => {
     const s = lab(90, 240);
@@ -308,5 +316,155 @@ describe('formations and the jam rule', () => {
     expect(jamRule(s, [])).toBe(true);
     expect(s.jams).toBe(1);
     expect(hasCorridor(s, s.balls[0].x, s.balls[0].y)).toBe(true);
+  });
+});
+
+describe('step 2: frost, cadre, thorns, stats, combos', () => {
+  it('frost freezes the nearest ally; frozen ignores soft hits and skips its intent; fast hits shatter', () => {
+    const s = lab(90, 250);
+    const f = put(s, 'frost', 60, 80);
+    f.intent = { t: 'guard' };
+    const g = put(s, 'grunt', 95, 80);
+    g.intent = { t: 'rest' };
+    put(s, 'grunt', 150, 60).intent = { t: 'rest' };
+    enemyPhaseOnly(s);
+    expect(g.frozen).toBeGreaterThan(0);
+    // Soft hit: no damage, no stagger.
+    s.balls[0].x = 95;
+    s.balls[0].y = 130;
+    shoot(s, { x: 0, y: -15 }); // 25 % power = 120 px/s < shatter
+    while (s.phase === 'resolve') step(s, SIM_DT);
+    expect(g.hp).toBe(g.maxHp);
+    expect(g.dead).toBe(false);
+    while (s.phase !== 'aim') step(s, SIM_DT);
+    // Hard hit: shatter (kill + rewards).
+    s.balls[0].x = 95;
+    s.balls[0].y = 200;
+    const cash = s.cash;
+    shoot(s, { x: 0, y: -MAX_PULL });
+    const fx: FxEvent[] = [];
+    while ((s.phase as string) === 'resolve') fx.push(...step(s, SIM_DT));
+    expect(g.dead).toBe(true);
+    expect(fx.some((e) => e.t === 'shatter')).toBe(true);
+    expect(s.cash).toBeGreaterThan(cash);
+  });
+  it('a frozen enemy skips its intent', () => {
+    const s = lab(90, 240);
+    const g = put(s, 'grunt', 90, 170);
+    g.intent = { t: 'attack', n: 3 };
+    g.frozen = 2;
+    enemyPhaseOnly(s);
+    expect(s.hp).toBe(BASE_STATS.maxHp);
+  });
+  it('Rime Golem arrives with a cadre; it takes no damage until the cadre is dead', () => {
+    const s = createRun('ice', BASE_STATS, 5);
+    s.targets = [];
+    s.wave = 3;
+    s.wavePending = true;
+    enemyPhaseOnly(s);
+    const boss = s.targets.find((t) => t.kind === 'boss')!;
+    expect(s.targets.filter((t) => t.kind === 'cadre').length).toBe(3);
+    expect(boss.shielded).toBe(true);
+    for (const c of s.targets.filter((t) => t.kind === 'cadre')) c.dead = true;
+    s.targets = s.targets.filter((t) => !t.dead);
+    updateBossShield(s);
+    expect(boss.shielded).toBe(false);
+  });
+  it('thorns prick when the hero is knocked into a thornback during the enemy phase', () => {
+    const s = lab(90, 200);
+    const g = put(s, 'grunt', 90, 250);
+    g.intent = { t: 'attack', n: 1 };
+    const tb = put(s, 'thornback', 90, 160);
+    tb.intent = { t: 'rest' };
+    const fx = enemyPhaseOnly(s);
+    expect(fx.filter((f) => f.t === 'heroHit' && f.how === 'thorns').length).toBe(1);
+    expect(s.hp).toBe(BASE_STATS.maxHp - 2);
+  });
+  it('rangedResist reduces Shoot (min 1); healOnKill heals via the curve; heavyHits staggers 2', () => {
+    const s = lab(90, 240);
+    s.stats.rangedResist = 1;
+    s.hp = 10;
+    const k = put(s, 'skirmisher', 90, 60);
+    k.intent = { t: 'shoot', n: 2 };
+    put(s, 'grunt', 30, 60).intent = { t: 'rest' };
+    enemyPhaseOnly(s);
+    expect(s.hp).toBe(9);
+    const s2 = lab(90, 230);
+    s2.stats.heavyHits = 1;
+    s2.stats.healOnKill = 2;
+    s2.stats.damage = 3;
+    s2.hp = 10;
+    const b = put(s2, 'brute', 90, 150);
+    shoot(s2, { x: 0, y: -MAX_PULL });
+    while (s2.combo.hits === 0) step(s2, SIM_DT);
+    expect(b.stagger).toBe(2);
+    while (s2.phase === 'resolve') step(s2, SIM_DT);
+    const s3 = lab(90, 230);
+    s3.stats.healOnKill = 2;
+    s3.stats.damage = 5;
+    s3.hp = 10;
+    put(s3, 'grunt', 90, 170);
+    put(s3, 'grunt', 30, 60);
+    shoot(s3, { x: 0, y: -MAX_PULL });
+    while (s3.phase === 'resolve') step(s3, SIM_DT);
+    expect(s3.hp).toBeCloseTo(10 + 2 * (1 - 0), 6);
+  });
+  it('reflex skips the first enemy phase of a wave', () => {
+    const s = lab(90, 240);
+    s.stats.reflex = 1;
+    s.waveTurn = 0;
+    const g = put(s, 'grunt', 90, 170);
+    g.intent = { t: 'attack', n: 3 };
+    enemyPhaseOnly(s);
+    expect(s.hp).toBe(BASE_STATS.maxHp);
+    g.intent = { t: 'attack', n: 3 };
+    enemyPhaseOnly(s);
+    expect(s.hp).toBe(BASE_STATS.maxHp - 3);
+  });
+  it('a killed enemy keeps rolling as a ghost and still bumps its neighbour (cascade survives the kill)', () => {
+    const s = lab(90, 230);
+    s.stats.damage = 5;
+    s.stats.comboCascade = 1;
+    put(s, 'grunt', 90, 170);
+    const b = put(s, 'grunt', 90, 140);
+    const c = put(s, 'grunt', 30, 140);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    while (s.phase === 'resolve') step(s, SIM_DT);
+    expect(b.hp).toBe(b.maxHp - 1);
+    expect(s.combo.bumps).toBe(1);
+    expect(c.hp).toBe(c.maxHp);
+  });
+  it('Sweep pays when a wave is cleared within one shot; Lockdown heals when every enemy is staggered', () => {
+    const s = lab(90, 230);
+    s.stats.comboSweep = 50;
+    s.stats.damage = 5;
+    put(s, 'grunt', 90, 170);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    const fx: FxEvent[] = [];
+    while (s.phase !== 'aim' && s.phase !== 'over') fx.push(...step(s, SIM_DT));
+    expect(fx.some((f) => f.t === 'combo' && f.name === 'SWEEP')).toBe(true);
+    const s2 = lab(90, 230);
+    s2.stats.comboLockdown = 2;
+    s2.hp = 10;
+    put(s2, 'grunt', 90, 170);
+    shoot(s2, { x: 0, y: -MAX_PULL });
+    const fx2: FxEvent[] = [];
+    while (s2.phase === 'resolve') fx2.push(...step(s2, SIM_DT));
+    expect(fx2.some((f) => f.t === 'combo' && f.name === 'LOCKDOWN')).toBe(true);
+  });
+  it('Ice runs (bot, mid stats) terminate with sane state', () => {
+    for (let seed = 1; seed <= 6; seed++) {
+      const s = createRun('ice', { ...BASE_STATS, damage: 4, maxHp: 35 }, seed);
+      while (s.phase === 'aim' && s.shots < 300) {
+        const h = s.balls[0];
+        const tg = s.targets.filter((t) => !t.dead).reduce((a, b) => (Math.hypot(b.x - h.x, b.y - h.y) < Math.hypot(a.x - h.x, a.y - h.y) ? b : a));
+        const d = Math.hypot(tg.x - h.x, tg.y - h.y) || 1;
+        shoot(s, { x: ((tg.x - h.x) / d) * MAX_PULL, y: ((tg.y - h.y) / d) * MAX_PULL });
+        untilSettled(s);
+        if (s.phase === 'aim') expect(maxOverlap(s)).toBeLessThan(0.5);
+      }
+      expect(s.phase).toBe('over');
+      expect(Number.isFinite(s.hp)).toBe(true);
+    }
   });
 });

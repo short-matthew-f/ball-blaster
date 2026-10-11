@@ -11,9 +11,10 @@ import {
   stageById,
 } from '../core/tuning';
 import { rollIntent } from './intents';
+import { heal, updateBossShield } from './damage';
 
 /** Formations live above the spawn-only zone. Front rank centre line: */
-const FRONT_Y = TABLE.y + 100;
+const FRONT_Y = TABLE.y + 108; // y 142: ~120 px from the hero start (step 2)
 const REGION = { x0: TABLE.x + 2, x1: TABLE.x + TABLE.w - 2, y0: TABLE.y + 2, y1: TABLE.y + TABLE.h - SPAWN_ZONE };
 const GAP = 2;
 const HERO_CLEARANCE = 8;
@@ -284,18 +285,42 @@ export function spawnWave(s: RunState, fx: FxEvent[]): Target[] {
       e.elite = mods[s.rng.int(0, mods.length - 1)];
       if (e.elite === 'hardy') e.hp = e.maxHp = Math.ceil(e.maxHp * HARDY_HP_MULT);
     }
-    if (e.kind === 'boss') {
-      s.bossSpawned = true;
-      s.bossPending = false;
-      fx.push({ t: 'bossArrive' });
-    }
     e.shimmer = 0.5;
     s.targets.push(e);
     out.push(e);
     fx.push({ t: 'shimmer', x: e.x, y: e.y });
+    if (e.kind === 'boss') {
+      s.bossSpawned = true;
+      s.bossPending = false;
+      fx.push({ t: 'bossArrive' });
+      out.push(...spawnCadre(s, e, fx));
+      const h = s.balls.find((b) => b.kind === 'main');
+      if (s.stats.bossHeal > 0 && h) heal(s, s.stats.bossHeal * s.maxHp, h.x, h.y, fx);
+    }
   }
+  s.waveKillShot = -1;
   s.waveTurn = 0;
   fx.push({ t: 'waveStart', wave: s.wave, overtime: bonus > 0 });
+  return out;
+}
+
+/** Rime Golem: shield minions in a ring round the boss; the boss is shielded while any lives. */
+function spawnCadre(s: RunState, boss: Target, fx: FxEvent[]): Target[] {
+  const n = stageById(s.stage).boss.cadre;
+  const out: Target[] = [];
+  const r = TARGET_DEFS.cadre.r;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + Math.PI / 2;
+    const d = boss.r + r + 4;
+    const p = findFreeNear(s, boss.x + Math.cos(a) * d, boss.y + Math.sin(a) * d, r);
+    if (!p) continue;
+    const c = makeEnemy(s, 'cadre', p.x, p.y, boss.atkBonus ?? 0);
+    c.shimmer = 0.5;
+    s.targets.push(c);
+    out.push(c);
+    fx.push({ t: 'shimmer', x: p.x, y: p.y });
+  }
+  updateBossShield(s);
   return out;
 }
 

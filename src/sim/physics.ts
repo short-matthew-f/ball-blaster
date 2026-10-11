@@ -16,6 +16,9 @@ import {
   BALL_TYPES,
   BASE_RESTITUTION,
   BUMP_DMG_SPEED,
+  BUMPER_STAGGER_R,
+  FROZEN_BOUNCE,
+  HEAVY_HIT_SPEED,
   CHARGE_STOPS_ON_HIT,
   ENEMY_FRICTION_MULT,
   ENEMY_WALL_BOUNCE,
@@ -31,7 +34,6 @@ import { chainLightning, heal, heroDamage, hitEnemy } from './damage';
 export const MAX_BALL_SPEED = MAX_LAUNCH_SPEED * 1.5;
 const OBSTACLE_RESTITUTION = 0.8;
 const BUMPER_MIN_KICK = 80;
-const BUMPER_STAGGER_R = 40;
 const SPLIT_R = 2.5;
 const SPLIT_MASS = 0.5;
 const SPAT_R = 2;
@@ -39,7 +41,6 @@ const SPAT_MASS = 0.4;
 /** Pairs closer than r1 + r2 + this are "touching" (contact bookkeeping). */
 const TOUCH_SLOP = 0.5;
 const RELAX_ITERS = 6;
-const SHRINE_HEAL = 8;
 
 /** A physics body: a ball or an enemy. */
 interface Body {
@@ -53,12 +54,17 @@ interface Body {
   r: number;
   im: number; // inverse mass (0 = static: frozen enemy)
   resting: boolean;
+  /** Dead enemy still rolling (see Target.ghost). */
+  ghost?: boolean;
 }
 
 function bodies(s: RunState): Body[] {
   const out: Body[] = [];
   for (const b of s.balls) out.push(wrapBall(b));
-  for (const t of s.targets) if (!t.dead) out.push(wrapEnemy(t));
+  for (const t of s.targets) {
+    if (!t.dead) out.push(wrapEnemy(t));
+    else if ((t.ghost ?? 0) > 0 && !t.resting) out.push({ ...wrapEnemy(t), ghost: true });
+  }
   return out;
 }
 
@@ -91,7 +97,8 @@ function capSpeed(b: { vx: number; vy: number }): void {
 }
 
 function kindBounce(b: Body): number {
-  return b.en ? TARGET_DEFS[b.en.kind].bounce : 1;
+  if (!b.en) return 1;
+  return (b.en.frozen ?? 0) > 0 ? FROZEN_BOUNCE : TARGET_DEFS[b.en.kind].bounce;
 }
 
 export function pairKey(a: number, b: number): string {
@@ -127,6 +134,10 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
         t.vx = 0;
         t.vy = 0;
       }
+    } else if (b.kind === 'main') {
+      // Knocked into a thornback (or a Spiky elite) during the enemy phase: thorns still prick.
+      const thorns = thornsOf(t);
+      if (thorns > 0) heroDamage(s, thorns, t.kind, b.x, b.y, fx, 'thorns');
     }
     return;
   }
@@ -135,10 +146,11 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
   else if (b.kind === 'spat') dmg = s.stats.spitDamage > 0 ? s.stats.spitDamage : s.stats.damage;
   else dmg = s.stats.damage;
   const sticky = b.kind === 'main' && s.stats.ballType === 'sticky' && !s.stickyUsed;
-  hitEnemy(s, t, dmg, b.kind, fx, b, sticky ? 2 : 1);
+  const heavy = b.kind === 'main' && s.stats.heavyHits > 0 && speed >= HEAVY_HIT_SPEED;
+  const thorns = thornsOf(t);
+  hitEnemy(s, t, dmg, b.kind, fx, b, (heavy ? 2 : 1) + (sticky ? 1 : 0), speed);
   if (b.kind === 'main') {
-    const thorns = (TARGET_DEFS[t.kind].thorns ?? 0) + (t.elite === 'spiky' ? 1 : 0);
-    if (thorns > 0 && !t.dead) heroDamage(s, thorns, t.kind, b.x, b.y, fx, 'thorns');
+    if (thorns > 0) heroDamage(s, thorns, t.kind, b.x, b.y, fx, 'thorns');
     if (sticky) {
       // Stun shot: stops dead on the first enemy contact of the shot.
       s.stickyUsed = true;
@@ -153,6 +165,10 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
   chainLightning(s, t, fx);
 }
 
+function thornsOf(t: Target): number {
+  return (TARGET_DEFS[t.kind].thorns ?? 0) + (t.elite === 'spiky' ? 1 : 0);
+}
+
 /** Enemy-enemy bump: the slower body (pre-impact) is the bumped one; a charger that bumps anything is blocked. */
 function enemyBump(s: RunState, a: Target, b: Target, rel: number, spA: number, spB: number, fx: FxEvent[]): void {
   for (const c of [a, b]) {
@@ -162,8 +178,8 @@ function enemyBump(s: RunState, a: Target, b: Target, rel: number, spA: number, 
     }
   }
   if (rel <= BUMP_DMG_SPEED) return;
-  const bumped = spA < spB ? a : spB < spA ? b : a.id < b.id ? a : b;
-  hitEnemy(s, bumped, 1, 'bump', fx);
+  const bumped = a.dead ? b : b.dead ? a : spA < spB ? a : spB < spA ? b : a.id < b.id ? a : b;
+  hitEnemy(s, bumped, 1, 'bump', fx, undefined, 1, rel);
 }
 
 function collidePair(s: RunState, A: Body, B: Body, fx: FxEvent[]): void {
@@ -293,7 +309,7 @@ function hitObstacle(s: RunState, o: Obstacle, fx: FxEvent[]): void {
   o.dead = true;
   if (o.kind === 'shrine') {
     fx.push({ t: 'shrine', x: o.x, y: o.y });
-    heal(s, SHRINE_HEAL, o.x, o.y, fx);
+    heal(s, s.stats.shrineHeal, o.x, o.y, fx);
   } else {
     const cash = Math.round((o.kind === 'chest' ? s.stats.chestCash : s.stats.crateCash) * s.stats.cashMult);
     s.cash += cash;
@@ -470,11 +486,33 @@ export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
     for (let j = i + 1; j < list.length; j++) {
       const A = list[i];
       const B = list[j];
-      if (A.en?.dead || B.en?.dead) continue;
+      if (A.en?.dead || B.en?.dead) {
+        // Ghosts only bump live enemies.
+        const ok = (A.ghost && B.en && !B.en.dead) || (B.ghost && A.en && !A.en.dead);
+        if (!ok || (A.ghost && A.en?.ghost === 0) || (B.ghost && B.en?.ghost === 0)) continue;
+      }
       collidePair(s, A, B, fx);
     }
   }
   // Damage may have killed enemies (and spawned grubs/splits); relax only the survivors in this list.
+  // Ghosts: friction like any enemy, then expire.
+  for (const b of list) {
+    if (!b.ghost || !b.en) continue;
+    b.en.ghost = Math.max(0, (b.en.ghost ?? 0) - h);
+    const k = Math.max(0, 1 - st.friction * ENEMY_FRICTION_MULT * h);
+    const sp = Math.hypot(b.vx, b.vy) * k - st.rollDecel * ENEMY_FRICTION_MULT * h;
+    const cur = Math.hypot(b.vx, b.vy);
+    if (sp < STOP_SPEED || b.en.ghost <= 0 || cur < 1e-9) {
+      b.vx = 0;
+      b.vy = 0;
+      b.resting = true;
+      b.en.ghost = 0;
+    } else {
+      b.vx *= sp / cur;
+      b.vy *= sp / cur;
+    }
+  }
+  writeBack(list.filter((b) => b.ghost));
   const live = list.filter((b) => !b.en || !b.en.dead);
   relaxList(s, live, RELAX_ITERS);
 

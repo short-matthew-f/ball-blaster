@@ -88,6 +88,8 @@ export interface BossDef {
   r: number;
   /** HP fractions where the boss enters its next phase, descending, e.g. [0.5]. */
   phases: number[];
+  /** Shield minions spawned around the boss; the boss takes no damage while any lives. 0 = none. */
+  cadre: number;
 }
 
 // ---------- Entities ----------
@@ -129,6 +131,8 @@ export type TargetKind =
   | 'brute'
   | 'cleric'
   | 'hive'
+  | 'frost' // freezes an ally (Ice)
+  | 'cadre' // boss shield minion (Rime Golem)
   | 'boss';
 
 /** Alias: v0.2 enemies are physics bodies. `Target` is kept so render/ui keep compiling. */
@@ -189,6 +193,11 @@ export interface Target {
   summon?: boolean;
   /** Overtime: extra attack per action. */
   atkBonus?: number;
+  /**
+   * Dead but still rolling (s): a body killed mid-shot keeps its momentum for a moment and can still bump live
+   * enemies (cascades survive kills). Invisible (dead); never touches balls; removed at shot end.
+   */
+  ghost?: number;
 }
 
 export type ObstacleKind = 'bumper' | 'crate' | 'chest' | 'shrine';
@@ -215,6 +224,12 @@ export type TurnPhase =
 export interface ComboTally {
   /** Contact hits this shot (hero/split/spat contacts, enemy-enemy bumps, lightning, explosions). */
   hits: number;
+  /** Of `hits`, how many were enemy-enemy bumps (the rest: ball contacts, lightning, blasts). */
+  bumps?: number;
+  /** Ball-contact hits (hero, split, spat). */
+  direct?: number;
+  /** Cash from kills after a wall bounce (Bank combo base). */
+  bankCash?: number;
   kills: number;
   bankKills: number;
   bumperHits: number;
@@ -298,6 +313,8 @@ export interface RunState {
   touching: Record<string, boolean>;
   /** Jam-rule triggers this run. */
   jams: number;
+  /** Shot number of the first regular kill of the current wave (-1 none): Sweep = wave cleared within one shot. */
+  waveKillShot?: number;
   nextId: number;
   result?: RunResult;
   /** Fx queued outside step() (e.g. by shoot()); drained at the start of the next step. */
@@ -306,7 +323,7 @@ export interface RunState {
 
 /** Public sim API implemented by sim/index.ts. */
 export interface SimApi {
-  createRun(stage: StageId, stats: RunStats, seed: number, bestFill?: number): RunState;
+  createRun(stage: StageId, stats: RunStats, seed: number, bestWave?: number): RunState;
   /** Advance by exactly dt (caller passes SIM_DT multiples). Returns fx emitted during the step. */
   step(s: RunState, dt: number): FxEvent[];
   /** pull = drag vector (finger start - finger now), ball launches along it. False if cancelled / not allowed. */
@@ -322,9 +339,12 @@ export interface RunResult {
   cash: number;
   emeralds: number;
   kills: number;
-  meterFill: number; // 0..1 wave progress reached this run (waves reached / (waves + boss))
-  /** Highest wave reached. */
+  /** Highest stage wave reached, 1-4 (4 = boss wave). */
   wave: number;
+  /** Stage waves cleared, 0-4 (4 = boss killed). */
+  wavesCleared: number;
+  /** Overtime waves reached after the boss kill. */
+  overtimeWaves: number;
   bossKilled: boolean;
   shots: number;
   bestCombo: number;
@@ -382,38 +402,39 @@ export interface RunStats {
   /** Hero max HP and flat armor (damage taken = attack - armor, min 1). */
   maxHp: number;
   armor: number;
+  /** Flat contact damage per hit. */
   damage: number;
   /** Extra damage per (impact speed / SPEED_DMG_REF), floored. 0 = locked. */
   speedDamage: number;
-
-  // --- Legacy v0.1 energy/board stats: unused by the v0.2 sim; meta trees are reworked in build step 5. ---
-  maxEnergy: number;
-  releaseCost: number;
-  hitCost: number; // main-ball hit on a target
-  bumperRefill: number; // base amount before the shared curve
-  killRefillChance: number; // 0..1
-  killRefillAmount: number;
-  bossRefillPct: number; // 0..1 of maxEnergy
-
-  enemyCount: number; // desired live regular targets
-  respawnPerTurn: number; // targets added per enemy phase (fractional accumulates)
   aimPreview: number; // 0 = off, else number of wall bounces to preview
 
-  lightningChance: number; // 0..1 per target hit
+  // Vitality (every heal goes through the shared diminishing curve)
+  healOnKill: number; // HP per kill, 0 = off
+  waveHeal: number; // HP at wave clear
+  bossHeal: number; // fraction of maxHp at boss arrival, 0 = off
+  rangedResist: number; // flat reduction on Shoot damage (min 1)
+
+  // Tactics
+  heavyHits: number; // 0|1: hero hits at >= HEAVY_HIT_SPEED apply 2 stagger
+  massMult: number; // hero mass multiplier (default 1)
+  reflex: number; // 0|1: skip the first enemy phase of each wave
+
+  lightningChance: number; // 0..1 per enemy hit
   lightningArcs: number;
   lightningRange: number; // px
   lightningDamage: number;
 
-  splitCount: number; // children on first target hit of a shot; 0 = off
-  spitInterval: number; // seconds between spat balls from main while moving; 0 = off
+  splitCount: number; // children on first enemy hit of a shot; 0 = off
+  spitInterval: number; // seconds between spat balls from the hero while moving; 0 = off
   spitLife: number; // seconds
   spitDamage: number;
 
-  comboMultiKill: number; // 0 = locked; else cash bonus per extra kill (e.g. 0.25 = +25%)
-  comboBank: number;
-  comboBumperChain: number;
-  comboChainReaction: number;
-  comboEnergy: number; // energy granted per combo trigger (via shared curve); 0 = off
+  // Combos (0 = locked)
+  comboChain: number; // cash bonus fraction per hit beyond 2 (e.g. 0.25)
+  comboBank: number; // cash bonus fraction on a kill after a wall bounce
+  comboCascade: number; // 0|1: a kill by an enemy bump -> +1 stagger to enemies within 50 px
+  comboSweep: number; // cash when a wave is cleared in a single shot
+  comboLockdown: number; // HP (curve) when every live enemy is staggered by a shot
 
   ballType: BallType;
   bumpers: number;
@@ -423,7 +444,7 @@ export interface RunStats {
   strayEmeraldChance: number; // per kill
   chestCash: number;
   crateCash: number;
-  shrineEnergy: number; // via shared curve
+  shrineHeal: number; // via shared curve
   bumperBounce: number; // speed multiplier on bumper hit
 
   cashMult: number;
@@ -440,12 +461,13 @@ export interface SaveData {
   /** Highest unlocked stage index. */
   unlocked: number;
   current: StageId;
-  bestFill: Partial<Record<StageId, number>>;
+  /** 0 none, 1-3 waves cleared, 4 = boss killed. */
+  bestWave: Partial<Record<StageId, number>>;
   bossKills: Partial<Record<StageId, number>>;
   /** Equipped ball type (must be unlocked in emerald tree). */
   ballType: BallType;
   /** flash: false = reduced flashing (alpha fades, solid bolts, slow shimmer). Default from prefers-reduced-motion. */
-  settings: { sound: boolean; shake: boolean; flash: boolean };
+  settings: { sound: boolean; shake: boolean; flash: boolean; fastEnemies?: boolean };
   /** One-shot onboarding / disclosure flags, e.g. 'shotTaught', 'tab:combo', 'tab:emerald', 'tab:stage'. */
   hints: Record<string, boolean>;
   stats: { runs: number; kills: number; shots: number };
@@ -454,7 +476,7 @@ export interface SaveData {
 // ---------- Upgrade tree data (meta) ----------
 
 export type Currency = 'cash' | 'emerald';
-export type TreeId = 'power' | 'energy' | 'board' | 'combo' | 'emerald' | `stage:${StageId}`;
+export type TreeId = 'power' | 'vitality' | 'tactics' | 'combo' | 'emerald' | `stage:${StageId}`;
 
 export interface UpgradeNode {
   id: string;
@@ -500,7 +522,7 @@ export interface MetaApi {
   buy(save: SaveData, node: UpgradeNode): boolean;
   /**
    * Banks a finished run: adds cash, emeralds (sim already applied repeat decay? no: meta computes boss emeralds
-   * using bossKills + EMERALD_REPEAT_DECAY; sim's result.emeralds counts only stray drops), updates bestFill, bossKills,
+   * using bossKills + EMERALD_REPEAT_DECAY; sim's result.emeralds counts only stray drops), updates bestWave, bossKills,
    * unlocks next stage on boss kill, stats. Returns emeralds awarded for the boss and whether a stage unlocked.
    */
   bankRun(save: SaveData, result: RunResult): { bossEmeralds: number; unlocked: StageId | null };

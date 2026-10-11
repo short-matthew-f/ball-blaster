@@ -2,6 +2,7 @@
 // Consumes FxEvents from the sim; never touches sim state.
 import type { FxEvent, TargetKind, Vec } from '../core/types';
 import { TABLE } from '../core/types';
+import { WAVES_PER_STAGE } from '../core/tuning';
 import { PALETTE } from './palette';
 import { drawText, textWidth } from './text';
 
@@ -9,10 +10,15 @@ interface Particle { x: number; y: number; vx: number; vy: number; life: number;
 interface Floater { x: number; y: number; text: string; color: string; life: number; max: number }
 interface Banner { text: string; color: string; life: number; max: number; scale: number }
 interface Bolt { pts: Vec[]; life: number }
+interface Tracer { x0: number; y0: number; x1: number; y1: number; life: number }
 interface Ring { x: number; y: number; r: number; life: number; max: number; color?: string; color2?: string }
 
 const P = PALETTE;
+/** First Overtime wave number (stage waves + boss wave + 1). */
+const OVERTIME_FIRST = WAVES_PER_STAGE + 2;
 const KIND_COLORS: Record<TargetKind, string[]> = {
+  frost: [P.c, P['5'], P.B],
+  cadre: [P.B, P.c, P.b],
   grunt: [P.R, P.p, P.r],
   skirmisher: [P.B, P.c, P.b],
   bouncer: [P.E, P.e, P.h],
@@ -34,7 +40,12 @@ export class Fx {
   banners: Banner[] = [];
   bolts: Bolt[] = [];
   rings: Ring[] = [];
+  tracers: Tracer[] = [];
   shake = 0;
+  /** Seconds of hero hit-flash remaining. */
+  heroFlash = 0;
+  /** Seconds of red enrage vignette remaining. */
+  vignette = 0;
   /** Render frames of sim freeze remaining. */
   hitStop = 0;
   shakeEnabled = true;
@@ -52,6 +63,9 @@ export class Fx {
     this.banners.length = 0;
     this.bolts.length = 0;
     this.rings.length = 0;
+    this.tracers.length = 0;
+    this.heroFlash = 0;
+    this.vignette = 0;
     this.shake = 0;
     this.hitStop = 0;
   }
@@ -65,6 +79,11 @@ export class Fx {
         life: rnd(life * 0.6, life), max: life, color: colors[i % colors.length], size, g,
       });
     }
+  }
+
+  /** Newly staggered enemy: small star burst. */
+  stagger(x: number, y: number): void {
+    this.burst(x, y, [P.Y, P['5']], 6, 35, 0.4, 0, 2);
   }
 
   private floater(x: number, y: number, text: string, color: string): void {
@@ -89,15 +108,46 @@ export class Fx {
 
   consume(events: FxEvent[]): void {
     for (const e of events) {
-      if ((e as { t: string }).t === 'boardClear') {
-        const c = e as unknown as { x: number; y: number };
-        this.banner('CLEAR!', P.Y, 3, 1.3);
-        this.rings.push({ x: c.x, y: c.y, r: 40, life: 0.5, max: 0.5 });
-        this.rings.push({ x: c.x, y: c.y, r: 70, life: 0.7, max: 0.7 });
-        this.burst(c.x, c.y, [P.Y, P['5'], P.E, P.c], 24, 90, 0.7, 20, 2);
-        continue;
-      }
       switch (e.t) {
+        case 'boardClear':
+          this.banner('WAVE CLEAR', P.Y, 3, 1.3);
+          this.rings.push({ x: e.x, y: e.y, r: 40, life: 0.5, max: 0.5 });
+          this.rings.push({ x: e.x, y: e.y, r: 70, life: 0.7, max: 0.7 });
+          this.burst(e.x, e.y, [P.Y, P['5'], P.E, P.c], 24, 90, 0.7, 20, 2);
+          break;
+        case 'waveStart':
+          if (e.overtime) {
+            if (e.wave === OVERTIME_FIRST) this.banner('OVERTIME!', P.o, 3, 1.5);
+            else this.banner(`OVERTIME +${e.wave - OVERTIME_FIRST + 1}`, P.o, 2, 1.0);
+          }
+          break;
+        case 'heroHit': {
+          this.heroFlash = this.flashEnabled ? 0.3 : 0.15;
+          this.floater(e.x, e.y - 12, `-${fmt(e.dmg)}`, P.R);
+          this.burst(e.x, e.y, [P.R, P.p, P['5']], e.how === 'blast' ? 10 : 6, 60, 0.35, 80, 2);
+          this.addShake(e.how === 'charge' ? 1.6 : 1);
+          if (e.how === 'charge') this.stop(4);
+          break;
+        }
+        case 'heroHeal':
+          if (e.amount > 0) this.floater(e.x, e.y - 12, `+${fmt(e.amount)}`, P.E);
+          break;
+        case 'blocked':
+          this.burst(e.x, e.y, [P['5'], P.Y, P.S], 6, 55, 0.22, 0);
+          break;
+        case 'tracer':
+          this.tracers.push({ x0: e.x0, y0: e.y0, x1: e.x1, y1: e.y1, life: 0.15 });
+          break;
+        case 'enrage':
+          this.vignette = this.flashEnabled ? 0.7 : 0.9;
+          this.banner(`RAGE +${e.level}`, P.R, 2, 0.9);
+          break;
+        case 'jam':
+          this.burst(e.x, e.y, [P['4'], P['3']], 5, 30, 0.3, 0);
+          break;
+        case 'runOver':
+          this.banner('YOU FELL', P.R, 3, 0.8);
+          break;
         case 'kill':
           this.burst(e.x, e.y, KIND_COLORS[e.targetKind] ?? [P.R], e.targetKind === 'boss' ? 30 : 10, 70, 0.55, 140, 2);
           if (e.cash > 0) this.floater(e.x, e.y, `+${fmt(e.cash)}`, P.Y);
@@ -161,12 +211,6 @@ export class Fx {
         case 'spit':
           this.burst(e.x, e.y, [P.c, P.B, P['5']], 4, 40, 0.25, 0);
           break;
-        case 'energy': {
-          const a = Math.round(e.amount * 10) / 10;
-          if (a === 0) break;
-          this.floater(e.x, e.y, `${a > 0 ? '+' : ''}${fmt(a)}`, a > 0 ? P.c : P.B);
-          break;
-        }
         case 'combo':
           this.banner(`${e.name.toUpperCase()} x${e.mult}`, P.Y, 2, 1.1);
           break;
@@ -202,7 +246,7 @@ export class Fx {
           break;
         case 'shimmer':
         case 'ballClack':
-        case 'runOver':
+        case 'launch':
           break;
       }
     }
@@ -226,6 +270,10 @@ export class Fx {
     this.banners = this.banners.filter((b) => b.life > 0);
     for (const b of this.bolts) b.life -= dt;
     this.bolts = this.bolts.filter((b) => b.life > 0);
+    for (const t of this.tracers) t.life -= dt;
+    this.tracers = this.tracers.filter((t) => t.life > 0);
+    this.heroFlash = Math.max(0, this.heroFlash - dt);
+    this.vignette = Math.max(0, this.vignette - dt);
     for (const r of this.rings) r.life -= dt;
     this.rings = this.rings.filter((r) => r.life > 0);
     this.shake = Math.max(0, this.shake - 8 * dt);
@@ -258,6 +306,17 @@ export class Fx {
       ctx.fillRect(Math.round(p.x), Math.round(p.y), p.size, p.size);
     }
     ctx.globalAlpha = 1;
+    for (const t of this.tracers) {
+      const k = 1 - t.life / 0.15;
+      ctx.globalAlpha = 1 - k * 0.5;
+      ctx.fillStyle = P.Y;
+      pxLine(ctx, { x: t.x0, y: t.y0 }, { x: t.x1, y: t.y1 });
+      ctx.fillStyle = P['5'];
+      const hx = Math.round(t.x0 + (t.x1 - t.x0) * Math.min(1, k * 1.6));
+      const hy = Math.round(t.y0 + (t.y1 - t.y0) * Math.min(1, k * 1.6));
+      ctx.fillRect(hx - 1, hy - 1, 3, 3);
+      ctx.globalAlpha = 1;
+    }
     for (const b of this.bolts) {
       const flick = !this.flashEnabled || Math.floor(this.clock * 40) % 2 === 0;
       ctx.fillStyle = flick ? P.Y : P['5'];
@@ -267,6 +326,20 @@ export class Fx {
 
   /** Text layers drawn above everything. */
   drawOverlay(ctx: CanvasRenderingContext2D): void {
+    if (this.vignette > 0) {
+      const k = this.vignette / (this.flashEnabled ? 0.7 : 0.9);
+      ctx.fillStyle = P.R;
+      const pulse = this.flashEnabled ? 0.5 + 0.5 * Math.sin(this.vignette * 20) : 1;
+      for (let i = 0; i < 4; i++) {
+        ctx.globalAlpha = Math.max(0, k * (0.4 - i * 0.09) * (0.6 + 0.4 * pulse));
+        const o = i * 3;
+        ctx.fillRect(0, o, 180, 3);
+        ctx.fillRect(0, 320 - o - 3, 180, 3);
+        ctx.fillRect(o, 0, 3, 320);
+        ctx.fillRect(180 - o - 3, 0, 3, 320);
+      }
+      ctx.globalAlpha = 1;
+    }
     for (const f of this.floaters) {
       ctx.globalAlpha = Math.min(1, f.life / (f.max * 0.4));
       drawText(ctx, f.text, f.x, f.y, { color: f.color, shadow: P['0'], align: 'center' });

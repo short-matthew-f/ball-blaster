@@ -8,7 +8,7 @@ export interface SummaryInfo {
   result: RunResult;
   bossEmeralds: number;
   unlocked: StageId | null;
-  /** Best fill for this stage before this run was banked (the ghost line). */
+  /** Best wave reached on this stage before this run was banked (the ghost marker). */
   prevBest: number;
 }
 
@@ -37,4 +37,12 @@ export interface Screen {
   move(x: number, y: number): void;
   up(x: number, y: number): void;
   cancel?(): void;
+}
+
+/** FAST ENEMIES setting (default ON). save.settings.fastEnemies is not in SaveData yet, so read/write it loosely. */
+export function fastEnemiesOn(save: SaveData): boolean {
+  return (save.settings as unknown as { fastEnemies?: boolean }).fastEnemies ?? true;
+}
+export function setFastEnemies(save: SaveData, v: boolean): void {
+  (save.settings as unknown as { fastEnemies?: boolean }).fastEnemies = v;
 }

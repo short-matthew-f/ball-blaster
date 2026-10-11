@@ -10,8 +10,8 @@ import type { Button } from './widgets';
 import type { App, Screen } from './app';
 
 const P = PALETTE;
-type Tab = 'power' | 'energy' | 'board' | 'combo' | 'emerald' | 'stage';
-const TABS: Tab[] = ['power', 'energy', 'board', 'combo', 'emerald', 'stage'];
+type Tab = 'power' | 'vitality' | 'tactics' | 'combo' | 'emerald' | 'stage';
+const TABS: Tab[] = ['power', 'vitality', 'tactics', 'combo', 'emerald', 'stage'];
 const BALLS: BallType[] = ['standard', 'heavy', 'light', 'sticky'];
 const BALL_SPRITE: Record<BallType, string> = { standard: 'ball_main', heavy: 'ball_heavy', light: 'ball_light', sticky: 'ball_sticky' };
 
@@ -141,9 +141,12 @@ export class ShopScreen implements Screen {
     drawText(ctx, stage.name.toUpperCase(), 90, 21, { align: 'center', color: P['4'], shadow: P['0'] });
 
     // tabs
-    TABS.forEach((t, i) => {
+    let tx = 2;
+    TABS.forEach((t) => {
       const open = this.tabOpen(t);
-      btns.push({ id: `tab:${t}`, x: i * 30, y: 32, w: 29, h: 16, ...(!open ? { icon: 'icon_lock' } : t === 'emerald' ? { icon: 'emerald' } : { label: t.toUpperCase() }), style: 'gray', active: t === this.tab, disabled: !open });
+      const w = !open || t === 'emerald' ? 20 : textWidth(t.toUpperCase()) + 8;
+      btns.push({ id: `tab:${t}`, x: tx, y: 32, w, h: 16, ...(!open ? { icon: 'icon_lock' } : t === 'emerald' ? { icon: 'emerald' } : { label: t.toUpperCase() }), style: 'gray', active: t === this.tab, disabled: !open, hitPad: 1 });
+      tx += w + 2;
     });
 
     // ball selector

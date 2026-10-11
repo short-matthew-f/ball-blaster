@@ -33,21 +33,21 @@ export class TitleScreen implements Screen {
     this.vy += 140 * dt;
     this.bx += this.vx * dt;
     this.by += this.vy * dt;
-    if (this.bx < 16) { this.bx = 16; this.vx = Math.abs(this.vx); }
-    if (this.bx > 164) { this.bx = 164; this.vx = -Math.abs(this.vx); }
+    if (this.bx < 14) { this.bx = 14; this.vx = Math.abs(this.vx); }
+    if (this.bx > 166) { this.bx = 166; this.vx = -Math.abs(this.vx); }
     if (this.by > 250) { this.by = 250; this.vy = -Math.abs(this.vy) * 0.98 - 4; }
     if (this.by > 250 - 1 && Math.abs(this.vy) < 60) this.vy = -150;
     this.decor.forEach((d, i) => {
       this.flash[i] = Math.max(0, this.flash[i] - dt);
-      if (Math.hypot(this.bx - d.x, this.by - d.y) < 12) {
+      if (Math.hypot(this.bx - d.x, this.by - d.y) < 18) {
         this.flash[i] = 0.12;
         const dx = this.bx - d.x, dy = this.by - d.y;
         const l = Math.hypot(dx, dy) || 1;
         this.vx = (dx / l) * 70 + this.vx * 0.2;
         this.vy = Math.max(60, (dy / l) * 90);
         this.vy = dy < 0 ? -Math.abs(this.vy) : this.vy;
-        this.bx = d.x + (dx / l) * 12;
-        this.by = d.y + (dy / l) * 12;
+        this.bx = d.x + (dx / l) * 18;
+        this.by = d.y + (dy / l) * 18;
       }
     });
     this.last += dt;
@@ -66,7 +66,7 @@ export class TitleScreen implements Screen {
     drawText(ctx, 'A BILLIARDS ROGUELITE', 90, 112, { align: 'center', color: P.Y, shadow: P['0'] });
 
     this.decor.forEach((d, i) => drawSprite(ctx, d.kind, d.x, d.y, this.flash[i] > 0 ? { tint: '#ffffff' } : {}));
-    drawSprite(ctx, 'ball_main', Math.round(this.bx), Math.round(this.by), { scale: 2 });
+    drawSprite(ctx, 'hero', Math.round(this.bx), Math.round(this.by));
 
     const pulse = Math.floor(now * 2) % 2;
     this.buttons.set([

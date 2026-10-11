@@ -1,6 +1,6 @@
 import type { BallType, SaveData, StageId } from '../core/types';
 
-export const SAVE_KEY = 'ballblaster.save.v1';
+export const SAVE_KEY = 'ballblaster.save.v2';
 
 export function newSave(): SaveData {
   return {
@@ -10,7 +10,7 @@ export function newSave(): SaveData {
     levels: {},
     unlocked: 0,
     current: 'felt',
-    bestFill: {},
+    bestWave: {},
     bossKills: {},
     ballType: 'standard',
     settings: { sound: true, shake: true, flash: !prefersReducedMotion() },
@@ -52,7 +52,7 @@ export function sanitize(raw: unknown): SaveData | null {
     levels: numMap(r.levels),
     unlocked,
     current,
-    bestFill: numMap(r.bestFill) as SaveData['bestFill'],
+    bestWave: numMap(r.bestWave) as SaveData['bestWave'],
     bossKills: numMap(r.bossKills) as SaveData['bossKills'],
     ballType: BALLS.includes(r.ballType as BallType) ? (r.ballType as BallType) : 'standard',
     settings: {

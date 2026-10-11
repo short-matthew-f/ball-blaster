@@ -3,6 +3,11 @@
 import { CURVE_CAP, TABLE, type Ball, type BallKind, type FxEvent, type RunState, type Target, type TargetKind, type Vec } from '../core/types';
 import {
   BLAST_ENEMY_DMG,
+  GHOST_SECONDS,
+  CASCADE_R,
+  SHATTER_DMG,
+  SHATTER_R,
+  SHATTER_SPEED,
   BLAST_ENEMY_R,
   BLAST_HERO_DMG,
   BLAST_HERO_R,
@@ -30,12 +35,55 @@ export function isOvertime(s: RunState): boolean {
   return s.wave > WAVES_PER_STAGE + 1;
 }
 
-/** A contact hit on an enemy (any ball, bump, lightning, blast): +stagger, counts in the chain, then damage. */
-export function hitEnemy(s: RunState, t: Target, dmg: number, src: DamageSource, fx: FxEvent[], killer?: Ball, stagger = 1): void {
+/**
+ * A contact hit on an enemy (any ball, bump, lightning, blast): +stagger, counts in the chain, then damage.
+ * Frozen enemies ignore soft hits; an impact >= SHATTER_SPEED (or any blast) shatters them; lightning thaws.
+ */
+export function hitEnemy(s: RunState, t: Target, dmg: number, src: DamageSource, fx: FxEvent[], killer?: Ball, stagger = 1, speed = 0): void {
   if (t.dead) return;
+  if ((t.frozen ?? 0) > 0) {
+    if (src === 'explosion' || speed >= SHATTER_SPEED) {
+      countHit(s, src);
+      shatter(s, t, src, fx, killer);
+    } else if (src === 'lightning') {
+      t.frozen = 0;
+      t.flash = 0.12;
+      fx.push({ t: 'thaw', x: t.x, y: t.y });
+    } else {
+      t.flash = 0.12;
+      if (isBallSource(src)) fx.push({ t: 'hit', x: t.x, y: t.y, targetKind: t.kind, ballKind: src, dmg: 0, killed: false });
+    }
+    return;
+  }
   t.stagger += stagger;
-  if (s.phase === 'resolve') s.combo.hits++;
+  countHit(s, src);
   applyDamage(s, t, dmg, src, fx, killer);
+}
+
+function countHit(s: RunState, src: DamageSource): void {
+  if (s.phase !== 'resolve') return;
+  s.combo.hits++;
+  if (src === 'bump') s.combo.bumps = (s.combo.bumps ?? 0) + 1;
+  else if (isBallSource(src)) s.combo.direct = (s.combo.direct ?? 0) + 1;
+}
+
+/** A frozen enemy breaks: full kill rewards for `src`, then SHATTER_DMG as a blast to neighbours. */
+export function shatter(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], killer?: Ball): void {
+  if (t.dead) return;
+  fx.push({ t: 'shatter', x: t.x, y: t.y, r: SHATTER_R });
+  if (isBallSource(src)) fx.push({ t: 'hit', x: t.x, y: t.y, targetKind: t.kind, ballKind: src, dmg: t.hp, killed: true });
+  t.frozen = 0;
+  kill(s, t, src, fx, killer);
+  for (const o of s.targets.slice()) {
+    if (o.dead || o === t) continue;
+    if (Math.hypot(o.x - t.x, o.y - t.y) <= SHATTER_R + t.r + o.r) hitEnemy(s, o, SHATTER_DMG, 'explosion', fx);
+  }
+}
+
+/** Boss cadre shield: the boss takes no damage while any cadre lives. */
+export function updateBossShield(s: RunState): void {
+  const boss = s.targets.find((t) => t.kind === 'boss' && !t.dead);
+  if (boss) boss.shielded = s.targets.some((t) => t.kind === 'cadre' && !t.dead);
 }
 
 /** Every point of enemy damage goes through here: shield -> hp -> boss phase -> death. */
@@ -72,9 +120,13 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
   if (t.dead) return;
   t.dead = true;
   t.hp = 0;
-  t.vx = 0;
-  t.vy = 0;
   t.chargeDmg = 0;
+  if (s.phase === 'resolve' && !quiet && !t.resting) {
+    t.ghost = GHOST_SECONDS; // keeps its momentum: the cascade survives the kill
+  } else {
+    t.vx = 0;
+    t.vy = 0;
+  }
   const def = TARGET_DEFS[t.kind];
   if (!quiet) {
     const st = stageById(s.stage);
@@ -83,6 +135,13 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
     s.cash += cash;
     s.combo.cash = (s.combo.cash ?? 0) + cash;
     fx.push({ t: 'kill', x: t.x, y: t.y, targetKind: t.kind, cash });
+    if (src === 'main' && killer && killer.banked && s.phase === 'resolve') s.combo.bankCash = (s.combo.bankCash ?? 0) + cash;
+    if (s.stats.healOnKill > 0) heal(s, s.stats.healOnKill, t.x, t.y, fx);
+    // Cascade: a kill caused by an enemy bumping another staggers everything within CASCADE_R.
+    if (src === 'bump' && s.stats.comboCascade > 0) {
+      fx.push({ t: 'combo', name: 'CASCADE', mult: 1, x: t.x, y: t.y });
+      for (const o of s.targets) if (!o.dead && o !== t && Math.hypot(o.x - t.x, o.y - t.y) <= CASCADE_R + o.r) o.stagger++;
+    }
     if (t.kind === 'boss') {
       s.bossKilled = true;
       s.wavePending = true; // Overtime starts next enemy phase
@@ -100,6 +159,8 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
       fx.push({ t: 'emerald', x: t.x, y: t.y, amount: 1 });
     }
   }
+  if (!t.summon && t.kind !== 'boss' && (s.waveKillShot ?? -1) < 0) s.waveKillShot = s.shots;
+  if (t.kind === 'cadre') updateBossShield(s);
   if (def.splitsInto) {
     const { kind, count } = def.splitsInto;
     const cr = TARGET_DEFS[kind].r;

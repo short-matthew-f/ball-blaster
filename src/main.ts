@@ -44,12 +44,12 @@ const app: App = {
   startRun() {
     const stats = meta.buildStats(save);
     const seed = Date.now() & 0x7fffffff;
-    const state = sim.createRun(save.current, stats, seed, save.bestFill[save.current] ?? 0);
+    const state = sim.createRun(save.current, stats, seed, save.bestWave[save.current] ?? 0);
     runScreen.start(state);
     app.go('run');
   },
   finishRun(result: RunResult) {
-    const prevBest = save.bestFill[result.stage] ?? 0;
+    const prevBest = save.bestWave[result.stage] ?? 0;
     const banked = meta.bankRun(save, result);
     meta.writeSave(save);
     summary = { result, bossEmeralds: banked.bossEmeralds, unlocked: banked.unlocked, prevBest };

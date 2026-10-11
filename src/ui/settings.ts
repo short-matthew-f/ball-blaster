@@ -2,6 +2,7 @@ import { PALETTE } from '../render/palette';
 import { getMenuBg } from '../render/renderer';
 import { drawText } from '../render/text';
 import { Buttons } from './widgets';
+import { fastEnemiesOn, setFastEnemies } from './app';
 import type { App, Screen } from './app';
 
 const P = PALETTE;
@@ -67,10 +68,11 @@ export class SettingsScreen implements Screen {
     drawText(ctx, 'SETTINGS', 90, 16, { align: 'center', scale: 3, color: P['5'], shadow: P['0'], shadowOff: 2 });
     const confirming = this.confirming;
     this.buttons.set([
-      { id: 'sound', x: 20, y: 56, w: 140, h: 22, label: `SOUND: ${set.sound ? 'ON' : 'OFF'}`, scale: 1, style: set.sound ? 'green' : 'gray' },
-      { id: 'shake', x: 20, y: 86, w: 140, h: 22, label: `SHAKE: ${set.shake ? 'ON' : 'OFF'}`, style: set.shake ? 'green' : 'gray' },
-      { id: 'flash', x: 20, y: 116, w: 140, h: 22, label: `FLASH: ${set.flash ? 'ON' : 'OFF'}`, style: set.flash ? 'green' : 'gray' },
-      { id: 'export', x: 20, y: 156, w: 140, h: 22, label: 'EXPORT SAVE', style: 'blue' },
+      { id: 'sound', x: 20, y: 46, w: 140, h: 22, label: `SOUND: ${set.sound ? 'ON' : 'OFF'}`, scale: 1, style: set.sound ? 'green' : 'gray' },
+      { id: 'shake', x: 20, y: 72, w: 140, h: 22, label: `SHAKE: ${set.shake ? 'ON' : 'OFF'}`, style: set.shake ? 'green' : 'gray' },
+      { id: 'flash', x: 20, y: 98, w: 140, h: 22, label: `FLASH: ${set.flash ? 'ON' : 'OFF'}`, style: set.flash ? 'green' : 'gray' },
+      { id: 'fast', x: 20, y: 124, w: 140, h: 22, label: `FAST ENEMIES: ${fastEnemiesOn(this.app.save) ? 'ON' : 'OFF'}`, style: fastEnemiesOn(this.app.save) ? 'green' : 'gray' },
+      { id: 'export', x: 20, y: 160, w: 140, h: 22, label: 'EXPORT SAVE', style: 'blue' },
       { id: 'import', x: 20, y: 186, w: 140, h: 22, label: 'IMPORT SAVE', style: 'blue' },
       ...(confirming
         ? [
@@ -103,6 +105,9 @@ export class SettingsScreen implements Screen {
       app.persist();
     } else if (id === 'flash') {
       set.flash = !set.flash;
+      app.persist();
+    } else if (id === 'fast') {
+      setFastEnemies(app.save, !fastEnemiesOn(app.save));
       app.persist();
     } else if (id === 'export') {
       const code = app.meta.exportSave(app.save);

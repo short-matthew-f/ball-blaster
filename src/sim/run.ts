@@ -28,7 +28,7 @@ export function mainBall(s: RunState): Ball {
   return hero(s);
 }
 
-export function createRun(stage: StageId, stats: RunStats, seed: number, _bestFill?: number): RunState {
+export function createRun(stage: StageId, stats: RunStats, seed: number, _bestWave?: number): RunState {
   const st = stageById(stage);
   const bt = BALL_TYPES[stats.ballType];
   const s: RunState = {
@@ -66,6 +66,7 @@ export function createRun(stage: StageId, stats: RunStats, seed: number, _bestFi
     lastHit: {},
     touching: {},
     jams: 0,
+    waveKillShot: -1,
     nextId: 1,
     pendingFx: [],
   };
@@ -77,7 +78,7 @@ export function createRun(stage: StageId, stats: RunStats, seed: number, _bestFi
     vx: 0,
     vy: 0,
     r: bt.r,
-    mass: bt.mass,
+    mass: bt.mass * (stats.massMult > 0 ? stats.massMult : 1),
     life: Infinity,
     resting: true,
     banked: false,
@@ -252,14 +253,15 @@ export function jamRule(s: RunState, fx: FxEvent[]): boolean {
 }
 
 function buildResult(s: RunState): RunResult {
-  const meterFill = s.bossKilled ? 1 : Math.max(0, Math.min(1, (s.wave - 1) / (WAVES_PER_STAGE + 1)));
+  const stageWaves = WAVES_PER_STAGE + 1;
   return {
     stage: s.stage,
     cash: s.cash,
     emeralds: s.emeralds,
     kills: s.kills,
-    meterFill,
-    wave: s.wave,
+    wave: Math.min(s.wave, stageWaves),
+    wavesCleared: s.bossKilled ? stageWaves : Math.min(s.wave - 1, WAVES_PER_STAGE),
+    overtimeWaves: s.bossKilled ? Math.max(0, s.wave - stageWaves) : 0,
     bossKilled: s.bossKilled,
     shots: s.shots,
     bestCombo: s.bestCombo,

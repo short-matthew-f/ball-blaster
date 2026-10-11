@@ -2,7 +2,7 @@
 import type { FxEvent, TargetKind } from '../core/types';
 
 const HIT_PITCH: Record<TargetKind, number> = {
-  grunt: 520, skirmisher: 760, bouncer: 700, bomber: 330, broodmother: 400, grub: 820, thornback: 900, brute: 260, cleric: 600, hive: 360, boss: 170,
+  grunt: 520, skirmisher: 760, bouncer: 700, bomber: 330, broodmother: 400, grub: 820, thornback: 900, brute: 260, cleric: 600, hive: 360, boss: 170, frost: 800, cadre: 600,
 };
 
 type Wave = OscillatorType;
@@ -81,6 +81,14 @@ export class Sfx {
     this.noise(0.08, 0.08, 'highpass', 2500);
   }
 
+  /** An enemy became staggered (dizzy blip). */
+  stagger(): void {
+    if (!this.gate('stagger')) return;
+    this.tone(880, 0.05, 'square', 0.1, 1200);
+    this.tone(1200, 0.05, 'square', 0.1, 800, 0.06);
+    this.tone(880, 0.06, 'square', 0.08, 1100, 0.12);
+  }
+
   ui(): void {
     if (!this.gate('ui')) return;
     this.tone(660, 0.05, 'square', 0.12, 880);
@@ -94,13 +102,43 @@ export class Sfx {
 
   handle(events: FxEvent[]): void {
     for (const e of events) {
-      if ((e as { t: string }).t === 'boardClear') {
-        if (!this.gate('clear')) continue;
-        [659, 784, 988, 1319].forEach((f, i) => this.tone(f, i === 3 ? 0.4 : 0.1, 'triangle', 0.18, 0, i * 0.07));
-        this.tone(1976, 0.5, 'sine', 0.06, 0, 0.25);
-        continue;
-      }
       switch (e.t) {
+        case 'boardClear':
+          if (!this.gate('clear')) break;
+          [659, 784, 988, 1319].forEach((f, i) => this.tone(f, i === 3 ? 0.4 : 0.1, 'triangle', 0.18, 0, i * 0.07));
+          this.tone(1976, 0.5, 'sine', 0.06, 0, 0.25);
+          break;
+        case 'heroHit':
+          if (!this.gate('hurt')) break;
+          this.tone(95, 0.22, 'sine', 0.5, 45);
+          this.noise(0.1, 0.2, 'lowpass', 400);
+          break;
+        case 'heroHeal':
+          if (e.amount <= 0 || !this.gate('refill')) break;
+          this.tone(880, 0.25, 'sine', 0.12);
+          this.tone(1320, 0.3, 'sine', 0.08, 0, 0.05);
+          break;
+        case 'launch':
+          if (!this.gate('launch')) break;
+          this.noise(0.18, 0.12, 'bandpass', 900);
+          this.tone(260, 0.16, 'triangle', 0.1, 520);
+          break;
+        case 'blocked':
+          if (!this.gate('block')) break;
+          this.tone(1250, 0.09, 'square', 0.12, 900);
+          this.tone(1870, 0.06, 'square', 0.07, 1500, 0.01);
+          this.noise(0.04, 0.1, 'highpass', 3500);
+          break;
+        case 'tracer':
+          if (!this.gate('tracer')) break;
+          this.tone(1800, 0.12, 'sawtooth', 0.08, 500);
+          break;
+        case 'enrage':
+          if (!this.gate('enrage')) break;
+          this.tone(70, 0.18, 'sine', 0.45, 45);
+          this.tone(70, 0.18, 'sine', 0.45, 45, 0.22);
+          this.noise(0.15, 0.15, 'lowpass', 300);
+          break;
         case 'hit':
           if (e.killed) break;
           if (e.dmg <= 0) {
@@ -174,11 +212,6 @@ export class Sfx {
           [392, 523, 659, 784, 1047].forEach((f, i) => this.tone(f, i === 4 ? 0.6 : 0.14, 'square', 0.16, 0, i * 0.11));
           this.noise(0.5, 0.25, 'lowpass', 1500);
           break;
-        case 'energy':
-          if (e.amount <= 0 || !this.gate('refill')) break;
-          this.tone(880, 0.25, 'sine', 0.12);
-          this.tone(1320, 0.3, 'sine', 0.08, 0, 0.05);
-          break;
         case 'emerald':
           if (!this.gate('emerald')) break;
           this.tone(1200, 0.15, 'sine', 0.14);
@@ -231,7 +264,8 @@ export class Sfx {
           break;
         case 'runOver':
           if (!this.gate('over')) break;
-          [330, 262, 196].forEach((f, i) => this.tone(f, 0.25, 'triangle', 0.2, f * 0.9, i * 0.2));
+          [392, 330, 262, 196, 147].forEach((f, i) => this.tone(f, 0.3, 'triangle', 0.22, f * 0.85, i * 0.16));
+          this.noise(0.5, 0.12, 'lowpass', 250, 0.3);
           break;
         case 'shoot': // played locally on a successful shoot() call
         case 'shimmer':
