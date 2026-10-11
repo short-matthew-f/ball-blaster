@@ -11,6 +11,10 @@ import { TitleScreen } from './ui/title';
 import { SummaryScreen } from './ui/summary';
 import { ShopScreen } from './ui/shop';
 import { SettingsScreen } from './ui/settings';
+import { applyUpdate, registerServiceWorker, updateReady } from './update';
+import { drawText } from './render/text';
+import { drawPanel, inRect } from './ui/widgets';
+import { PALETTE as P } from './render/palette';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d', { alpha: false })!;
@@ -85,9 +89,49 @@ window.addEventListener('orientationchange', fit);
 window.visualViewport?.addEventListener('resize', fit);
 fit();
 
+// ---- update pill: shown between runs (title, summary) when a new deploy is waiting ----
+const PILL_Y: Partial<Record<ScreenId, number>> = { title: 218, summary: 200 };
+const pillRect = (): { x: number; y: number; w: number; h: number } | null => {
+  const y = PILL_Y[current];
+  return updateReady() && y !== undefined ? { x: 16, y, w: 148, h: 20 } : null;
+};
+let pillDown = false;
+const inputRouter: Screen = {
+  draw: () => {},
+  down(x, y) {
+    const r = pillRect();
+    pillDown = !!r && inRect(x, y, r.x - 3, r.y - 3, r.w + 6, r.h + 6);
+    if (!pillDown) screens[current].down(x, y);
+  },
+  move(x, y) {
+    if (!pillDown) screens[current].move(x, y);
+  },
+  up(x, y) {
+    if (pillDown) {
+      pillDown = false;
+      const r = pillRect();
+      if (r && inRect(x, y, r.x - 3, r.y - 3, r.w + 6, r.h + 6)) applyUpdate();
+      return;
+    }
+    screens[current].up(x, y);
+  },
+  cancel() {
+    pillDown = false;
+    screens[current].cancel?.();
+  },
+};
+function drawUpdatePill(now: number): void {
+  const r = pillRect();
+  if (!r) return;
+  const pulse = Math.sin(now * 4) > 0;
+  drawPanel(ctx, r.x, r.y, r.w, r.h, pillDown ? P['2'] : P.b, pulse ? P.c : P.B);
+  drawText(ctx, 'UPDATE READY', r.x + r.w / 2, r.y + 4, { align: 'center', color: P['5'], shadow: P['0'] });
+  drawText(ctx, 'TAP TO RESTART', r.x + r.w / 2, r.y + 12, { align: 'center', color: P.c, shadow: P['0'] });
+}
+
 attachInput(
   canvas,
-  () => screens[current],
+  () => inputRouter,
   () => sfx.unlock(),
 );
 
@@ -100,6 +144,7 @@ function frame(nowMs: number): void {
   scr.update?.(dt);
   ctx.imageSmoothingEnabled = false;
   scr.draw(ctx, nowMs / 1000);
+  drawUpdatePill(nowMs / 1000);
   requestAnimationFrame(frame);
 }
 screens.title.enter?.();
@@ -109,11 +154,7 @@ document.addEventListener('visibilitychange', () => {
   last = performance.now();
 });
 
-if (import.meta.env.PROD && 'serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => { /* offline support optional */ });
-  });
-}
+if (import.meta.env.PROD) registerServiceWorker();
 
 // Dev-only handle for playtesting from the console.
-if (import.meta.env.DEV) (window as unknown as { __bb: unknown }).__bb = { app, screens, sim };
+if (import.meta.env.DEV) (window as unknown as { __bb: unknown }).__bb = { app, screens, sim, forceUpdatePill: () => import('./update').then((m) => m.__forceReadyForDev()) };
