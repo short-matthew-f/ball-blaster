@@ -50,6 +50,8 @@ export function startEnemyPhase(s: RunState, fx: FxEvent[]): void {
   }
 
   const fresh = advanceWave(s, fx);
+  const rage = rageLevel(s);
+  if (rage > 0) fx.push({ t: 'enrage', level: rage });
   // Reflex: the first enemy phase of each wave is skipped.
   const reflex = s.stats.reflex > 0 && s.waveTurn === 0 && fresh.size === 0;
   s.enemyQueue = reflex ? [] : s.targets.filter((t) => !t.dead && !fresh.has(t.id)).map((t) => t.id);

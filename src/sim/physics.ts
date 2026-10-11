@@ -29,7 +29,7 @@ import {
   TARGET_DEFS,
   stageById,
 } from '../core/tuning';
-import { chainLightning, heal, heroDamage, hitEnemy } from './damage';
+import { addStagger, chainLightning, heal, heroDamage, hitEnemy } from './damage';
 
 export const MAX_BALL_SPEED = MAX_LAUNCH_SPEED * 1.5;
 const OBSTACLE_RESTITUTION = 0.8;
@@ -300,7 +300,7 @@ function hitObstacle(s: RunState, o: Obstacle, fx: FxEvent[]): void {
     s.combo.bumperHits++;
     fx.push({ t: 'bumper', x: o.x, y: o.y });
     for (const t of s.targets) {
-      if (!t.dead && Math.hypot(t.x - o.x, t.y - o.y) <= BUMPER_STAGGER_R + t.r) t.stagger++;
+      if (!t.dead && Math.hypot(t.x - o.x, t.y - o.y) <= BUMPER_STAGGER_R + t.r) addStagger(t, 1, fx);
     }
     return;
   }

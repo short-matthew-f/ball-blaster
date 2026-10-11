@@ -55,9 +55,17 @@ export function hitEnemy(s: RunState, t: Target, dmg: number, src: DamageSource,
     }
     return;
   }
-  t.stagger += stagger;
+  addStagger(t, stagger, fx);
   countHit(s, src);
   applyDamage(s, t, dmg, src, fx, killer);
+}
+
+/** Add stagger; emits { t: 'stagger' } when the enemy crosses its threshold. */
+export function addStagger(t: Target, n: number, fx: FxEvent[]): void {
+  const at = TARGET_DEFS[t.kind].staggerAt;
+  const before = t.stagger;
+  t.stagger += n;
+  if (before < at && t.stagger >= at) fx.push({ t: 'stagger', x: t.x, y: t.y });
 }
 
 function countHit(s: RunState, src: DamageSource): void {
@@ -140,7 +148,7 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
     // Cascade: a kill caused by an enemy bumping another staggers everything within CASCADE_R.
     if (src === 'bump' && s.stats.comboCascade > 0) {
       fx.push({ t: 'combo', name: 'CASCADE', mult: 1, x: t.x, y: t.y });
-      for (const o of s.targets) if (!o.dead && o !== t && Math.hypot(o.x - t.x, o.y - t.y) <= CASCADE_R + o.r) o.stagger++;
+      for (const o of s.targets) if (!o.dead && o !== t && Math.hypot(o.x - t.x, o.y - t.y) <= CASCADE_R + o.r) addStagger(o, 1, fx);
     }
     if (t.kind === 'boss') {
       s.bossKilled = true;

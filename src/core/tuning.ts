@@ -1,17 +1,17 @@
 // All balance numbers live here. Sim and meta both read from this file.
-import type { RunStats, StageDef, StageId, TargetDef, TargetKind, WaveDef } from './types';
+import type { Formation, RunStats, StageDef, StageId, TargetDef, TargetKind, WaveDef } from './types';
 
 // Roster (DESIGN-v0.2.md "Roster (Felt Hall)"). Masses are near-equal, pool-break style (step 2): hero 1 (x massMult),
 // grub 0.8, grunt/skirmisher/bomber 1.2, bouncer 1, cleric/frost 1.5, broodmother/thornback 2, hive 3, brute 4, boss 8.
 // reach = edge-to-edge gap (px) within which an Attack charges; beyond it, Attack executes as Advance.
 export const TARGET_DEFS: Record<TargetKind, TargetDef> = {
   grunt: {
-    hp: 3, r: 12, mass: 1.2, cash: 4, bounce: 1, staggerAt: 1, chargeSpeed: 260, reach: 110,
-    intents: [{ t: 'attack', n: 3, weight: 50 }, { t: 'advance', weight: 35 }, { t: 'rest', weight: 15 }],
+    hp: 3, r: 12, mass: 1.2, cash: 4, bounce: 1, staggerAt: 2, chargeSpeed: 260, reach: 110,
+    intents: [{ t: 'attack', n: 3, weight: 70 }, { t: 'advance', weight: 25 }, { t: 'rest', weight: 5 }],
   },
   skirmisher: {
     hp: 3, r: 12, mass: 1.2, cash: 5, bounce: 1, staggerAt: 1, chargeSpeed: 0, reach: 0,
-    intents: [{ t: 'shoot', n: 1, weight: 60 }, { t: 'advance', weight: 40 }], // advance = sideways reposition
+    intents: [{ t: 'shoot', n: 2, weight: 60 }, { t: 'advance', weight: 40 }], // advance = sideways reposition
   },
   bouncer: {
     hp: 4, r: 14, mass: 1.0, cash: 7, bounce: 1.3, staggerAt: 2, chargeSpeed: 300, reach: 140,
@@ -124,6 +124,9 @@ export const WAVE_CASH = 8; // x wave number
 export const ENRAGE_BASE = 8;
 export const ENRAGE_PER_WAVE = 2;
 export const OVERTIME_CASH_MULT = 2;
+/** Enemy HP scaling (step 3): x(1 + WAVE_HP_STEP) per stage wave after the first; +OVERTIME_HP_PER_WAVE x k in Overtime wave k. */
+export const WAVE_HP_STEP = 0.25;
+export const OVERTIME_HP_PER_WAVE = 2;
 export const ELITE_CASH_MULT = 2;
 /** Elite Swift: soft-roll distance (+25 %). Hardy: HP multiplier. */
 export const SWIFT_ADVANCE_DIST = 75;
@@ -134,7 +137,7 @@ export const BOSS_SLAM = 8;
 
 /** Base stats before any upgrade. meta/stats.ts clones this and applies nodes. */
 export const BASE_STATS: RunStats = {
-  maxHp: 20,
+  maxHp: 16,
   armor: 0,
   damage: 1,
   speedDamage: 0,
@@ -184,16 +187,24 @@ export const BALL_TYPES = {
 export const SPIT_LIFE_CAP = 3;
 export const EMERALD_REPEAT_DECAY = 0.68; // reward = max(1, round(base * decay^priorKills)); felt 5 -> 5,3,2,2,1...
 
+// Formation weights by wave (step 3): racks break for 3-4 hits; Scatter appears only in Overtime.
+const W1_FORM: Partial<Record<Formation, number>> = { rack: 1 };
+const W2_FORM: Partial<Record<Formation, number>> = { rack: 60, wall: 40 };
+const W3_FORM: Partial<Record<Formation, number>> = { rack: 30, wall: 30, pincer: 25, ring: 15 };
+const BOSS_FORM: Partial<Record<Formation, number>> = { pincer: 50, ring: 50 };
+/** Overtime waves reuse their wave's weights plus Scatter at this weight. */
+export const OVERTIME_SCATTER_WEIGHT = 20;
+
 const FELT_WAVES: WaveDef[] = [
-  { slots: ['grunt', 'grunt', 'skirmisher'], formations: ['rack', 'wall', 'pincer'] },
-  { slots: ['grunt', 'grunt', 'skirmisher', ['bouncer', 'thornback'], 'brute'], formations: ['rack', 'wall', 'pincer', 'ring'] },
-  { slots: ['grunt', 'skirmisher', 'bomber', ['broodmother', 'hive'], 'brute'], formations: ['rack', 'wall', 'pincer', 'ring', 'scatter'], elite: 4 },
+  { slots: ['grunt', 'grunt', 'skirmisher'], formations: ['rack'], formationWeights: W1_FORM },
+  { slots: ['grunt', 'grunt', 'skirmisher', ['bouncer', 'thornback'], 'brute'], formations: ['rack', 'wall'], formationWeights: W2_FORM },
+  { slots: ['grunt', 'skirmisher', 'bomber', ['broodmother', 'hive'], 'brute'], formations: ['rack', 'wall', 'pincer', 'ring'], formationWeights: W3_FORM, elite: 4 },
 ];
 
 const ICE_WAVES: WaveDef[] = [
-  { slots: ['grunt', 'grunt', 'frost', 'skirmisher'], formations: ['rack', 'wall', 'pincer'] },
-  { slots: ['grunt', 'frost', 'skirmisher', ['bouncer', 'thornback'], 'brute'], formations: ['rack', 'wall', 'pincer', 'ring'] },
-  { slots: ['grunt', 'frost', 'bomber', ['broodmother', 'thornback'], 'brute'], formations: ['rack', 'wall', 'pincer', 'ring', 'scatter'], elite: 4 },
+  { slots: ['grunt', 'grunt', 'frost', 'skirmisher'], formations: ['rack'], formationWeights: W1_FORM },
+  { slots: ['grunt', 'frost', 'skirmisher', ['bouncer', 'thornback'], 'brute'], formations: ['rack', 'wall'], formationWeights: W2_FORM },
+  { slots: ['grunt', 'frost', 'bomber', ['broodmother', 'thornback'], 'brute'], formations: ['rack', 'wall', 'pincer', 'ring'], formationWeights: W3_FORM, elite: 4 },
 ];
 
 export const STAGES: StageDef[] = [
@@ -205,11 +216,11 @@ export const STAGES: StageDef[] = [
     rollDecel: 70,
     wallBounce: 0.75,
     waves: FELT_WAVES,
-    bossWave: { slots: ['boss', 'grunt', 'cleric'], formations: ['rack'] },
+    bossWave: { slots: ['boss', 'grunt', 'cleric'], formations: ['pincer', 'ring'], formationWeights: BOSS_FORM },
     hpScale: 1,
-    cashScale: 1,
+    cashScale: 0.5,
     emeraldReward: 5,
-    boss: { name: 'Old Eight', hp: 40, r: 23, phases: [0.5], cadre: 0 },
+    boss: { name: 'Old Eight', hp: 60, r: 23, phases: [0.5], cadre: 0 },
   },
   {
     id: 'ice',
@@ -219,7 +230,7 @@ export const STAGES: StageDef[] = [
     rollDecel: 45,
     wallBounce: 0.92,
     waves: ICE_WAVES,
-    bossWave: { slots: ['boss', 'frost', 'grunt'], formations: ['rack'] },
+    bossWave: { slots: ['boss', 'frost', 'grunt'], formations: ['pincer', 'ring'], formationWeights: BOSS_FORM },
     hpScale: 1.5,
     cashScale: 2.2,
     emeraldReward: 6,

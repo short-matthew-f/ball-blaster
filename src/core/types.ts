@@ -56,6 +56,8 @@ export type Formation = 'rack' | 'wall' | 'pincer' | 'ring' | 'scatter';
 export interface WaveDef {
   slots: (TargetKind | TargetKind[])[];
   formations: Formation[];
+  /** Optional weights per formation (overrides a uniform pick from `formations`). */
+  formationWeights?: Partial<Record<Formation, number>>;
   /** Index into `slots` of the elite (from wave 3), or -1/absent for none. */
   elite?: number;
 }
@@ -392,6 +394,8 @@ export type FxEvent =
   | { t: 'blocked'; x: number; y: number }
   | { t: 'waveStart'; wave: number; overtime: boolean }
   | { t: 'enrage'; level: number }
+  /** An enemy just reached its stagger threshold (it will skip its intent). */
+  | { t: 'stagger'; x: number; y: number }
   /** Jam rule nudged the hero from (x0,y0) to (x,y) before aim. */
   | { t: 'jam'; x0: number; y0: number; x: number; y: number };
 

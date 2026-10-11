@@ -4,6 +4,9 @@ import {
   AREA_CAP,
   FORMATION_JITTER,
   HARDY_HP_MULT,
+  OVERTIME_HP_PER_WAVE,
+  OVERTIME_SCATTER_WEIGHT,
+  WAVE_HP_STEP,
   REGULAR_CAP,
   SPAWN_ZONE,
   TARGET_DEFS,
@@ -251,6 +254,13 @@ function waveFor(s: RunState): { def: WaveDef; bonus: number } {
   return { def: st.waves[(k - 1) % WAVES_PER_STAGE], bonus: k };
 }
 
+function pickFormation(s: RunState, def: WaveDef, overtime: boolean): Formation {
+  const w: Partial<Record<Formation, number>> = { ...(def.formationWeights ?? Object.fromEntries(def.formations.map((f) => [f, 1]))) };
+  if (overtime) w.scatter = (w.scatter ?? 0) + OVERTIME_SCATTER_WEIGHT;
+  const items = (Object.keys(w) as Formation[]).filter((f) => (w[f] ?? 0) > 0).map((f) => ({ f, weight: w[f] ?? 0 }));
+  return s.rng.pick(items).f;
+}
+
 const area = (k: TargetKind, s: RunState) => Math.PI * (k === 'boss' ? stageById(s.stage).boss.r : TARGET_DEFS[k].r) ** 2;
 
 /** Spawn wave `s.wave`. Returns the new enemies (they act from the next enemy phase). */
@@ -269,16 +279,16 @@ export function spawnWave(s: RunState, fx: FxEvent[]): Target[] {
   while ((total() > cap || kinds.length > REGULAR_CAP) && kinds.includes('grunt')) kinds.splice(kinds.lastIndexOf('grunt'), 1);
   while (kinds.length > REGULAR_CAP) kinds.pop();
 
-  const formation = def.formations[s.rng.int(0, def.formations.length - 1)];
+  const formation = pickFormation(s, def, bonus > 0);
   const slots = placeFormation(s, kinds, formation);
   const out: Target[] = [];
   let eliteDone = false;
   for (const m of slots) {
     const e = makeEnemy(s, m.kind, m.x, m.y, bonus);
-    if (bonus > 0) {
-      e.hp += bonus;
-      e.maxHp += bonus;
-    }
+    // HP scaling: +WAVE_HP_STEP per stage wave (not the boss), + OVERTIME_HP_PER_WAVE x k in Overtime wave k.
+    const waveIdx = Math.min(s.wave, WAVES_PER_STAGE) - 1;
+    const hp = e.kind === 'boss' ? e.hp : Math.round(e.hp * (1 + WAVE_HP_STEP * waveIdx)) + OVERTIME_HP_PER_WAVE * bonus;
+    e.hp = e.maxHp = hp;
     if (!eliteDone && eliteKind === m.kind) {
       eliteDone = true;
       const mods: EliteMod[] = ['spiky', 'hardy', 'swift'];

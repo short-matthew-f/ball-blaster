@@ -329,7 +329,9 @@ describe('step 2: frost, cadre, thorns, stats, combos', () => {
     put(s, 'grunt', 150, 60).intent = { t: 'rest' };
     enemyPhaseOnly(s);
     expect(g.frozen).toBeGreaterThan(0);
+    const calm = () => s.targets.forEach((t) => (t.intent = { t: 'rest' }));
     // Soft hit: no damage, no stagger.
+    calm();
     s.balls[0].x = 95;
     s.balls[0].y = 130;
     shoot(s, { x: 0, y: -15 }); // 25 % power = 120 px/s < shatter
@@ -338,6 +340,7 @@ describe('step 2: frost, cadre, thorns, stats, combos', () => {
     expect(g.dead).toBe(false);
     while (s.phase !== 'aim') step(s, SIM_DT);
     // Hard hit: shatter (kill + rewards).
+    calm();
     s.balls[0].x = 95;
     s.balls[0].y = 200;
     const cash = s.cash;
@@ -446,7 +449,7 @@ describe('step 2: frost, cadre, thorns, stats, combos', () => {
     const s2 = lab(90, 230);
     s2.stats.comboLockdown = 2;
     s2.hp = 10;
-    put(s2, 'grunt', 90, 170);
+    put(s2, 'skirmisher', 90, 170); // stagger threshold 1
     shoot(s2, { x: 0, y: -MAX_PULL });
     const fx2: FxEvent[] = [];
     while (s2.phase === 'resolve') fx2.push(...step(s2, SIM_DT));
@@ -466,5 +469,20 @@ describe('step 2: frost, cadre, thorns, stats, combos', () => {
       expect(s.phase).toBe('over');
       expect(Number.isFinite(s.hp)).toBe(true);
     }
+  });
+});
+
+describe('step 3: fx', () => {
+  it("emits { t: 'stagger' } when an enemy crosses its threshold, and { t: 'enrage' } when rage is active", () => {
+    const s = lab(90, 230);
+    put(s, 'skirmisher', 90, 170).intent = { t: 'rest' };
+    shoot(s, { x: 0, y: -MAX_PULL });
+    const fx: FxEvent[] = [];
+    while (s.phase === 'resolve') fx.push(...step(s, SIM_DT));
+    expect(fx.filter((f) => f.t === 'stagger').length).toBe(1);
+    const s2 = lab(90, 240);
+    put(s2, 'grunt', 30, 60).intent = { t: 'rest' };
+    s2.waveTurn = 20;
+    expect(enemyPhaseOnly(s2).some((f) => f.t === 'enrage')).toBe(true);
   });
 });

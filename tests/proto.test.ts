@@ -1,7 +1,8 @@
 // v0.2 build step 1: physics + sizes + formations + enemy charges, bot-measured.
 // Two bots (nearest enemy / largest cluster, always full power) x two stat lines (run 1 base, mid-game) x 30 seeds.
 import { describe, expect, it } from 'vitest';
-import { MAX_PULL, SIM_DT, TABLE, type RunState, type RunStats, type Target } from '../src/core/types';
+import { MAX_PULL, SIM_DT, TABLE, type RunResult, type RunState, type RunStats, type SaveData, type Target } from '../src/core/types';
+import { NODES, bankRun, buildStats, buy, buyState, newSave, nextCost } from '../src/meta/index';
 import { BASE_STATS } from '../src/core/tuning';
 import { createRun, shoot, step } from '../src/sim/index';
 import { maxOverlap } from '../src/sim/physics';
@@ -222,5 +223,70 @@ describe('v0.2 prototype bot (30 seeds per config)', () => {
       expect(mean(logs.flatMap((l) => l.enemySec)), c.name).toBeLessThan(2.5);
       expect(mean(logs.map((l) => l.jams)), c.name).toBeLessThan(0.3);
     }
+  });
+});
+
+// ---------- Progression bot: newSave -> buildStats -> play -> bankRun -> greedy cheapest buys ----------
+
+const PROG_RUNS = 25;
+const PROG_SEEDS = 8;
+
+function playForResult(seed: number, stats: RunStats): RunResult {
+  const s = createRun('felt', stats, seed);
+  while (s.phase === 'aim' && s.shots < 600) {
+    const h = s.balls[0];
+    const tg = pickTarget(s, 'cluster');
+    const d = Math.hypot(tg.x - h.x, tg.y - h.y) || 1;
+    shoot(s, { x: ((tg.x - h.x) / d) * MAX_PULL, y: ((tg.y - h.y) / d) * MAX_PULL });
+    while ((s.phase as string) === 'resolve' || (s.phase as string) === 'enemy') step(s, SIM_DT * 8);
+  }
+  expect(s.phase, `seed ${seed}: progression run hit the shot cap`).toBe('over');
+  return s.result!;
+}
+
+function greedyBuy(save: SaveData): void {
+  for (;;) {
+    const ok = NODES.filter((n) => buyState(save, n) === 'ok');
+    if (!ok.length) return;
+    ok.sort((a, b) => (nextCost(save, a) ?? 0) - (nextCost(save, b) ?? 0) || a.id.localeCompare(b.id));
+    buy(save, ok[0]);
+  }
+}
+
+describe('progression bot (greedy cheapest-node shopper, felt)', () => {
+  it('reports first boss reached / killed, run lengths and overtime', () => {
+    const firstReach: number[] = [];
+    const firstKill: number[] = [];
+    const secs: Record<number, number[]> = { 1: [], 5: [], 10: [], 20: [], 25: [] };
+    const otAt20: number[] = [];
+    const waveAt: Record<number, number[]> = { 1: [], 5: [], 10: [], 20: [] };
+    for (let k = 0; k < PROG_SEEDS; k++) {
+      const save = newSave();
+      let reach = 0;
+      let killed = 0;
+      for (let r = 1; r <= PROG_RUNS; r++) {
+        const res = playForResult(5000 + k * 100 + r, buildStats(save));
+        bankRun(save, res);
+        save.current = 'felt';
+        if (!reach && res.wave >= 4) reach = r;
+        if (!killed && res.bossKilled) killed = r;
+        if (secs[r]) secs[r].push(res.seconds);
+        if (waveAt[r]) waveAt[r].push(res.bossKilled ? 4 + res.overtimeWaves : res.wave);
+        if (r === 20) otAt20.push(res.overtimeWaves);
+        greedyBuy(save);
+      }
+      firstReach.push(reach || PROG_RUNS + 1);
+      firstKill.push(killed || PROG_RUNS + 1);
+    }
+    const med = (a: number[]) => pct(a, 0.5);
+    const table: Record<string, Record<string, string | number>> = {
+      'first boss reached (run)': { median: med(firstReach), min: Math.min(...firstReach), max: Math.max(...firstReach) },
+      'first boss kill (run)': { median: med(firstKill), min: Math.min(...firstKill), max: Math.max(...firstKill) },
+    };
+    for (const r of [1, 5, 10, 20, 25]) table[`r${r} seconds`] = { median: f1(med(secs[r])), min: f1(Math.min(...secs[r])), max: f1(Math.max(...secs[r])) };
+    for (const r of [1, 5, 10, 20]) table[`r${r} wave (5+ = overtime)`] = { median: med(waveAt[r]), min: Math.min(...waveAt[r]), max: Math.max(...waveAt[r]) };
+    table['r20 overtime waves'] = { median: med(otAt20), min: Math.min(...otAt20), max: Math.max(...otAt20) };
+    console.log(`Progression (${PROG_SEEDS} seeds x ${PROG_RUNS} runs; ${PROG_RUNS + 1} = never)`);
+    console.table(table);
   });
 });

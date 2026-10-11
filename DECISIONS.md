@@ -42,6 +42,15 @@ The v0.1 energy-era decisions (release/hit costs, drains, respawns, boss meter, 
 | Heals | Wave clear (waveHeal), shrine (shrineHeal), healOnKill, bossHeal (x maxHp at arrival) and Lockdown all use one diminishing curve, total <= 1x maxHp per run. |
 | Armor | Damage to the hero = attack - armor, min 1. rangedResist applies to Shoot first (min 1). |
 
+## Balance (step 3)
+
+| Gap | Decision | Why |
+|---|---|---|
+| Grunt stagger | Grunt staggerAt 2 (a hit plus a bump stops it; one hit does not). Skirmisher and grub stay at 1. | At 1, every hit (even a glancing bump) cancelled the nearest grunt's turn, so the front rank never attacked: run 1 took 16-17 shots at ~1.2 damage per enemy phase. |
+| Grunt / skirmisher | Grunt Attack 3, weights Attack 70 / Advance 25 / Rest 5. Skirmisher Shoot 2. Hero 16 HP (owner: fragile). Wave 1 = 2 grunts + skirmisher. | Run 1 lands at ~9 shots with ~2.1 damage per enemy phase. |
+| Formation weights | Wave 1 always Rack; wave 2 Rack 60 / Wall 40; wave 3 Rack 30 / Wall 30 / Pincer 25 / Ring 15; boss wave Pincer 50 / Ring 50; Scatter only in Overtime (wave weights + Scatter 20). | Racks break for 3-4 hits; walls and pincers give 1-2. Lifts hits/shot toward 2 without touching physics. |
+| Economy / HP scaling | Felt cashScale 0.5. Old Eight 60 HP. Regular enemy HP x(1 + 0.25 x (wave - 1)) within a stage; Overtime wave k adds +2 HP per enemy (doc: +1) and +k attack. | Progression bot: first boss reached run ~4, first kill run ~7 (was 3 / 4). |
+
 ## Scope
 
 - Felt and Ice stages; Clockwork and Bog deferred.
