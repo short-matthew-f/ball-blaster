@@ -10,10 +10,19 @@ import {
   type RunState,
   type Target,
 } from '../core/types';
-import { BALL_TYPES, SPIT_LIFE_CAP, STICKY_HOLD_SECONDS, STICKY_RELEASE_MULT, TARGET_DEFS, stageById } from '../core/tuning';
+import {
+  BALL_TYPES,
+  FROZEN_BOUNCE,
+  SHATTER_SPEED,
+  SPIT_LIFE_CAP,
+  STICKY_HOLD_SECONDS,
+  STICKY_RELEASE_MULT,
+  TARGET_DEFS,
+  stageById,
+} from '../core/tuning';
 import { refill, spend } from './energy';
 import { bossPhaseFx } from './boss';
-import { applyDamage, chainLightning } from './targets';
+import { applyDamage, chainLightning, shatter } from './targets';
 
 export const MAX_BALL_SPEED = MAX_LAUNCH_SPEED * 1.5;
 const BALL_RESTITUTION = 0.95;
@@ -65,11 +74,15 @@ function mainDamage(s: RunState, speed: number): number {
 
 function hitTarget(s: RunState, b: Ball, t: Target, speed: number, fx: FxEvent[]): void {
   const def = TARGET_DEFS[t.kind];
+  const frozen = (t.frozen ?? 0) > 0;
+  const shattering = frozen && speed >= SHATTER_SPEED;
   let dmg: number;
   if (b.kind === 'main') {
-    // A shielded boss takes no damage, so it only costs the flat hit cost (no drain, no drain-phase surcharge).
+    // A hit that deals no damage (shielded boss, warden shield, frozen below shatter speed) costs only the flat
+    // hit cost (no drain, no drain-phase surcharge). A shatter is a damaging hit and pays drain as usual.
+    const noDamage = (t.kind === 'boss' && t.shielded) || (t.shield ?? 0) > 0 || (frozen && !shattering);
     let cost = s.stats.hitCost;
-    if (!(t.kind === 'boss' && t.shielded)) {
+    if (!noDamage) {
       cost += def.drain;
       if (t.kind === 'boss' && bossPhaseFx(s).includes('drain')) cost += 1;
     }
@@ -80,7 +93,8 @@ function hitTarget(s: RunState, b: Ball, t: Target, speed: number, fx: FxEvent[]
   } else {
     dmg = s.stats.damage;
   }
-  applyDamage(s, t, dmg, b.kind, fx, b);
+  if (shattering) shatter(s, t, b.kind, fx, b);
+  else applyDamage(s, t, dmg, b.kind, fx, b);
   chainLightning(s, t, fx);
   if (b.kind === 'main') {
     if (s.stats.splitCount > 0 && !s.splitUsed) {
@@ -286,6 +300,7 @@ export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
       if (t.dead || t.shimmer > 0) continue;
       let e = TARGET_DEFS[t.kind].bounce;
       if (t.kind === 'boss' && bouncyBoss) e = 1.3;
+      if ((t.frozen ?? 0) > 0) e = FROZEN_BOUNCE;
       const sp = collideStatic(b, t.x, t.y, t.r, e);
       if (sp >= 0) hitTarget(s, b, t, sp, fx);
       if (b.stuck) break;

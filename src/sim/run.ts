@@ -21,6 +21,7 @@ import { Rng } from '../core/rng';
 import { physicsStep, spawnSpat, unstick } from './physics';
 import { emptyCombo, evaluateCombos } from './combos';
 import { bossEnemyPhase, spawnBoss } from './boss';
+import { activePhase } from './active';
 import { liveRegulars, poolKind, regularCap, spawnObstacle, spawnRegular } from './spawn';
 
 export function mainBall(s: RunState): Ball {
@@ -77,7 +78,7 @@ export function createRun(stage: StageId, stats: RunStats, seed: number, _bestFi
   });
 
   const n = regularCap(s);
-  for (let i = 0; i < n; i++) spawnRegular(s, st.openingBoard[i] ?? poolKind(s), false);
+  for (let i = 0; i < n; i++) spawnRegular(s, st.openingBoard[i] ?? poolKind(s, true), false);
 
   for (let i = 0; i < stats.bumpers; i++) spawnObstacle(s, 'bumper');
   for (let i = 0; i < stats.crates; i++) spawnObstacle(s, 'crate');
@@ -204,6 +205,7 @@ function startEnemy(s: RunState, fx: FxEvent[]): void {
     spawned = true;
     fx.push({ t: 'shimmer', x: t.x, y: t.y });
   }
+  if (activePhase(s, fx)) spawned = true;
   if (bossEnemyPhase(s, fx)) spawned = true;
   s.phaseTimer = spawned ? Math.max(ENEMY_PHASE_SECONDS, SHIMMER_SECONDS) : ENEMY_PHASE_SECONDS;
 }

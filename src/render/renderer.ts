@@ -141,6 +141,13 @@ function drawTarget(ctx: CanvasRenderingContext2D, t: Target, stage: string, now
     return;
   }
   drawSprite(ctx, name, t.x, t.y, t.flash > 0 ? { tint: WHITE } : {});
+  if (t.frozen && t.frozen > 0 && !(t.flash > 0)) drawSprite(ctx, name, t.x, t.y, { tint: P.c, alpha: 0.5 });
+  if (t.frozen && t.frozen > 0) ringDots(ctx, t.x, t.y, t.r + 3, P['5'], 0, 0.45);
+  if (t.shield && t.shield > 0) ringDots(ctx, t.x, t.y, t.r + 3, P.B, now * 1.6, 0.4);
+  if (t.act === 1 && t.kind === 'hive') {
+    const sw = flash ? Math.floor(now * 4) % 2 : 0;
+    ringDots(ctx, t.x, t.y, t.r + 3 + sw, P.o, now * 2, 0.3);
+  }
   if (t.kind === 'boss' && t.shielded) {
     ringDots(ctx, t.x, t.y, t.r + 3, P.c, now * 2, 0.22);
     ringDots(ctx, t.x, t.y, t.r + 4, P.B, -now * 1.5, 0.4);
@@ -155,6 +162,21 @@ function drawTarget(ctx: CanvasRenderingContext2D, t: Target, stage: string, now
       ctx.fillStyle = i < left ? P.Y : P['1'];
       ctx.fillRect(px + i * 3, py, 2, 1);
     }
+  }
+}
+
+/** Dotted actor -> aim line (1px on, 3px period), marching at 4 Hz; steady when flash is off. */
+function drawTelegraph(ctx: CanvasRenderingContext2D, s: RunState, t: Target, now: number, flash: boolean): void {
+  const a = s.targets.find((o) => o.id === t.aimId && !o.dead);
+  if (!a) return;
+  const dx = a.x - t.x, dy = a.y - t.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 1) return;
+  const ux = dx / d, uy = dy / d;
+  const march = flash ? Math.floor(now * 4) % 3 : 0;
+  ctx.fillStyle = t.kind === 'frost' ? P.c : P.M;
+  for (let k = t.r + 2 + march; k < d - a.r - 1; k += 3) {
+    ctx.fillRect(Math.round(t.x + ux * k), Math.round(t.y + uy * k), 1, 1);
   }
 }
 
@@ -186,6 +208,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, s: RunState, now: numbe
     drawSprite(ctx, o.kind, o.x, o.y, o.flash > 0 ? { tint: WHITE } : {});
   }
   for (const t of s.targets) if (!t.dead) drawTarget(ctx, t, s.stage, now, flash);
+  for (const t of s.targets) if (!t.dead && t.act === 1 && t.aimId !== undefined) drawTelegraph(ctx, s, t, now, flash);
   const main = s.stats.ballType === 'standard' ? 'ball_main' : `ball_${s.stats.ballType}`;
   for (const b of s.balls) {
     const name = b.kind === 'main' ? main : b.kind === 'split' ? 'ball_split' : 'ball_spat';

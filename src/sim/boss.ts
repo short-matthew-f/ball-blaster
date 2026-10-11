@@ -39,8 +39,10 @@ export function spawnBoss(s: RunState, fx: FxEvent[]): void {
   s.bossPending = false;
   s.bossSpawned = true;
 
-  // Clear regular targets out of the zone, no rewards.
-  s.targets = s.targets.filter((t) => t.dead || !isRegular(t) || !circleHitsRect(t.x, t.y, t.r, BOSS_ZONE));
+  // Clear regular targets (and hive spores) out of the zone, no rewards.
+  s.targets = s.targets.filter(
+    (t) => t.dead || (!isRegular(t) && t.kind !== 'spore') || !circleHitsRect(t.x, t.y, t.r, BOSS_ZONE),
+  );
 
   const cx = BOSS_ZONE.x + BOSS_ZONE.w / 2;
   const cy = BOSS_ZONE.y + BOSS_ZONE.h / 2;

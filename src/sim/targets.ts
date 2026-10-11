@@ -1,24 +1,74 @@
 // Damage, death and on-death effects (cash, meter, splitting, volatile chains, lightning).
-import { TABLE, type Ball, type BallKind, type FxEvent, type RunState, type Target, type Vec } from '../core/types';
-import { BOARD_CLEAR_REFILL, TARGET_DEFS, stageById } from '../core/tuning';
+import { ENEMY_PHASE_SECONDS, TABLE, type Ball, type BallKind, type FxEvent, type RunState, type Target, type Vec } from '../core/types';
+import { BOARD_CLEAR_REFILL, SHATTER_DMG, SHATTER_R, TARGET_DEFS, stageById } from '../core/tuning';
 import { refill } from './energy';
 import { checkBossPhase, updateShield } from './boss';
 import { isRegular, liveRegulars, makeTarget } from './spawn';
 
 export type DamageSource = BallKind | 'lightning' | 'explosion';
 
-/** Every point of damage goes through here: shield -> hp -> boss phase -> death. */
+function isBallSource(src: DamageSource): src is BallKind {
+  return src !== 'lightning' && src !== 'explosion';
+}
+
+/** Every point of damage goes through here: boss shield -> frozen -> warden shield -> hp -> boss phase -> death. */
 export function applyDamage(s: RunState, t: Target, dmg: number, src: DamageSource, fx: FxEvent[], killer?: Ball): void {
   if (t.dead) return;
   if (t.kind === 'boss' && t.shielded) dmg = 0;
+  // Frozen: balls bounce off harmlessly (fast impacts shatter in hitTarget), lightning thaws, explosions shatter.
+  if ((t.frozen ?? 0) > 0) {
+    if (src === 'explosion') {
+      shatter(s, t, src, fx);
+      return;
+    }
+    t.flash = 0.12;
+    if (src === 'lightning') thaw(s, t, fx);
+    else fx.push({ t: 'hit', x: t.x, y: t.y, targetKind: t.kind, ballKind: src, dmg: 0, killed: false });
+    return;
+  }
+  // Warden shield: the next damaging hit from any source is absorbed and strips it.
+  if ((t.shield ?? 0) > 0 && dmg > 0) {
+    t.shield = 0;
+    t.flash = 0.12;
+    fx.push({ t: 'shieldBreak', x: t.x, y: t.y });
+    if (isBallSource(src)) fx.push({ t: 'hit', x: t.x, y: t.y, targetKind: t.kind, ballKind: src, dmg: 0, killed: false });
+    return;
+  }
   t.hp -= dmg;
   t.flash = 0.12;
   const killed = t.hp <= 0;
-  if (src !== 'lightning' && src !== 'explosion') {
+  if (isBallSource(src)) {
     fx.push({ t: 'hit', x: t.x, y: t.y, targetKind: t.kind, ballKind: src, dmg, killed });
   }
   if (t.kind === 'boss' && !killed) checkBossPhase(s, t, fx);
   if (killed) kill(s, t, src, fx, killer);
+}
+
+/** Frozen target breaks: full kill rewards for `src`, then SHATTER_DMG as 'explosion' to neighbours. */
+export function shatter(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], killer?: Ball): void {
+  if (t.dead) return;
+  fx.push({ t: 'shatter', x: t.x, y: t.y, r: SHATTER_R });
+  if (isBallSource(src)) fx.push({ t: 'hit', x: t.x, y: t.y, targetKind: t.kind, ballKind: src, dmg: t.hp, killed: true });
+  t.frozen = 0;
+  t.hp = 0;
+  kill(s, t, src, fx, killer);
+  for (const o of s.targets.slice()) {
+    if (o.dead || o === t || o.shimmer > 0) continue;
+    if (Math.hypot(o.x - t.x, o.y - t.y) <= SHATTER_R + o.r) applyDamage(s, o, SHATTER_DMG, 'explosion', fx);
+  }
+}
+
+/** End a freeze; drifting kinds pick a fresh drift direction. */
+export function thaw(s: RunState, t: Target, fx: FxEvent[]): void {
+  t.frozen = 0;
+  fx.push({ t: 'thaw', x: t.x, y: t.y });
+  const drift = TARGET_DEFS[t.kind].drift;
+  if (drift) {
+    const a = s.rng.range(0, Math.PI * 2);
+    const sp = drift / ENEMY_PHASE_SECONDS;
+    t.vx = Math.cos(a) * sp;
+    t.vy = Math.sin(a) * sp;
+  }
 }
 
 export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], killer?: Ball): void {
@@ -44,6 +94,15 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
     if (!s.bossSpawned && !s.bossPending && s.meterKills >= st.meterKills) s.bossPending = true;
   }
   if (t.kind === 'cadre') updateShield(s);
+  if (t.kind === 'warden') {
+    // A warden's death strips every warden shield on the board.
+    for (const o of s.targets) {
+      if (!o.dead && (o.shield ?? 0) > 0) {
+        o.shield = 0;
+        fx.push({ t: 'shieldBreak', x: o.x, y: o.y });
+      }
+    }
+  }
 
   if (s.stats.killRefillChance > 0 && s.rng.chance(s.stats.killRefillChance)) {
     refill(s, s.stats.killRefillAmount, t.x, t.y, fx);

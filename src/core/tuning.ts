@@ -11,7 +11,30 @@ export const TARGET_DEFS: Record<TargetKind, TargetDef> = {
   mini: { hp: 1, r: 4, cash: 2, drain: 0, meter: 1, bounce: 1 },
   cadre: { hp: 6, r: 5, cash: 4, drain: 0, meter: 0, bounce: 1 },
   boss: { hp: 36, r: 14, cash: 60, drain: 1, meter: 0, bounce: 0.9 },
+  // Active tier (DECISIONS.md "Active target tier").
+  warden: { hp: 5, r: 7, cash: 10, drain: 0, meter: 1, bounce: 1 },
+  hive: { hp: 6, r: 8, cash: 14, drain: 0, meter: 1, bounce: 0.9 },
+  spore: { hp: 1, r: 4, cash: 1, drain: 0, meter: 0, bounce: 1 },
+  frost: { hp: 4, r: 7, cash: 12, drain: 0, meter: 1, bounce: 0.8 },
 };
+
+/** Active tier: kinds that run the telegraph -> execute cycle in the enemy phase. */
+export const ACTIVE_KINDS: readonly TargetKind[] = ['warden', 'hive', 'frost'];
+/** Max distance (centre to centre) a warden/frost can pick a target from. */
+export const ACTIVE_RANGE = 40;
+/** Board caps: live shielded targets, live frozen targets, live spores. */
+export const SHIELD_CAP = 2;
+export const FREEZE_CAP = 2;
+export const SPORE_CAP = 4;
+/** Enemy phases a freeze lasts. */
+export const FREEZE_PHASES = 3;
+/** Pre-impact ball speed (px/s) at or above which a frozen target shatters. */
+export const SHATTER_SPEED = 160;
+/** Shatter blast radius (plus the victim's r) and damage. */
+export const SHATTER_R = 20;
+export const SHATTER_DMG = 2;
+/** Restitution off a frozen target. */
+export const FROZEN_BOUNCE = 1.1;
 
 /** Base stats before any upgrade. meta/stats.ts clones this and applies nodes. */
 export const BASE_STATS: RunStats = {
@@ -84,6 +107,8 @@ export const STAGES: StageDef[] = [
       { kind: 'moving', weight: 10 },
       { kind: 'volatile', weight: 10 },
       { kind: 'splitting', weight: 5 },
+      { kind: 'warden', weight: 8, minEnemyCount: 5, maxLive: 2 },
+      { kind: 'hive', weight: 6, minEnemyCount: 6, maxLive: 1 },
     ],
     densityCap: 8,
     hpScale: 1,
@@ -115,6 +140,7 @@ export const STAGES: StageDef[] = [
       { kind: 'moving', weight: 15 },
       { kind: 'volatile', weight: 10 },
       { kind: 'splitting', weight: 5 },
+      { kind: 'frost', weight: 12, maxLive: 2 },
     ],
     densityCap: 9,
     hpScale: 2.5,

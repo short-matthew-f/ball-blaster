@@ -59,7 +59,7 @@ export interface StageDef {
   /** Wall restitution 0..1. */
   wallBounce: number;
   /** Weighted spawn pool for regular targets. */
-  pool: { kind: TargetKind; weight: number }[];
+  pool: { kind: TargetKind; weight: number; minEnemyCount?: number; maxLive?: number }[];
   /** Max live regular targets regardless of enemyCount stat. */
   densityCap: number;
   /** Multiplier on all enemy HP for this stage (stage balance). */
@@ -124,7 +124,12 @@ export type TargetKind =
   | 'volatile'
   | 'mini' // spawned by 'splitting'
   | 'boss'
-  | 'cadre'; // boss shield minion
+  | 'cadre' // boss shield minion
+  // Active tier (see DECISIONS.md "Active target tier")
+  | 'warden' // shields a nearby regular target
+  | 'hive' // spawns non-regular spores
+  | 'spore' // spawned by 'hive'; not a regular target
+  | 'frost'; // freezes a nearby regular target
 
 export interface Target {
   id: number;
@@ -146,6 +151,14 @@ export interface Target {
   /** Boss shielded by live cadre. */
   shielded: boolean;
   dead: boolean;
+  /** Active targets: 2 = ready to pick, 1 = telegraphed (executes next enemy phase). Absent for non-actives. */
+  act?: number;
+  /** Active targets: id of the target telegraphed for shield/freeze (renderer skips the link if not found). */
+  aimId?: number;
+  /** Warden shield on this target: 1 = absorbs the next damaging hit, 0/absent = none. */
+  shield?: number;
+  /** Frost: enemy phases left frozen (> 0 = frozen). */
+  frozen?: number;
 }
 
 export type ObstacleKind = 'bumper' | 'crate' | 'chest' | 'shrine';
@@ -284,7 +297,14 @@ export type FxEvent =
   | { t: 'shoot'; power: number }
   | { t: 'runOver' }
   /** The last regular target on the board died during a shot (once per shot). Board refills next enemy phase. */
-  | { t: 'boardClear'; x: number; y: number };
+  | { t: 'boardClear'; x: number; y: number }
+  /** Active target telegraph ping (state lives on Target.act/aimId; renderer polls it). */
+  | { t: 'telegraph'; x: number; y: number; kind: 'shield' | 'freeze' | 'spawn' }
+  | { t: 'shieldUp'; x: number; y: number }
+  | { t: 'shieldBreak'; x: number; y: number }
+  | { t: 'freeze'; x: number; y: number }
+  | { t: 'thaw'; x: number; y: number }
+  | { t: 'shatter'; x: number; y: number; r: number };
 
 // ---------- Derived per-run stats (meta -> sim contract) ----------
 

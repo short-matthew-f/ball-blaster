@@ -2,7 +2,7 @@
 import type { FxEvent, TargetKind } from '../core/types';
 
 const HIT_PITCH: Record<TargetKind, number> = {
-  basic: 520, armored: 900, bouncy: 700, moving: 470, splitting: 400, volatile: 330, mini: 820, boss: 170, cadre: 600,
+  basic: 520, armored: 900, bouncy: 700, moving: 470, splitting: 400, volatile: 330, mini: 820, boss: 170, cadre: 600, warden: 760, hive: 360, spore: 1000, frost: 1100,
 };
 
 type Wave = OscillatorType;
@@ -102,7 +102,14 @@ export class Sfx {
       }
       switch (e.t) {
         case 'hit':
-          if (e.killed || !this.gate('hit')) break;
+          if (e.killed) break;
+          if (e.dmg <= 0) {
+            if (!this.gate('deflect')) break;
+            this.tone(1500, 0.04, 'square', 0.08, 1100);
+            this.noise(0.03, 0.06, 'highpass', 4000);
+            break;
+          }
+          if (!this.gate('hit')) break;
           if (e.targetKind === 'armored') {
             this.tone(900, 0.07, 'square', 0.12, 700);
             this.tone(1350, 0.05, 'square', 0.08);
@@ -190,6 +197,37 @@ export class Sfx {
         case 'spit':
           if (!this.gate('split')) break;
           this.tone(900, 0.05, 'triangle', 0.1, 1400);
+          break;
+        case 'telegraph':
+          if (!this.gate('telegraph')) break;
+          this.tone(e.kind === 'spawn' ? 500 : 1000, 0.05, 'sine', 0.07, e.kind === 'spawn' ? 700 : 1300);
+          break;
+        case 'shieldUp':
+          if (!this.gate('shieldUp')) break;
+          this.tone(1047, 0.18, 'sine', 0.1);
+          this.tone(1568, 0.3, 'sine', 0.08, 0, 0.07);
+          break;
+        case 'shieldBreak':
+          if (!this.gate('shieldBreak')) break;
+          this.tone(2200, 0.06, 'square', 0.1, 1400);
+          this.noise(0.1, 0.12, 'highpass', 5000);
+          this.tone(3000, 0.08, 'triangle', 0.06, 0, 0.04);
+          break;
+        case 'freeze':
+          if (!this.gate('freeze')) break;
+          for (let i = 0; i < 4; i++) this.noise(0.03, 0.1, 'highpass', 4500 + i * 600, i * 0.035);
+          this.tone(1800, 0.25, 'sine', 0.07, 900);
+          break;
+        case 'thaw':
+          if (!this.gate('thaw')) break;
+          this.tone(700, 0.06, 'sine', 0.08, 400);
+          this.tone(520, 0.06, 'sine', 0.06, 300, 0.07);
+          break;
+        case 'shatter':
+          if (!this.gate('shatter')) break;
+          this.noise(0.22, 0.3, 'highpass', 3500);
+          this.tone(2400, 0.1, 'square', 0.1, 600);
+          this.tone(140, 0.2, 'sine', 0.25, 60);
           break;
         case 'runOver':
           if (!this.gate('over')) break;

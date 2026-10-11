@@ -9,7 +9,7 @@ interface Particle { x: number; y: number; vx: number; vy: number; life: number;
 interface Floater { x: number; y: number; text: string; color: string; life: number; max: number }
 interface Banner { text: string; color: string; life: number; max: number; scale: number }
 interface Bolt { pts: Vec[]; life: number }
-interface Ring { x: number; y: number; r: number; life: number; max: number }
+interface Ring { x: number; y: number; r: number; life: number; max: number; color?: string; color2?: string }
 
 const P = PALETTE;
 const KIND_COLORS: Record<TargetKind, string[]> = {
@@ -22,6 +22,10 @@ const KIND_COLORS: Record<TargetKind, string[]> = {
   mini: [P.p, P.R],
   boss: [P['0'], P['3'], P['5'], P.Y],
   cadre: [P.c, P.B, P['3']],
+  warden: [P.M, P.m, P.B],
+  hive: [P.o, P.y, P.Y],
+  spore: [P.o, P.Y],
+  frost: [P.c, P['5'], P.b],
 };
 
 const rnd = (a: number, b: number): number => a + Math.random() * (b - a);
@@ -103,7 +107,29 @@ export class Fx {
           this.addShake(e.targetKind === 'boss' ? 2 : 0.8);
           break;
         case 'hit':
-          this.burst(e.x, e.y, [P['5'], KIND_COLORS[e.targetKind]?.[0] ?? P.R], 2, 30, 0.2, 0);
+          if (e.dmg <= 0) this.burst(e.x, e.y, [P['5'], P.S], 3, 45, 0.15, 0); // deflect spark, no number
+          else this.burst(e.x, e.y, [P['5'], KIND_COLORS[e.targetKind]?.[0] ?? P.R], 2, 30, 0.2, 0);
+          break;
+        case 'telegraph':
+          this.burst(e.x, e.y, e.kind === 'freeze' ? [P.c, P['5']] : e.kind === 'spawn' ? [P.o, P.Y] : [P.M, P.B], 3, 22, 0.25, 0);
+          break;
+        case 'shieldUp':
+          this.burst(e.x, e.y, [P.B, P['5'], P.c], 8, 40, 0.5, -15);
+          break;
+        case 'shieldBreak':
+          this.burst(e.x, e.y, [P.B, P['5'], P.b, P.c], 12, 80, 0.4, 120);
+          break;
+        case 'freeze':
+          this.burst(e.x, e.y, [P.c, P['5'], P.B], 10, 55, 0.5, 20);
+          break;
+        case 'thaw':
+          this.burst(e.x, e.y, [P.c, P.b], 5, 18, 0.5, 160);
+          break;
+        case 'shatter':
+          this.rings.push({ x: e.x, y: e.y, r: e.r, life: 0.35, max: 0.35, color: P.c, color2: P['5'] });
+          this.burst(e.x, e.y, [P.c, P['5'], P.B, P.b], 18, 110, 0.5, 90, 2);
+          this.addShake(this.shakeEnabled ? 1.5 : 0);
+          this.stop(3);
           break;
         case 'wall':
           this.burst(e.x, e.y, [P.S, P['4']], 3, 30, 0.25, 0);
@@ -219,7 +245,7 @@ export class Fx {
     for (const r of this.rings) {
       const k = 1 - r.life / r.max;
       const rad = r.r * (0.3 + 0.7 * k);
-      ctx.fillStyle = k < 0.5 ? P.Y : P.o;
+      ctx.fillStyle = k < 0.5 ? (r.color2 ?? P.Y) : (r.color ?? P.o);
       const steps = Math.max(24, Math.round(rad * 3));
       ctx.globalAlpha = 1 - k * 0.7;
       for (let i = 0; i < steps; i++) {

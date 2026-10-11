@@ -1,6 +1,6 @@
 // Entity construction and placement rules (spawn budget, respawns).
 import { BOSS_ZONE, ENEMY_PHASE_SECONDS, SHIMMER_SECONDS, TABLE, type Obstacle, type ObstacleKind, type RunState, type Target, type TargetKind } from '../core/types';
-import { TARGET_DEFS, stageById } from '../core/tuning';
+import { ACTIVE_KINDS, TARGET_DEFS, stageById } from '../core/tuning';
 
 const EDGE_MARGIN = 4;
 const BALL_CLEARANCE = 20;
@@ -11,8 +11,14 @@ const SPAWN_MAX_Y = TABLE.y + TABLE.h * 0.72;
 export const OBSTACLE_R: Record<ObstacleKind, number> = { bumper: 6, crate: 5, chest: 6, shrine: 6 };
 const OBSTACLE_HP: Record<ObstacleKind, number> = { bumper: Infinity, crate: 1, chest: 2, shrine: 1 };
 
+/** Regular targets count toward the cap, board clear and empty-board refill. Boss, cadre and spores do not. */
 export function isRegular(t: Target): boolean {
-  return t.kind !== 'boss' && t.kind !== 'cadre';
+  return t.kind !== 'boss' && t.kind !== 'cadre' && t.kind !== 'spore';
+}
+
+/** Active-tier kinds (warden/hive/frost) run the telegraph -> execute cycle in the enemy phase. */
+export function isActive(t: Target): boolean {
+  return ACTIVE_KINDS.includes(t.kind);
 }
 
 export function bossAlive(s: RunState): boolean {
@@ -72,7 +78,9 @@ export function makeTarget(s: RunState, kind: TargetKind, x: number, y: number, 
     vx = Math.cos(a) * sp;
     vy = Math.sin(a) * sp;
   }
-  return { id: s.nextId++, kind, x, y, r: def.r, hp, maxHp: hp, vx, vy, shimmer, flash: 0, phase: 0, shielded: false, dead: false };
+  const t: Target = { id: s.nextId++, kind, x, y, r: def.r, hp, maxHp: hp, vx, vy, shimmer, flash: 0, phase: 0, shielded: false, dead: false };
+  if (ACTIVE_KINDS.includes(kind)) t.act = 2;
+  return t;
 }
 
 /** Place a regular target of `kind` at a random legal spot. Returns null if no room. */
@@ -85,8 +93,24 @@ export function spawnRegular(s: RunState, kind: TargetKind, shimmer: boolean): T
   return t;
 }
 
-export function poolKind(s: RunState): TargetKind {
-  return s.rng.pick(stageById(s.stage).pool).kind;
+/**
+ * Weighted pick from the stage pool, skipping entries gated by stats.enemyCount (minEnemyCount) or already at
+ * their live cap (maxLive). `noActive` also skips active-tier kinds (initial board). Empty -> 'basic'.
+ * rng.pick always consumes exactly one draw, so a filter that removes nothing is rng-neutral.
+ */
+export function poolKind(s: RunState, noActive = false): TargetKind {
+  const pool = stageById(s.stage).pool.filter((e) => {
+    if (noActive && ACTIVE_KINDS.includes(e.kind)) return false;
+    if (e.minEnemyCount !== undefined && s.stats.enemyCount < e.minEnemyCount) return false;
+    if (e.maxLive !== undefined) {
+      let n = 0;
+      for (const t of s.targets) if (!t.dead && t.kind === e.kind) n++;
+      if (n >= e.maxLive) return false;
+    }
+    return true;
+  });
+  if (pool.length === 0) return 'basic';
+  return s.rng.pick(pool).kind;
 }
 
 export function spawnObstacle(s: RunState, kind: ObstacleKind): Obstacle | null {
