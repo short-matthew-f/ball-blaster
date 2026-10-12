@@ -10,9 +10,11 @@ import {
   ENEMY_FRICTION_MULT,
   stageById,
   CLERIC_RANGE,
+  DARK_REVEAL_R,
   ENRAGE_BASE,
   ENRAGE_OVERTIME_TURN,
   ENRAGE_PER_WAVE,
+  ENRAGE_STRIKE_LEVEL,
   HIVE_GRUB_CAP,
   SUMMON_CAP,
   SWIFT_ADVANCE_DIST,
@@ -21,14 +23,18 @@ import {
   WAVE_CASH_CAP_WAVE,
   WAVES_PER_STAGE,
 } from '../core/tuning';
-import { heal, hero, heroDamage, kill } from './damage';
+import { heal, hero, heroDamage, kill, scaleCash, stageWaves } from './damage';
 import { rollIntent } from './intents';
 import { relaxAll } from './physics';
 import { liveRegulars, spawnWave, summonNear } from './spawn';
 
 /** Turn of the current wave at which enrage starts (stage waves: ENRAGE_BASE + ENRAGE_PER_WAVE x wave; Overtime: flat). */
 export function rageStart(s: RunState): number {
-  return s.wave > WAVES_PER_STAGE + 1 ? ENRAGE_OVERTIME_TURN : ENRAGE_BASE + ENRAGE_PER_WAVE * s.wave;
+  // Early Boss stages keep the normal boss-wave clock (the boss wave counts as wave 4).
+  const nw = stageWaves(s);
+  if (s.wave > nw + 1) return ENRAGE_OVERTIME_TURN;
+  const w = s.wave === nw + 1 ? WAVES_PER_STAGE + 1 : s.wave;
+  return ENRAGE_BASE + ENRAGE_PER_WAVE * w;
 }
 
 /** Enrage level for the current (or next, during aim) enemy phase: +1 attack per turn from rageStart. */
@@ -69,13 +75,13 @@ function advanceWave(s: RunState, fx: FxEvent[]): Set<number> {
   if (!s.wavePending && liveRegulars(s) > 0) return fresh;
   const cleared = s.wave;
   if (cleared >= 1) {
-    s.cash += WAVE_CASH * Math.min(cleared, WAVE_CASH_CAP_WAVE);
+    s.cash += scaleCash(s, WAVE_CASH * Math.min(cleared, WAVE_CASH_CAP_WAVE));
     const h = hero(s);
     fx.push({ t: 'boardClear', x: h.x, y: h.y });
     heal(s, s.stats.waveHeal, h.x, h.y, fx);
     // Sweep: every regular of the wave died within one shot (the one just played).
     if (s.stats.comboSweep > 0 && s.waveKillShot === s.shots && s.shots > 0) {
-      s.cash += Math.round(s.stats.comboSweep * s.stats.cashMult);
+      s.cash += scaleCash(s, s.stats.comboSweep * s.stats.cashMult);
       fx.push({ t: 'combo', name: 'SWEEP', mult: 1, x: h.x, y: h.y });
     }
   }
@@ -227,11 +233,11 @@ function speedFor(s: RunState, dist: number, vmax: number): number {
  * Advance: a soft roll toward the hero (skirmisher: sideways reposition). It stops ADVANCE_STANDOFF short of the
  * hero instead of shoving it (an advance is not an attack), so the roll is shortened when the hero is close.
  */
-function advance(s: RunState, e: Target, h: Ball, fx: FxEvent[]): boolean {
+function advance(s: RunState, e: Target, h: Ball, fx: FxEvent[], sideways = e.kind === 'skirmisher'): boolean {
   let dx = h.x - e.x;
   let dy = h.y - e.y;
-  let dist = e.elite === 'swift' ? SWIFT_ADVANCE_DIST : ADVANCE_DIST;
-  if (e.kind === 'skirmisher') {
+  let dist = (e.elite === 'swift' ? SWIFT_ADVANCE_DIST : ADVANCE_DIST) * stageById(s.stage).advanceMult;
+  if (sideways) {
     const px = -dy;
     const py = dx;
     const towardCentre = TABLE.x + TABLE.w / 2 - e.x;
@@ -268,8 +274,30 @@ function freezeAlly(s: RunState, e: Target, fx: FxEvent[]): void {
   fx.push({ t: 'freeze', x: best.x, y: best.y });
 }
 
-/** Execute `e`'s intent. Returns true if it launched (the next launch waits LAUNCH_GAP). */
+/**
+ * Dark modifier: is `t`'s intent visible to the player? Always true off Dark; on Dark only within
+ * max(reach, DARK_REVEAL_R) px (edge gap) of the hero. Render-only (the sim never reads it).
+ */
+export function intentVisible(s: RunState, t: Target): boolean {
+  if (!s.dark) return true;
+  const h = s.balls.find((b) => b.kind === 'main');
+  if (!h) return true;
+  const gap = Math.hypot(h.x - t.x, h.y - t.y) - h.r - t.r;
+  return gap <= Math.max(TARGET_DEFS[t.kind].reach, DARK_REVEAL_R);
+}
+
+/**
+ * Execute `e`'s intent. Returns true if it launched (the next launch waits LAUNCH_GAP). A boss with the 'moves' trait
+ * also repositions after an intent that did not launch (summon, charge, rest): toward the hero, or sideways when close.
+ */
 function execute(s: RunState, e: Target, fx: FxEvent[]): boolean {
+  const launched = executeIntent(s, e, fx);
+  if (launched || e.dead || e.kind !== 'boss' || !stageById(s.stage).bossTraits.includes('moves')) return launched;
+  const h = hero(s);
+  return advance(s, e, h, fx) || advance(s, e, h, fx, true);
+}
+
+function executeIntent(s: RunState, e: Target, fx: FxEvent[]): boolean {
   const def = TARGET_DEFS[e.kind];
   const h = hero(s);
   const rage = rageLevel(s);
@@ -278,9 +306,19 @@ function execute(s: RunState, e: Target, fx: FxEvent[]): boolean {
     case 'attack': {
       const slam = e.kind === 'boss' && !!e.charged;
       const gap = Math.hypot(h.x - e.x, h.y - e.y) - e.r - h.r;
-      if (!slam && gap > def.reach) return advance(s, e, h, fx); // reach-aware: Attack beyond reach = Advance
+      // Reach-aware: Attack beyond reach = Advance. Enraged, it charges from anywhere (banking round cover): an attacker
+      // parked behind a bumper otherwise never connects and the run never ends.
+      const far = gap > def.reach;
+      if (!slam && far && rage === 0) return advance(s, e, h, fx);
+      // Deep enrage with the line covered (e.g. caged behind bumpers): the blow lands anyway, as an instant strike.
+      if (rage >= ENRAGE_STRIKE_LEVEL && blocked(s, e, e.x, e.y, h.x, h.y)) {
+        fx.push({ t: 'tracer', x0: e.x, y0: e.y, x1: h.x, y1: h.y });
+        heroDamage(s, (it.n ?? 0) + rage, e.kind, h.x, h.y, fx, 'charge');
+        e.charged = false;
+        return false;
+      }
       const speed = e.charged ? (def.chargedSpeed ?? def.chargeSpeed * 1.25) : def.chargeSpeed;
-      const d = chargeDir(s, e, h, e.kind === 'bouncer' || slam);
+      const d = chargeDir(s, e, h, e.kind === 'bouncer' || slam || far);
       launch(e, d.x, d.y, speed, fx, 'attack');
       e.chargeDmg = (it.n ?? 0) + rage;
       e.charged = false;

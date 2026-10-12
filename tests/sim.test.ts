@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { FAST_FORWARD_MULT, MAX_LAUNCH_SPEED, MAX_PULL, MIN_POWER, SIM_DT, TABLE, type FxEvent, type RunState, type TargetKind, type Vec } from '../src/core/types';
-import { BASE_STATS, SPAWN_ZONE, TARGET_DEFS, WAVE_CASH } from '../src/core/tuning';
+import { ATK_GROWTH, BASE_STATS, CASH_GROWTH, HARDY_MOD_HP, HP_GROWTH, SLOT_ATK_MULT, SLOT_HP_MULT, SPAWN_ZONE, TARGET_DEFS, WAVE_CASH, stageById } from '../src/core/tuning';
+import { WORLDS, allStageIds, globalIndex, idFromIndex, makeStage, nextStageId, parseStageId, stageId } from '../src/core/worlds';
+import { rollIntent as rollIntentForTest } from '../src/sim/intents';
+import type { Modifier, TargetKind as TK } from '../src/core/types';
 import { Rng } from '../src/core/rng';
 
 const SPAWN_ZONE_Y = TABLE.y + TABLE.h - SPAWN_ZONE;
-import { canFastForward, createRun, heal, previewShot, shoot, step } from '../src/sim/index';
+import { canFastForward, createRun, heal, intentVisible, previewShot, shoot, step } from '../src/sim/index';
 import { makeEnemy, placeFormation } from '../src/sim/spawn';
 import { maxOverlap } from '../src/sim/physics';
 import { rageLevel } from '../src/sim/enemy';
@@ -29,7 +32,7 @@ function untilSettled(s: RunState, dt = SIM_DT, max = 240 * 60): FxEvent[] {
 }
 
 function play(seed: number, dt = SIM_DT) {
-  const s = createRun('felt', BASE_STATS, seed);
+  const s = createRun('w1s1', BASE_STATS, seed);
   for (const p of SHOTS) {
     if (s.phase !== 'aim') break;
     shoot(s, p);
@@ -46,7 +49,7 @@ function snapshot(s: RunState) {
 
 /** Empty table with the hero at (x,y), resting. */
 function lab(x = 90, y = 240): RunState {
-  const s = createRun('felt', { ...BASE_STATS }, 42);
+  const s = createRun('w1s1', { ...BASE_STATS }, 42);
   s.targets = [];
   s.obstacles = [];
   s.balls[0].x = x;
@@ -81,21 +84,21 @@ describe('sim determinism', () => {
     expect(ff).toEqual(normal);
   });
   it('different seeds lay out different boards', () => {
-    const a = createRun('felt', BASE_STATS, 1);
-    const b = createRun('felt', BASE_STATS, 2);
+    const a = createRun('w1s1', BASE_STATS, 1);
+    const b = createRun('w1s1', BASE_STATS, 2);
     expect(a.targets.map((t) => t.x)).not.toEqual(b.targets.map((t) => t.x));
   });
 });
 
 describe('shooting', () => {
   it('cancel (drag < CANCEL_RADIUS) stays in aim', () => {
-    const s = createRun('felt', BASE_STATS, 1);
+    const s = createRun('w1s1', BASE_STATS, 1);
     expect(shoot(s, { x: 3, y: 2 })).toBe(false);
     expect(s.phase).toBe('aim');
     expect(s.shots).toBe(0);
   });
   it('shots are free and fire at >= MIN_POWER', () => {
-    const s = createRun('felt', BASE_STATS, 1);
+    const s = createRun('w1s1', BASE_STATS, 1);
     expect(shoot(s, { x: 0, y: -13 })).toBe(true);
     const b = s.balls[0];
     expect(Math.hypot(b.vx, b.vy)).toBeCloseTo(MIN_POWER * MAX_LAUNCH_SPEED, 6);
@@ -104,7 +107,7 @@ describe('shooting', () => {
     expect(step(s, SIM_DT).some((f) => f.t === 'shoot')).toBe(true);
   });
   it('previewShot is empty without the upgrade and a polyline with it', () => {
-    const s = createRun('felt', BASE_STATS, 1);
+    const s = createRun('w1s1', BASE_STATS, 1);
     expect(previewShot(s, { x: 0, y: -40 })).toEqual([]);
     s.stats.aimPreview = 2;
     s.targets = [];
@@ -240,7 +243,7 @@ describe('enemy phase', () => {
 
 describe('waves, health, run end', () => {
   it('clearing a wave spawns the next in the following enemy phase with 8 x wave cash', () => {
-    const s = createRun('felt', BASE_STATS, 3);
+    const s = createRun('w1s1', BASE_STATS, 3);
     for (const t of s.targets) t.dead = true;
     const fx = enemyPhaseOnly(s);
     expect(s.wave).toBe(2);
@@ -303,7 +306,7 @@ describe('formations and the jam rule', () => {
   });
   it('does not fire at run start; nudges a boxed-in hero to an open spot', () => {
     for (let seed = 1; seed <= 20; seed++) {
-      const s = createRun('felt', BASE_STATS, seed);
+      const s = createRun('w1s1', BASE_STATS, seed);
       expect(hasCorridor(s, s.balls[0].x, s.balls[0].y)).toBe(true);
     }
     const s = lab(90, 150);
@@ -362,7 +365,7 @@ describe('step 2: frost, cadre, thorns, stats, combos', () => {
     expect(s.hp).toBe(BASE_STATS.maxHp);
   });
   it('Rime Golem arrives with a cadre; it takes no damage until the cadre is dead', () => {
-    const s = createRun('ice', BASE_STATS, 5);
+    const s = createRun('w2s1', BASE_STATS, 5);
     s.targets = [];
     s.wave = 3;
     s.wavePending = true;
@@ -459,7 +462,7 @@ describe('step 2: frost, cadre, thorns, stats, combos', () => {
   });
   it('Ice runs (bot, mid stats) terminate with sane state', () => {
     for (let seed = 1; seed <= 6; seed++) {
-      const s = createRun('ice', { ...BASE_STATS, damage: 4, maxHp: 35 }, seed);
+      const s = createRun('w2s1', { ...BASE_STATS, damage: 4, maxHp: 35 }, seed);
       while (s.phase === 'aim' && s.shots < 300) {
         const h = s.balls[0];
         const tg = s.targets.filter((t) => !t.dead).reduce((a, b) => (Math.hypot(b.x - h.x, b.y - h.y) < Math.hypot(a.x - h.x, a.y - h.y) ? b : a));
@@ -492,7 +495,7 @@ describe('step 3: fx', () => {
 describe('step 4: arrivals and Overtime enrage', () => {
   it('no live enemy is shimmering at any transition to aim (waves, boss, summons)', () => {
     for (let seed = 1; seed <= 6; seed++) {
-      const s = createRun('felt', { ...BASE_STATS, damage: 4, maxHp: 40 }, seed);
+      const s = createRun('w1s1', { ...BASE_STATS, damage: 4, maxHp: 40 }, seed);
       expect(s.targets.some((t) => t.shimmer > 0)).toBe(false);
       while (s.phase === 'aim' && s.shots < 200) {
         const h = s.balls[0];
@@ -515,7 +518,7 @@ describe('step 4: arrivals and Overtime enrage', () => {
   it('the boss takes its spot; a hero standing there is nudged clear', () => {
     let nudged = 0;
     for (let seed = 1; seed <= 12; seed++) {
-      const s = createRun('felt', BASE_STATS, seed);
+      const s = createRun('w1s1', BASE_STATS, seed);
       s.targets = [];
       s.wave = 3;
       s.wavePending = true;
@@ -557,9 +560,181 @@ describe('v0.3 review fixes', () => {
     kill(s, b, 'main', []);
     expect(s.hp).toBe(BASE_STATS.maxHp - 2);
   });
-  it('the Ice boss keeps its def HP (no hpScale)', () => {
-    const s = createRun('ice', BASE_STATS, 5);
-    expect(makeEnemy(s, 'boss', 90, 90).maxHp).toBe(40);
-    expect(makeEnemy(s, 'grunt', 90, 90).maxHp).toBe(Math.ceil(TARGET_DEFS.grunt.hp * 1.5));
+  it('the boss scales with its archetype HP x HP_GROWTH^n, not the stage hpScale (v0.3 step 2)', () => {
+    const s = createRun('w2s1', BASE_STATS, 5);
+    const st = stageById('w2s1');
+    expect(st.index).toBe(4);
+    expect(makeEnemy(s, 'boss', 90, 90).maxHp).toBe(Math.round(40 * HP_GROWTH ** 4));
+    expect(makeEnemy(s, 'grunt', 90, 90).maxHp).toBe(Math.ceil(TARGET_DEFS.grunt.hp * WORLDS[1].hpMult * HP_GROWTH ** 4));
+  });
+});
+
+describe('v0.3 step 2: stage generator, scaling, modifiers, boss traits, hazards', () => {
+  it('stage ids round-trip; global index runs 0..23 then loops', () => {
+    expect(stageId(1, 1)).toBe('w1s1');
+    expect(stageId(3, 2, 2)).toBe('l2w3s2');
+    expect(parseStageId('l2w3s2')).toEqual({ world: 3, slot: 2, loop: 2 });
+    expect(globalIndex('w1s1')).toBe(0);
+    expect(globalIndex('w6s4')).toBe(23);
+    expect(globalIndex('l1w1s1')).toBe(24);
+    expect(nextStageId('w1s4')).toBe('w2s1');
+    expect(nextStageId('w6s4')).toBe('l1w1s1');
+    const ids = allStageIds(0);
+    expect(ids.length).toBe(24);
+    ids.forEach((id, i) => {
+      expect(globalIndex(id)).toBe(i);
+      expect(idFromIndex(i)).toBe(id);
+      expect(makeStage(id).index).toBe(i);
+    });
+    expect(WORLDS.length).toBe(6);
+    expect(makeStage('w2s3')).toBe(makeStage('w2s3')); // memoised
+  });
+
+  it('slots: modifier counts, boss traits, elites from wave 2; loops: two modifiers, all traits, Overtime 1x', () => {
+    for (const loop of [0, 1, 2]) {
+      for (let w = 1; w <= 6; w++) {
+        const seen = new Set<string>();
+        for (let k = 1; k <= 4; k++) {
+          const st = makeStage(stageId(w, k, loop));
+          expect(st.modifiers.length).toBe(loop > 0 ? 2 : [0, 1, 1, 2][k - 1]);
+          for (const m of st.modifiers) {
+            expect(seen.has(m), `${st.id} repeats ${m}`).toBe(false);
+            seen.add(m);
+          }
+          if (loop > 0 || k === 4) expect(st.bossTraits).toEqual(['phases', 'cadre', 'moves']);
+          expect(st.bossTraits).toContain('phases');
+          expect(st.overtimeCash).toBe(loop > 0 ? 1 : 2);
+          if (k >= 3 && !st.modifiers.includes('earlyBoss')) expect(st.waves[1].elites ?? 0).toBeGreaterThanOrEqual(1);
+        }
+      }
+    }
+    expect(makeStage('w1s2').bossTraits).toEqual(['phases', 'cadre']);
+    expect(makeStage('w1s3').bossTraits).toEqual(['phases', 'moves']);
+    expect(makeStage('w2s1').bossTraits).toContain('cadre'); // Rime Golem's signature
+    expect(makeStage('w1s1').boss.cadre).toBe(0);
+  });
+
+  it('scaling: HP, attack and cash grow per global index; emeralds 3 + n', () => {
+    const a = makeStage('w1s1');
+    const b = makeStage('w1s4');
+    expect(a.hpScale).toBe(1);
+    expect(a.cashScale).toBe(0.5);
+    expect(b.cashScale).toBeCloseTo(0.5 * CASH_GROWTH ** 3);
+    expect(b.atkScale).toBeCloseTo(SLOT_ATK_MULT[3] * ATK_GROWTH ** 3);
+    expect(b.emeraldReward).toBe(6);
+    expect(b.boss.hp).toBe(Math.round(60 * SLOT_HP_MULT[3] * HP_GROWTH ** 3));
+    const s = createRun('w3s1', BASE_STATS, 1);
+    const g = makeEnemy(s, 'grunt', 90, 90);
+    expect(g.maxHp).toBe(Math.ceil(3 * WORLDS[2].hpMult * HP_GROWTH ** 8));
+    g.intent = { t: 'rest' };
+    for (let i = 0; i < 40 && g.intent.t !== 'attack'; i++) rollIntentForTest(s, g);
+    expect(g.intent.n).toBe(Math.round(3 * WORLDS[2].atkMult * ATK_GROWTH ** 8));
+  });
+
+  it('modifiers change the waves / physics they name', () => {
+    const base = WORLDS[0].waves;
+    const count = (st: ReturnType<typeof makeStage>, k: string) => st.waves.reduce((a, w) => a + w.slots.filter((x) => x === k).length, 0);
+    const find = (m: Modifier) => allStageIds(1).map(makeStage).find((st) => st.modifiers.includes(m) && st.world !== 2)!;
+    expect(find('thinRails').wallBounce).toBe(0.6);
+    expect(find('swift').advanceMult).toBe(1.5);
+    expect(find('earlyBoss').waves.length).toBe(2);
+    expect(count(find('bombers'), 'bomber')).toBeGreaterThanOrEqual(4);
+    expect(find('bigRack').waves[0].slots.length).toBeGreaterThan(base[0].slots.length - (find('bigRack').modifiers.includes('hardy') ? 1 : 0));
+    const dark = find('dark');
+    expect(createRun(dark.id, BASE_STATS, 1).dark).toBe(true);
+    expect(createRun('w1s1', BASE_STATS, 1).dark).toBe(false);
+    for (const m of ['hiveWorld', 'frostWorld'] as Modifier[]) {
+      const st = find(m);
+      const k = m === 'hiveWorld' ? 'hive' : 'frost';
+      for (const w of st.waves) expect(w.slots.includes(k as TK), `${st.id} ${m}`).toBe(true);
+    }
+    const hardy = find('hardy');
+    expect(hardy.hpScale).toBeCloseTo(HARDY_MOD_HP * SLOT_HP_MULT[hardy.slot - 1] * HP_GROWTH ** hardy.index * WORLDS[hardy.world - 1].hpMult);
+  });
+
+  it('dark: intents are visible only within reach of the hero', () => {
+    const s = lab(90, 260);
+    s.dark = true;
+    const near = put(s, 'grunt', 90, 200);
+    const far = put(s, 'grunt', 90, 60);
+    expect(intentVisible(s, near)).toBe(true);
+    expect(intentVisible(s, far)).toBe(false);
+    s.dark = false;
+    expect(intentVisible(s, far)).toBe(true);
+  });
+
+  it('early boss: the boss arrives after 2 waves and a kill still banks wave 4', () => {
+    const st = allStageIds(1).map(makeStage).find((x) => x.modifiers.includes('earlyBoss'))!;
+    const s = createRun(st.id, { ...BASE_STATS, damage: 99, maxHp: 999 }, 3);
+    s.targets = [];
+    s.wave = 2;
+    s.wavePending = true;
+    enemyPhaseOnly(s);
+    expect(s.bossSpawned).toBe(true);
+    const boss = s.targets.find((t) => t.kind === 'boss')!;
+    for (const t of s.targets) if (t.kind === 'cadre') kill(s, t, 'main', []);
+    updateBossShield(s);
+    kill(s, boss, 'main', []);
+    expect(s.phase).toBe('aim');
+    s.stats.waveHeal = 0; // the Overtime wave's clear-heal would revive a 0-HP hero
+    s.hp = 0;
+    enemyPhaseOnly(s);
+    expect(s.phase).toBe('over');
+    expect(s.result?.wavesCleared).toBe(4);
+    expect(s.result?.wave).toBe(4);
+  });
+
+  it('cadre trait: any boss arrives with its cadre; moves trait: the boss repositions on a non-attack intent', () => {
+    const s = createRun('w1s2', BASE_STATS, 5);
+    s.targets = [];
+    s.wave = 3;
+    s.wavePending = true;
+    enemyPhaseOnly(s);
+    expect(s.targets.filter((t) => t.kind === 'cadre').length).toBe(WORLDS[0].boss.cadre);
+    const m = createRun('w1s3', BASE_STATS, 5);
+    m.targets = [];
+    m.obstacles = [];
+    m.balls[0].x = 90;
+    m.balls[0].y = 270;
+    const b = put(m, 'boss', 90, 80);
+    b.intent = { t: 'charge' };
+    const fx = enemyPhaseOnly(m);
+    expect(fx.some((f) => f.t === 'launch' && f.id === b.id)).toBe(true);
+    expect(b.y).toBeGreaterThan(90);
+  });
+
+  it('ice hazard: patches only on Ice; a body crossing one keeps (almost) all its speed', () => {
+    expect(makeStage('w1s1').hazards).toEqual([]);
+    expect(makeStage('w3s1').hazards).toEqual([]);
+    const st = makeStage('w2s1');
+    expect(st.hazards.length).toBeGreaterThan(0);
+    expect(st.hazards.every((h) => h.kind === 'ice')).toBe(true);
+    const roll = (ice: boolean) => {
+      const s = lab(90, 250);
+      s.hazards = ice ? [{ kind: 'ice', x: 90, y: 160, r: 60 }] : [];
+      shoot(s, { x: 0, y: -MAX_PULL * 0.4 });
+      while (s.phase === 'resolve') step(s, SIM_DT);
+      return 250 - s.balls[0].y;
+    };
+    expect(roll(true)).toBeGreaterThan(roll(false) + 20);
+  });
+});
+
+describe('v0.3 step 2b: enrage liveness backstop', () => {
+  it('an enraged attacker beyond reach charges; deep enrage behind cover lands as an instant strike', () => {
+    const s = lab(90, 260);
+    const g = put(s, 'grunt', 90, 60);
+    g.intent = { t: 'attack', n: 3 };
+    s.waveTurn = 10; // rage 2: charges from anywhere
+    let fx = enemyPhaseOnly(s);
+    expect(fx.some((f) => f.t === 'launch' && f.intent === 'attack')).toBe(true);
+    const c = lab(90, 260);
+    const e = put(c, 'grunt', 90, 60);
+    e.intent = { t: 'attack', n: 3 };
+    c.obstacles.push({ id: c.nextId++, kind: 'bumper', x: 90, y: 90, r: 6, hp: Infinity, flash: 0, dead: false });
+    c.waveTurn = 13; // rage 5
+    fx = enemyPhaseOnly(c);
+    expect(fx.some((f) => f.t === 'heroHit')).toBe(true);
+    expect(c.hp).toBeLessThan(BASE_STATS.maxHp);
   });
 });

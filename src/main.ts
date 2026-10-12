@@ -9,7 +9,8 @@ import type { App, Screen, ScreenId, SummaryInfo } from './ui/app';
 import { RunScreen } from './ui/run-screen';
 import { TitleScreen } from './ui/title';
 import { SummaryScreen } from './ui/summary';
-import { ShopScreen } from './ui/shop';
+import { TreeScreen } from './ui/tree';
+import { MapScreen } from './ui/map';
 import { SettingsScreen } from './ui/settings';
 import { applyUpdate, registerServiceWorker, updateReady } from './update';
 import { drawText } from './render/text';
@@ -70,7 +71,8 @@ const screens: Record<ScreenId, Screen> = {
   title: new TitleScreen(app),
   run: runScreen,
   summary: new SummaryScreen(app),
-  shop: new ShopScreen(app),
+  shop: new TreeScreen(app),
+  map: new MapScreen(app),
   settings: new SettingsScreen(app),
 };
 

@@ -1,4 +1,4 @@
-import { stageById } from '../core/tuning';
+import { MODIFIER_NAMES, makeStage } from '../core/worlds';
 import { PALETTE } from '../render/palette';
 import { getMenuBg } from '../render/renderer';
 import { drawSprite } from '../render/sprite-cache';
@@ -31,9 +31,10 @@ export class SummaryScreen implements Screen {
     const sum = this.app.summary;
     if (!sum) return;
     const r = sum.result;
-    const st = stageById(r.stage);
+    const st = makeStage(r.stage);
     drawText(ctx, r.bossKilled ? 'BOSS DOWN!' : 'RUN OVER', 90, 14, { align: 'center', scale: 3, color: r.bossKilled ? P.Y : P.p, shadow: P['0'], shadowOff: 2 });
-    drawText(ctx, st.name.toUpperCase(), 90, 42, { align: 'center', color: P['3'] });
+    drawText(ctx, st.name.toUpperCase(), 90, st.modifiers.length ? 38 : 42, { align: 'center', color: P['3'] });
+    if (st.modifiers.length) drawText(ctx, st.modifiers.map((m) => MODIFIER_NAMES[m]).join(' \u00b7 '), 90, 46, { align: 'center', color: P.o });
 
     const em = r.emeralds + sum.bossEmeralds;
     drawPanel(ctx, 14, 54, 152, 124);
@@ -82,7 +83,7 @@ export class SummaryScreen implements Screen {
       const blink = Math.floor(now * 3) % 2 === 0;
       drawPanel(ctx, 14, 184, 152, 40, P.g, P.h);
       drawText(ctx, 'NEW STAGE!', 90, 192, { align: 'center', scale: 2, color: blink ? P.Y : P['5'], shadow: P['0'] });
-      drawText(ctx, sum.unlocked === 'ice' ? 'ICE CAVERN' : sum.unlocked.toUpperCase(), 90, 212, { align: 'center', color: P.E });
+      drawText(ctx, makeStage(sum.unlocked).name.toUpperCase(), 90, 212, { align: 'center', color: P.E });
     }
 
     drawSprite(ctx, 'coin', 70, 236);

@@ -22,7 +22,7 @@ import { physicsStep, relaxAll, spawnSpat } from './physics';
 import { emptyCombo, evaluateCombos } from './combos';
 import { enemyStep, startEnemyPhase } from './enemy';
 import { spawnObstacle, spawnWave } from './spawn';
-import { hero } from './damage';
+import { hero, stageWaves } from './damage';
 
 export function mainBall(s: RunState): Ball {
   return hero(s);
@@ -33,6 +33,8 @@ export function createRun(stage: StageId, stats: RunStats, seed: number, _bestWa
   const bt = BALL_TYPES[stats.ballType];
   const s: RunState = {
     stage: st.id,
+    hazards: st.hazards.map((z) => ({ ...z })),
+    dark: st.modifiers.includes('dark'),
     seed,
     rng: new Rng(seed),
     stats: { ...stats },
@@ -251,16 +253,21 @@ export function jamRule(s: RunState, fx: FxEvent[]): boolean {
   return false;
 }
 
+/**
+ * Result waves are normalised to the 3 + boss track (boss wave = 4) whatever the stage's wave count, so an Early Boss
+ * stage (boss after 2 waves) still banks bestWave 4 for a kill.
+ */
 function buildResult(s: RunState): RunResult {
-  const stageWaves = WAVES_PER_STAGE + 1;
+  const nw = stageWaves(s);
+  const bossWave = WAVES_PER_STAGE + 1;
   return {
     stage: s.stage,
     cash: s.cash,
     emeralds: s.emeralds,
     kills: s.kills,
-    wave: Math.min(s.wave, stageWaves),
-    wavesCleared: s.bossKilled ? stageWaves : Math.min(s.wave - 1, WAVES_PER_STAGE),
-    overtimeWaves: s.bossKilled ? Math.max(0, s.wave - stageWaves) : 0,
+    wave: s.wave > nw ? bossWave : Math.min(s.wave, WAVES_PER_STAGE),
+    wavesCleared: s.bossKilled ? bossWave : Math.min(s.wave - 1, nw),
+    overtimeWaves: s.bossKilled ? Math.max(0, s.wave - (nw + 1)) : 0,
     bossKilled: s.bossKilled,
     shots: s.shots,
     bestCombo: s.bestCombo,

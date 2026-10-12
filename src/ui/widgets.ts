@@ -2,6 +2,7 @@
 import { PALETTE } from '../render/palette';
 import { drawText, textWidth } from '../render/text';
 import { drawSprite } from '../render/sprite-cache';
+import { buyState, nodesFor } from '../meta/index';
 import type { App } from './app';
 
 const P = PALETTE;
@@ -139,29 +140,9 @@ export function drawBar(ctx: CanvasRenderingContext2D, x: number, y: number, w: 
   }
 }
 
-/** Set the one-shot tab reveal flags when their conditions are first met. Persists on change. */
-export function syncHints(app: App): void {
-  const { save, meta } = app;
-  const has = (pred: (t: string) => boolean): boolean => meta.NODES.some((n) => pred(n.tree) && (save.levels[n.id] ?? 0) > 0);
-  const want: Record<string, boolean> = {
-    'tab:combo': save.cash >= 40 || has((t) => t === 'combo'),
-    'tab:emerald': save.emeralds > 0 || has((t) => t === 'emerald'),
-    'tab:stage': save.unlocked > 0 || has((t) => t.startsWith('stage:')),
-  };
-  let changed = false;
-  for (const k of Object.keys(want)) {
-    if (want[k] && !save.hints[k]) {
-      save.hints[k] = true;
-      changed = true;
-    }
-  }
-  if (changed) app.persist();
-}
-
 /** True when any revealed upgrade node is currently buyable. */
 export function anyAffordable(app: App): boolean {
-  syncHints(app);
-  return app.meta.NODES.some((n) => app.meta.buyState(app.save, n) === 'ok');
+  return nodesFor(app.save).some((n) => buyState(app.save, n) === 'ok');
 }
 
 /** 3x3 yellow "something to buy" dot at a button's top-right corner. */

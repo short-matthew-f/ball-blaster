@@ -3,10 +3,13 @@ import type { RunState, Target } from '../core/types';
 import { TABLE, VIEW_H, VIEW_W } from '../core/types';
 import { BLAST_HERO_R, TARGET_DEFS, WAVES_PER_STAGE, stageById } from '../core/tuning';
 import { overtimeCashMult, rageLevel, rageStart } from '../sim/index';
+import type { Hazard } from '../core/types';
 import { PALETTE } from './palette';
 import { drawSprite, spriteSize, WHITE } from './sprite-cache';
 import { drawText } from './text';
 import { drawBar } from '../ui/widgets';
+import { MODIFIER_NAMES, WORLDS, makeStage, parseStageId } from '../core/worlds';
+import { intentVisible } from '../sim/index';
 
 const P = PALETTE;
 
@@ -16,7 +19,23 @@ function hash(x: number, y: number): number {
   return (h ^ (h >>> 15)) % 100;
 }
 
-let tableBg: HTMLCanvasElement | null = null;
+const tableBgs = new Map<string, HTMLCanvasElement>();
+
+function mix(a: string, b: string, t: number): string {
+  const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
+  const pb = [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
+  return `rgb(${pa.map((v, i) => Math.round(v + (pb[i] - v) * t)).join(',')})`;
+}
+
+/** Felt tint char for a stage's world ('' = stock green). */
+function feltTint(stage: string): string {
+  try {
+    const t = WORLDS[parseStageId(stage).world - 1]?.tint;
+    return t && t !== 'G' && t !== 'h' && t !== 'g' ? t : '';
+  } catch {
+    return '';
+  }
+}
 let menuBg: HTMLCanvasElement | null = null;
 
 function mk(): HTMLCanvasElement {
@@ -26,19 +45,21 @@ function mk(): HTMLCanvasElement {
   return c;
 }
 
-function paintFelt(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, vignette: boolean): void {
+function paintFelt(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, vignette: boolean, tint = ''): void {
+  const T = tint && P[tint] ? P[tint] : '';
+  const cG = T ? mix(P.G, T, 0.35) : P.G, cg = T ? mix(P.g, T, 0.25) : P.g, ch = T ? mix(P.h, T, 0.45) : P.h;
   for (let j = 0; j < h; j++) {
     for (let i = 0; i < w; i++) {
       const n = hash(x + i, y + j);
       // calm woven nap: sparse ordered dark dots, rare light flecks
-      let c = P.G;
-      if ((i + j * 3) % 8 === 0 && n < 70) c = P.g;
-      else if (n === 0) c = P.h;
+      let c = cG;
+      if ((i + j * 3) % 8 === 0 && n < 70) c = cg;
+      else if (n === 0) c = ch;
       if (vignette) {
         const ex = Math.min(i, w - 1 - i), ey = Math.min(j, h - 1 - j);
         const e = Math.min(ex, ey);
-        if (e < 5 && (i + j) % 2 === 0 && e < 3) c = P.g;
-        else if (e < 8 && (i + j) % 4 === 0 && c === P.G) c = P.g;
+        if (e < 5 && (i + j) % 2 === 0 && e < 3) c = cg;
+        else if (e < 8 && (i + j) % 4 === 0 && c === cG) c = cg;
       }
       g.fillStyle = c;
       g.fillRect(x + i, y + j, 1, 1);
@@ -47,8 +68,10 @@ function paintFelt(g: CanvasRenderingContext2D, x: number, y: number, w: number,
 }
 
 /** Static run background: HUD band, felt, wood rails, meter band. */
-function getTableBg(): HTMLCanvasElement {
-  if (tableBg) return tableBg;
+function getTableBg(stage: string): HTMLCanvasElement {
+  const tint = feltTint(stage);
+  const hit = tableBgs.get(tint);
+  if (hit) return hit;
   const c = mk();
   const g = c.getContext('2d')!;
   g.fillStyle = P['0'];
@@ -72,14 +95,14 @@ function getTableBg(): HTMLCanvasElement {
   g.fillStyle = P.w;
   g.fillRect(rx + 4, ry + 4, rw - 8, rh - 8);
   // felt
-  paintFelt(g, TABLE.x, TABLE.y, TABLE.w, TABLE.h, true);
+  paintFelt(g, TABLE.x, TABLE.y, TABLE.w, TABLE.h, true, tint);
   // rail studs (diamonds)
   g.fillStyle = P.Y;
   for (let i = 1; i < 5; i++) {
     g.fillRect(rx + 2, ry + Math.round((rh * i) / 5), 1, 1);
     g.fillRect(rx + rw - 3, ry + Math.round((rh * i) / 5), 1, 1);
   }
-  tableBg = c;
+  tableBgs.set(tint, c);
   return c;
 }
 
@@ -120,9 +143,41 @@ export function ringDots(ctx: CanvasRenderingContext2D, x: number, y: number, r:
   }
 }
 
+/** Worlds 3-6 reuse the Big Stripe sprite until their art lands: overlay the world tint. Null = no tint. */
+function bossTint(stage: string): string | null {
+  const w = parseStageId(stage).world;
+  return w >= 3 ? WORLDS[w - 1]?.tint ?? null : null;
+}
+
+/** Banner text for a stage's active modifiers ("RANGED · DARK"); '' when none. */
+export function modifierLine(stage: string): string {
+  return makeStage(stage).modifiers.map((m) => MODIFIER_NAMES[m]).join(' \u00b7 ');
+}
+
+/** Board hazards under the enemies: ice = pale cyan dithered disc with a lighter rim; stub kinds = dim grey. */
+function drawHazard(ctx: CanvasRenderingContext2D, h: Hazard): void {
+  const ice = h.kind === 'ice';
+  const fill = ice ? P.c : P['3'];
+  const rim = ice ? P['5'] : P['4'];
+  const R = Math.round(h.r), cx = Math.round(h.x), cy = Math.round(h.y);
+  ctx.globalAlpha = ice ? 0.55 : 0.4;
+  ctx.fillStyle = fill;
+  for (let y = -R; y <= R; y++) {
+    for (let x = -R; x <= R; x++) {
+      const d2 = x * x + y * y;
+      if (d2 > R * R || (x + y + 2 * R) % 2 !== 0) continue;
+      ctx.fillRect(cx + x, cy + y, 1, 1);
+    }
+  }
+  ctx.globalAlpha = ice ? 0.9 : 0.6;
+  ctx.fillStyle = rim;
+  for (let a = 0; a < Math.PI * 2; a += 1 / Math.max(4, R)) ctx.fillRect(Math.round(cx + Math.cos(a) * R), Math.round(cy + Math.sin(a) * R), 1, 1);
+  ctx.globalAlpha = 1;
+}
+
 /** Enemy sprite by kind (v2 names equal kinds); the boss is picked by stage. */
 export function enemySprite(t: Target, stage: string): string {
-  if (t.kind === 'boss') return stage === 'ice' ? 'boss_rime_golem' : 'boss_old_eight';
+  if (t.kind === 'boss') return parseStageId(stage).world === 2 ? 'boss_rime_golem' : 'boss_old_eight';
   return t.kind === 'cadre' ? 'grunt' : t.kind;
 }
 
@@ -201,6 +256,8 @@ function drawEnemyBody(ctx: CanvasRenderingContext2D, t: Target, stage: string, 
   }
   const frozen = !!t.frozen && t.frozen > 0;
   drawSprite(ctx, name, t.x, t.y, t.flash > 0 ? { tint: WHITE } : {});
+  const bt = t.kind === 'boss' && !(t.flash > 0) ? bossTint(stage) : null;
+  if (bt && P[bt]) drawSprite(ctx, name, t.x, t.y, { tint: P[bt], alpha: 0.4 });
   if (t.kind === 'cadre' && !(t.flash > 0)) drawSprite(ctx, name, t.x, t.y, { tint: P.B, alpha: 0.55 });
   if (frozen && !(t.flash > 0)) drawSprite(ctx, name, t.x, t.y, { tint: P.c, alpha: 0.5 });
   if (frozen) ringDots(ctx, t.x, t.y, t.r + 3, P['5'], 0, 0.45);
@@ -225,7 +282,17 @@ function drawEnemyOverlay(ctx: CanvasRenderingContext2D, s: RunState, t: Target,
 
   // intent: hidden once acted this phase (it rerolls) and while frozen
   const acted = s.phase === 'enemy' && s.acted.includes(t.id);
-  if (!acted && !frozen) {
+  if (!acted && !frozen && !intentVisible(s, t)) {
+    // Dark: intent hidden outside reach; a small grey "?" marks the enemy
+    const gx = Math.round(t.x), gy = Math.max(33, Math.round(t.y - t.r - 7 - (elite ? 3 : 0)));
+    ctx.globalAlpha = 0.8;
+    ctx.fillStyle = P['3'];
+    ctx.fillRect(gx - 5, gy - 5, 11, 11);
+    ctx.fillStyle = P['0'];
+    ctx.fillRect(gx - 4, gy - 4, 9, 9);
+    drawText(ctx, '?', gx, gy - 2, { align: 'center', color: P['3'] });
+    ctx.globalAlpha = 1;
+  } else if (!acted && !frozen) {
     const it = t.intent;
     let reach: Reach = 'grey';
     let neutral = false;
@@ -291,7 +358,8 @@ function drawEnemyOverlay(ctx: CanvasRenderingContext2D, s: RunState, t: Target,
 
 /** Table contents. Call inside the shake translate. */
 export function drawWorld(ctx: CanvasRenderingContext2D, s: RunState, now: number, flash = true, view: WorldView = {}): void {
-  ctx.drawImage(getTableBg(), 0, 0);
+  ctx.drawImage(getTableBg(s.stage), 0, 0);
+  for (const h of s.hazards ?? []) drawHazard(ctx, h);
   for (const o of s.obstacles) {
     if (o.dead) continue;
     drawSprite(ctx, o.kind, o.x, o.y, o.flash > 0 ? { tint: WHITE } : {});
@@ -323,7 +391,8 @@ export function drawHud(ctx: CanvasRenderingContext2D, s: RunState, bestWave: nu
   drawBar(ctx, 17, 3, 90, 12, frac, low ? P.p : P.R, low ? P.R : P.p, P['2']);
   drawText(ctx, `HP ${Math.ceil(Math.max(0, s.hp))}/${s.maxHp}`, 62, 4, { align: 'center', scale: 2, color: P['5'], shadow: P['0'] });
   // Row 2: cash, emeralds, overtime tag; enrage on the right
-  const overtime = s.wave > WAVES_PER_STAGE + 1;
+  const nw = st.waves.length;
+  const overtime = s.wave > nw + 1;
   drawSprite(ctx, 'coin', 9, 21);
   drawText(ctx, String(Math.floor(s.cash)), 16, 18, { color: P.Y, shadow: P['0'] });
   drawSprite(ctx, 'emerald', 62, 21);
@@ -344,7 +413,7 @@ export function drawHud(ctx: CanvasRenderingContext2D, s: RunState, bestWave: nu
   const bx = TABLE.x, bw = 120, ly = 294;
   const boss = s.targets.find((t) => t.kind === 'boss' && !t.dead);
   if (overtime) {
-    drawText(ctx, `OVERTIME +${s.wave - (WAVES_PER_STAGE + 1)}`, bx, ly, { scale: 2, color: P.Y, shadow: P['0'] });
+    drawText(ctx, `OVERTIME +${s.wave - (nw + 1)}`, bx, ly, { scale: 2, color: P.Y, shadow: P['0'] });
     if (otMult > 1) drawText(ctx, `${otMult}X CASH`, bx, 308, { color: P.o, shadow: P['0'] });
   } else if (s.bossKilled) {
     drawText(ctx, 'STAGE CLEARED', bx, ly, { scale: 2, color: P.Y, shadow: P['0'] });
@@ -354,7 +423,7 @@ export function drawHud(ctx: CanvasRenderingContext2D, s: RunState, bestWave: nu
   } else {
     const slotsX: number[] = [];
     let x = bx;
-    for (let i = 1; i <= WAVES_PER_STAGE; i++) {
+    for (let i = 1; i <= nw; i++) {
       drawText(ctx, `W${i}`, x, 297, { color: i === s.wave ? P['5'] : P['3'], shadow: P['0'] });
       const cx = x + 10 + 3.5;
       slotsX.push(cx);
@@ -371,10 +440,10 @@ export function drawHud(ctx: CanvasRenderingContext2D, s: RunState, bestWave: nu
     drawText(ctx, 'BOSS', x, 297, { color: P['3'], shadow: P['0'] });
     const bcx = x + 19 + 3.5;
     slotsX.push(bcx);
-    drawSprite(ctx, 'pip_boss', bcx, 300.5, { alpha: s.wave > WAVES_PER_STAGE ? 1 : 0.5 });
+    drawSprite(ctx, 'pip_boss', bcx, 300.5, { alpha: s.wave > nw ? 1 : 0.5 });
     // best-wave marker (the ghost line)
     if (bestWave >= 1) {
-      const mcx = Math.round(slotsX[Math.min(slotsX.length, Math.round(bestWave)) - 1]);
+      const mcx = Math.round(slotsX[(bestWave >= WAVES_PER_STAGE + 1 ? slotsX.length : Math.min(nw, Math.max(1, Math.round(bestWave)))) - 1]);
       ctx.fillStyle = P['5'];
       ctx.fillRect(mcx, 307, 1, 1);
       ctx.fillRect(mcx - 1, 308, 3, 1);

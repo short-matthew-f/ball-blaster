@@ -12,12 +12,10 @@ import {
   BLAST_HERO_DMG,
   BLAST_HERO_R,
   ELITE_CASH_MULT,
-  OVERTIME_CASH_MULT,
   OVERTIME_CASH_WAVES,
   SHATTER_MULT,
   BLAST_DEATH_HERO_DMG,
   TARGET_DEFS,
-  WAVES_PER_STAGE,
   stageById,
 } from '../core/tuning';
 import { makeEnemy } from './spawn';
@@ -34,14 +32,29 @@ export function hero(s: RunState): Ball {
   return b;
 }
 
-export function isOvertime(s: RunState): boolean {
-  return s.wave > WAVES_PER_STAGE + 1;
+/** Regular waves before the boss on this stage (3; Early Boss: 2). The boss wave is stageWaves + 1. */
+export function stageWaves(s: RunState): number {
+  return stageById(s.stage).waves.length;
 }
 
-/** Overtime cash multiplier: OVERTIME_CASH_MULT for the first OVERTIME_CASH_WAVES Overtime waves, then 1. */
+export function isOvertime(s: RunState): boolean {
+  return s.wave > stageWaves(s) + 1;
+}
+
+/** Overtime cash multiplier: the stage's overtimeCash (2; loops 1) for the first OVERTIME_CASH_WAVES Overtime waves, then 1. */
 export function overtimeCashMult(s: RunState): number {
-  const k = s.wave - (WAVES_PER_STAGE + 1);
-  return k >= 1 && k <= OVERTIME_CASH_WAVES ? OVERTIME_CASH_MULT : 1;
+  const k = s.wave - (stageWaves(s) + 1);
+  return k >= 1 && k <= OVERTIME_CASH_WAVES ? stageById(s.stage).overtimeCash : 1;
+}
+
+/** Enemy attack value scaled for the stage (intents, blasts, thorns), at least 1 for a positive base. */
+export function scaleAtk(s: RunState, n: number): number {
+  return n > 0 ? Math.max(1, Math.round(n * stageById(s.stage).atkScale)) : n;
+}
+
+/** Flat cash (wave bonus, chests, crates, Sweep) scaled for the stage. */
+export function scaleCash(s: RunState, n: number): number {
+  return Math.round(n * stageById(s.stage).waveCashScale);
 }
 
 /**
@@ -193,11 +206,11 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
     }
   }
   // Detonate (quiet) hits the hero for BLAST_HERO_DMG; a bomber killed by a hit only for BLAST_DEATH_HERO_DMG.
-  if (def.explodes) blast(s, t.x, t.y, t.kind, fx, quiet ? BLAST_HERO_DMG : BLAST_DEATH_HERO_DMG);
+  if (def.explodes) blast(s, t.x, t.y, t.kind, fx, scaleAtk(s, quiet ? BLAST_HERO_DMG : BLAST_DEATH_HERO_DMG));
 }
 
 /** Bomber blast: `heroDmg` to the hero within BLAST_HERO_R of its body, BLAST_ENEMY_DMG to enemies within BLAST_ENEMY_R. */
-export function blast(s: RunState, x: number, y: number, src: TargetKind, fx: FxEvent[], heroDmg = BLAST_HERO_DMG): void {
+export function blast(s: RunState, x: number, y: number, src: TargetKind, fx: FxEvent[], heroDmg = scaleAtk(s, BLAST_HERO_DMG)): void {
   fx.push({ t: 'explode', x, y, r: BLAST_ENEMY_R });
   const h = hero(s);
   if (Math.hypot(h.x - x, h.y - y) <= BLAST_HERO_R + h.r) heroDamage(s, heroDmg, src, h.x, h.y, fx, 'blast');

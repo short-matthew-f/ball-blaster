@@ -22,6 +22,7 @@ import {
   CHARGE_STOPS_ON_HIT,
   ENEMY_FRICTION_MULT,
   ENEMY_WALL_BOUNCE,
+  ICE_PATCH_FRICTION,
   HIT_COOLDOWN,
   HIT_MIN_SPEED,
   MAX_RESTITUTION,
@@ -29,7 +30,7 @@ import {
   TARGET_DEFS,
   stageById,
 } from '../core/tuning';
-import { addStagger, chainLightning, heal, heroDamage, hitEnemy } from './damage';
+import { addStagger, chainLightning, heal, heroDamage, hitEnemy, scaleAtk, scaleCash } from './damage';
 
 export const MAX_BALL_SPEED = MAX_LAUNCH_SPEED * 1.5;
 const OBSTACLE_RESTITUTION = 0.8;
@@ -136,7 +137,7 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
       }
     } else if (b.kind === 'main') {
       // Knocked into a thornback (or a Spiky elite) during the enemy phase: thorns still prick.
-      const thorns = thornsOf(t);
+      const thorns = thornsOf(s, t);
       if (thorns > 0) heroDamage(s, thorns, t.kind, b.x, b.y, fx, 'thorns');
     }
     return;
@@ -147,7 +148,7 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
   else dmg = s.stats.damage;
   const sticky = b.kind === 'main' && s.stats.ballType === 'sticky' && !s.stickyUsed;
   const heavy = b.kind === 'main' && s.stats.heavyHits > 0 && speed >= HEAVY_HIT_SPEED;
-  const thorns = thornsOf(t);
+  const thorns = thornsOf(s, t);
   hitEnemy(s, t, dmg, b.kind, fx, b, (heavy ? 2 : 1) + (sticky ? 1 : 0), speed);
   if (b.kind === 'main') {
     if (thorns > 0) heroDamage(s, thorns, t.kind, b.x, b.y, fx, 'thorns');
@@ -165,8 +166,14 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
   chainLightning(s, t, fx);
 }
 
-function thornsOf(t: Target): number {
-  return (TARGET_DEFS[t.kind].thorns ?? 0) + (t.elite === 'spiky' ? 1 : 0);
+function thornsOf(s: RunState, t: Target): number {
+  return scaleAtk(s, (TARGET_DEFS[t.kind].thorns ?? 0) + (t.elite === 'spiky' ? 1 : 0));
+}
+
+/** Ice hazard: a body whose centre is inside an ice patch has no friction or rolling deceleration. */
+export function onIce(s: RunState, x: number, y: number): boolean {
+  for (const z of s.hazards) if (z.kind === 'ice' && (x - z.x) ** 2 + (y - z.y) ** 2 < z.r * z.r) return true;
+  return false;
 }
 
 /** Enemy-enemy bump: the slower body (pre-impact) is the bumped one; a charger that bumps anything is blocked. */
@@ -311,7 +318,7 @@ function hitObstacle(s: RunState, o: Obstacle, fx: FxEvent[]): void {
     fx.push({ t: 'shrine', x: o.x, y: o.y });
     heal(s, s.stats.shrineHeal, o.x, o.y, fx);
   } else {
-    const cash = Math.round((o.kind === 'chest' ? s.stats.chestCash : s.stats.crateCash) * s.stats.cashMult);
+    const cash = scaleCash(s, (o.kind === 'chest' ? s.stats.chestCash : s.stats.crateCash) * s.stats.cashMult);
     s.cash += cash;
     fx.push({ t: 'chest', x: o.x, y: o.y, cash });
   }
@@ -524,8 +531,10 @@ export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
   for (const b of live) {
     if (b.resting || b.im === 0) continue;
     const enemy = !!b.en;
-    const fr = enemy ? st.friction * ENEMY_FRICTION_MULT : st.friction;
-    const rd = enemy ? st.rollDecel * ENEMY_FRICTION_MULT : st.rollDecel;
+    // Ice patch: (almost) frictionless, the body slides on through; a trace of drag keeps phases finite.
+    const ice = s.hazards.length > 0 && onIce(s, b.x, b.y) ? ICE_PATCH_FRICTION : 1;
+    const fr = (enemy ? st.friction * ENEMY_FRICTION_MULT : st.friction) * ice;
+    const rd = (enemy ? st.rollDecel * ENEMY_FRICTION_MULT : st.rollDecel) * ice;
     const k = Math.max(0, 1 - fr * h);
     b.vx *= k;
     b.vy *= k;

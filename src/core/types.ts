@@ -47,7 +47,36 @@ export interface Vec {
 
 // ---------- Stage ----------
 
-export type StageId = 'felt' | 'ice' | 'clock' | 'bog';
+/** Stage ids: `w1s1` ... `w6s4` (world 1-6, slot 1-4); loops prefix `l<k>`, e.g. `l1w1s1`. See core/worlds.ts. */
+export type StageId = string;
+
+/** Stage modifiers (DESIGN-v0.3 "Modifier pool"). Picked per stage by core/worlds.ts; never twice in one world. */
+export type Modifier =
+  | 'ranged' // ranged-heavy: grunts become skirmishers/clerics
+  | 'bombers' // double bombers
+  | 'elite' // extra elite: one more elite on every wave
+  | 'thinRails' // rails bounce 0.6
+  | 'bigRack' // +1 enemy per wave
+  | 'earlyBoss' // boss after 2 waves
+  | 'wardens' // clerics/thornbacks common
+  | 'swift' // all Advance +50 %
+  | 'hardy' // +25 % HP, -20 % count
+  | 'dark' // intents revealed only within reach (RunState.dark; see sim intentVisible)
+  | 'hiveWorld' // one hive per wave
+  | 'frostWorld'; // one frost per wave
+
+/** Boss traits: phases (HP thresholds), cadre (shield minions), moves (repositions every phase). */
+export type BossTrait = 'phases' | 'cadre' | 'moves';
+
+/** Board hazards. Only 'ice' has behaviour yet (zero friction inside); the rest are data-only stubs. */
+export type HazardKind = 'ice' | 'conveyor' | 'mud' | 'lava' | 'slot';
+
+export interface Hazard {
+  kind: HazardKind;
+  x: number;
+  y: number;
+  r: number;
+}
 
 export type Formation = 'rack' | 'wall' | 'pincer' | 'ring' | 'scatter';
 
@@ -59,12 +88,34 @@ export interface WaveDef {
   formationWeights?: Partial<Record<Formation, number>>;
   /** Elite wave marker (from wave 3): >= 0 = one random regular of the wave is elite; -1/absent = none. */
   elite?: number;
+  /** Number of elites (random regulars of the wave); overrides `elite` when set. */
+  elites?: number;
 }
 
 export interface StageDef {
   id: StageId;
-  index: number; // 0-based order
+  /** Global stage index n (0 = w1s1, 23 = w6s4, 24 = l1w1s1). Drives scaling. */
+  index: number;
+  /** World 1-6, slot 1-4, loop 0+. */
+  world: number;
+  slot: number;
+  loop: number;
+  /** Display name, e.g. "Felt Hall 2". */
   name: string;
+  modifiers: Modifier[];
+  bossTraits: BossTrait[];
+  /** Board hazards (copied onto RunState.hazards at run start). */
+  hazards: Hazard[];
+  /** Multiplier on enemy attack values (intents, blasts, thorns). */
+  atkScale: number;
+  /** Advance distance multiplier (swift). */
+  advanceMult: number;
+  /** Extra Shoot damage before scaling (ranged). */
+  shootBonus: number;
+  /** Overtime cash multiplier for the first OVERTIME_CASH_WAVES Overtime waves (loops: 1). */
+  overtimeCash: number;
+  /** Wave-clear cash multiplier (scaling). */
+  waveCashScale: number;
   /** Hero proportional speed decay per second (v *= 1 - friction*dt). Enemies use ENEMY_FRICTION_MULT x this. */
   friction: number;
   /** Hero constant rolling deceleration in px/s^2 (kills the exponential tail). */
@@ -74,7 +125,7 @@ export interface StageDef {
   /** Regular waves, then the boss wave (last entry). */
   waves: WaveDef[];
   bossWave: WaveDef;
-  /** Multiplier on all enemy HP for this stage (stage balance). */
+  /** Multiplier on all enemy HP for this stage (scaling x modifiers); the boss uses boss.hp directly. */
   hpScale: number;
   /** Cash per kill multiplier. */
   cashScale: number;
@@ -85,6 +136,7 @@ export interface StageDef {
 
 export interface BossDef {
   name: string;
+  /** Scaled HP for this stage. */
   hp: number;
   r: number;
   /** HP fractions where the boss enters its next phase, descending, e.g. [0.5]. */
@@ -267,6 +319,10 @@ export interface TargetDef {
 
 export interface RunState {
   stage: StageId;
+  /** Board hazards for this run (from the stage). */
+  hazards: Hazard[];
+  /** 'dark' modifier: the renderer shows an enemy's intent only when sim intentVisible(s, t) is true. */
+  dark: boolean;
   seed: number;
   rng: Rng;
   stats: RunStats;
@@ -459,12 +515,12 @@ export interface SaveData {
   emeralds: number;
   /** Upgrade node id -> level. Covers cash tree, emerald tree and stage sub-trees. */
   levels: Record<string, number>;
-  /** Highest unlocked stage index. */
+  /** Highest global stage index reached (see core/worlds.ts globalIndex). */
   unlocked: number;
   current: StageId;
-  /** 0 none, 1-3 waves cleared, 4 = boss killed. */
-  bestWave: Partial<Record<StageId, number>>;
-  bossKills: Partial<Record<StageId, number>>;
+  /** Keyed by stage id. 0 none, 1-3 waves cleared, 4 = boss killed. */
+  bestWave: Record<StageId, number>;
+  bossKills: Record<StageId, number>;
   /** Equipped ball type (must be unlocked in emerald tree). */
   ballType: BallType;
   /** flash: false = reduced flashing (alpha fades, solid bolts, slow shimmer). Default from prefers-reduced-motion. */
@@ -477,22 +533,32 @@ export interface SaveData {
 // ---------- Upgrade tree data (meta) ----------
 
 export type Currency = 'cash' | 'emerald';
-export type TreeId = 'power' | 'vitality' | 'tactics' | 'combo' | 'emerald' | `stage:${StageId}`;
+export type NodeKind = 'stat' | 'unlock' | 'keystone' | 'capstone' | 'counter';
+export type Trunk = 'power' | 'vitality' | 'tactics' | 'combo';
 
 export interface UpgradeNode {
   id: string;
-  tree: TreeId;
   name: string;
-  /** Short line for the shop card. Use {v} for the value at next level. */
+  /** Short line for the node panel. Use {v} for the value at next level. */
   desc: string;
   currency: Currency;
+  kind: NodeKind;
+  /** 1 for one-shot kinds. */
   maxLevel: number;
   /** Cost to buy level (current+1). */
   cost: (level: number) => number;
-  /** Node ids that must be >= 1 before this is purchasable. */
-  requires?: string[];
-  /** Grid position in the tree view (col 0..3, row 0..n). */
-  pos: { col: number; row: number };
+  /** Virtual tree canvas 640x640, root at (320,320), spacing ~40. */
+  x: number;
+  y: number;
+  /** Adjacency (undirected; each edge listed once, on either node). */
+  links: string[];
+  /** 0 root, 1..3 core, 4+ grafts/loops. */
+  ring: number;
+  trunk: Trunk;
+  /** World index (1..6) whose first boss kill reveals this node. */
+  graft?: number;
+  /** Loop index for procedural loop rings. */
+  loop?: number;
   /** Sprite name for the icon (render/sprites.ts). */
   icon: string;
   /** Applies this node's effect at `level` onto stats. */
@@ -504,7 +570,12 @@ export interface UpgradeNode {
  * UI imports from 'meta/index'; sim never imports meta.
  */
 export interface MetaApi {
+  /** Core + all grafts + loop ring 1 (see nodesFor for the save-dependent set). */
   NODES: UpgradeNode[];
+  nodesFor(save: SaveData): UpgradeNode[];
+  isReachable(save: SaveData, id: string): boolean;
+  distanceFromOwned(save: SaveData, id: string): number;
+  pathToOwned(save: SaveData, id: string): string[];
   newSave(): SaveData;
   /** Reads localStorage (try/catch); returns newSave() on missing/corrupt. */
   loadSave(): SaveData;
@@ -517,8 +588,8 @@ export interface MetaApi {
   nodeLevel(save: SaveData, id: string): number;
   /** Cost of next level, or null if maxed. */
   nextCost(save: SaveData, node: UpgradeNode): number | null;
-  /** 'ok' | 'locked' (requires unmet or stage not reached) | 'maxed' | 'poor'. */
-  buyState(save: SaveData, node: UpgradeNode): 'ok' | 'locked' | 'maxed' | 'poor';
+  /** 'locked' = graft unrevealed / not adjacent / capstone siblings unmaxed; 'hidden' = >2 steps from any owned node. */
+  buyState(save: SaveData, node: UpgradeNode): 'ok' | 'locked' | 'maxed' | 'poor' | 'hidden';
   /** Mutates save; returns true on success. */
   buy(save: SaveData, node: UpgradeNode): boolean;
   /**

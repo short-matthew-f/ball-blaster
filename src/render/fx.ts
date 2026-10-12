@@ -2,7 +2,6 @@
 // Consumes FxEvents from the sim; never touches sim state.
 import type { FxEvent, TargetKind, Vec } from '../core/types';
 import { TABLE } from '../core/types';
-import { WAVES_PER_STAGE } from '../core/tuning';
 import { PALETTE } from './palette';
 import { drawText, textWidth } from './text';
 
@@ -15,7 +14,6 @@ interface Ring { x: number; y: number; r: number; life: number; max: number; col
 
 const P = PALETTE;
 /** First Overtime wave number (stage waves + boss wave + 1). */
-const OVERTIME_FIRST = WAVES_PER_STAGE + 2;
 const BANNER_CAP = 3;
 const KIND_COLORS: Record<TargetKind, string[]> = {
   frost: [P.c, P['5'], P.B],
@@ -56,6 +54,8 @@ export class Fx {
   ballPos: Vec | null = null;
   /** Boss display name for the arrival banner (set by the run screen). */
   bossName = '';
+  /** Regular waves before the boss (stage.waves.length); Overtime starts two waves later. */
+  waves = 3;
   private clock = 0;
 
   clear(): void {
@@ -138,8 +138,8 @@ export class Fx {
         case 'waveStart':
           this.pendingWave = e.overtime ? 0 : e.wave;
           if (e.overtime) {
-            if (e.wave === OVERTIME_FIRST) this.banner('OVERTIME!', P.o, 3, 1.5);
-            else this.banner(`OVERTIME +${e.wave - OVERTIME_FIRST + 1}`, P.o, 2, 1.0);
+            if (e.wave === this.waves + 2) this.banner('OVERTIME!', P.o, 3, 1.5);
+            else this.banner(`OVERTIME +${e.wave - (this.waves + 2) + 1}`, P.o, 2, 1.0);
           }
           break;
         case 'heroHit': {

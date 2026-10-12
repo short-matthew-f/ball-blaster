@@ -45,7 +45,8 @@ export function bossAlive(s: RunState): boolean {
 export function makeEnemy(s: RunState, kind: TargetKind, x: number, y: number, atkBonus = 0): Target {
   const def = TARGET_DEFS[kind];
   const st = stageById(s.stage);
-  // The boss keeps its def HP (exempt from the stage hpScale): Rime Golem 60 HP behind 3 cadre was a slog.
+  // The boss uses the stage's boss HP (archetype HP x HP_GROWTH^n), not hpScale (Hardy and the v0.2 per-world
+  // multiplier never applied to it: Rime Golem 60 HP behind 3 cadre was a slog).
   const hp = kind === 'boss' ? st.boss.hp : Math.ceil(def.hp * st.hpScale);
   const t: Target = {
     id: s.nextId++,
@@ -248,11 +249,12 @@ export function placeFormation(s: RunState, kinds: TargetKind[], formation: Form
 
 function waveFor(s: RunState): { def: WaveDef; bonus: number } {
   const st = stageById(s.stage);
+  const nw = st.waves.length;
   const w = s.wave;
-  if (w <= WAVES_PER_STAGE) return { def: st.waves[w - 1], bonus: 0 };
-  if (w === WAVES_PER_STAGE + 1) return { def: st.bossWave, bonus: 0 };
-  const k = w - (WAVES_PER_STAGE + 1); // Overtime wave k: +k HP, +k attack
-  return { def: st.waves[(k - 1) % WAVES_PER_STAGE], bonus: k };
+  if (w <= nw) return { def: st.waves[w - 1], bonus: 0 };
+  if (w === nw + 1) return { def: st.bossWave, bonus: 0 };
+  const k = w - (nw + 1); // Overtime wave k: +k HP, +k attack
+  return { def: st.waves[(k - 1) % nw], bonus: k };
 }
 
 function pickFormation(s: RunState, def: WaveDef, overtime: boolean): Formation {
@@ -279,20 +281,23 @@ export function spawnWave(s: RunState, fx: FxEvent[]): Target[] {
   // Elite waves: the elite is a random regular of the wave (not always the def.elite slot, which made a Hardy brute
   // the W3 elite every run).
   const eligible = kinds.filter((k) => k !== 'boss');
-  const eliteKind: TargetKind | null = (def.elite ?? -1) >= 0 && eligible.length > 0 ? eligible[s.rng.int(0, eligible.length - 1)] : null;
+  // (Extra Elite: one more random regular per elite.)
+  const nElite = def.elites ?? ((def.elite ?? -1) >= 0 ? 1 : 0);
+  const eliteKinds: TargetKind[] = [];
+  for (let i = 0; i < nElite && eligible.length > 0; i++) eliteKinds.push(eligible.splice(s.rng.int(0, eligible.length - 1), 1)[0]);
 
   const formation = pickFormation(s, def, bonus > 0);
   const slots = placeFormation(s, kinds, formation);
   const out: Target[] = [];
-  let eliteDone = false;
   for (const m of slots) {
     const e = makeEnemy(s, m.kind, m.x, m.y, bonus);
     // HP scaling: +WAVE_HP_STEP per stage wave (not the boss), + OVERTIME_HP_PER_WAVE x k in Overtime wave k.
-    const waveIdx = Math.min(s.wave, WAVES_PER_STAGE) - 1;
+    const waveIdx = Math.min(s.wave, stageById(s.stage).waves.length, WAVES_PER_STAGE) - 1;
     const hp = e.kind === 'boss' ? e.hp : Math.round(e.hp * (1 + WAVE_HP_STEP * waveIdx)) + OVERTIME_HP_PER_WAVE * bonus;
     e.hp = e.maxHp = hp;
-    if (!eliteDone && eliteKind === m.kind) {
-      eliteDone = true;
+    const ei = eliteKinds.indexOf(m.kind);
+    if (ei >= 0) {
+      eliteKinds.splice(ei, 1);
       const mods: EliteMod[] = ['spiky', 'hardy', 'swift'];
       e.elite = mods[s.rng.int(0, mods.length - 1)];
       if (e.elite === 'hardy') e.hp = e.maxHp = Math.ceil(e.maxHp * HARDY_HP_MULT);
@@ -316,7 +321,7 @@ export function spawnWave(s: RunState, fx: FxEvent[]): Target[] {
   return out;
 }
 
-/** Rime Golem: shield minions in a ring round the boss; the boss is shielded while any lives. */
+/** Cadre trait (Rime Golem always): shield minions in a ring round the boss; the boss is shielded while any lives. */
 function spawnCadre(s: RunState, boss: Target, fx: FxEvent[]): Target[] {
   const n = stageById(s.stage).boss.cadre;
   const out: Target[] = [];

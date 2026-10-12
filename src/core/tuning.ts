@@ -1,5 +1,6 @@
 // All balance numbers live here. Sim and meta both read from this file.
-import type { Formation, RunStats, StageDef, StageId, TargetDef, TargetKind, WaveDef } from './types';
+import type { RunStats, StageDef, StageId, TargetDef, TargetKind } from './types';
+import { makeStage } from './worlds';
 
 // Roster (DESIGN-v0.2.md "Roster (Felt Hall)"). Masses are near-equal, pool-break style (step 2): hero 1 (x massMult),
 // grub 0.8, grunt/skirmisher/bomber 1.2, bouncer 1, cleric/frost 1.5, broodmother/thornback 2, hive 3, brute 4, boss 8.
@@ -133,6 +134,11 @@ export const ENRAGE_BASE = 8;
 export const ENRAGE_PER_WAVE = 2;
 /** Overtime: enrage starts at this turn of every Overtime wave (flat). */
 export const ENRAGE_OVERTIME_TURN = 6;
+/**
+ * Enraged Attack beyond reach charges anyway (banking round cover); from this rage level a covered attacker's blow lands
+ * as an instant strike. Liveness backstop: a brute caged behind bumpers made a 600-shot run (v0.3 step 2 bot).
+ */
+export const ENRAGE_STRIKE_LEVEL = 5;
 export const OVERTIME_CASH_MULT = 2;
 /** Only the first this-many Overtime waves pay OVERTIME_CASH_MULT; later ones pay 1x. */
 export const OVERTIME_CASH_WAVES = 5;
@@ -201,57 +207,36 @@ export const BALL_TYPES = {
 export const SPIT_LIFE_CAP = 3;
 export const EMERALD_REPEAT_DECAY = 0.68; // reward = max(1, round(base * decay^priorKills)); felt 5 -> 5,3,2,2,1...
 
-// Formation weights by wave (step 3): racks break for 3-4 hits; Scatter appears only in Overtime.
-const W1_FORM: Partial<Record<Formation, number>> = { rack: 1 };
-const W2_FORM: Partial<Record<Formation, number>> = { rack: 60, wall: 40 };
-const W3_FORM: Partial<Record<Formation, number>> = { rack: 30, wall: 30, pincer: 25, ring: 15 };
-const BOSS_FORM: Partial<Record<Formation, number>> = { pincer: 50, ring: 50 };
 /** Overtime waves reuse their wave's weights plus Scatter at this weight. */
 export const OVERTIME_SCATTER_WEIGHT = 20;
 
-const FELT_WAVES: WaveDef[] = [
-  { slots: ['grunt', 'grunt', 'skirmisher'], formations: ['rack'], formationWeights: W1_FORM },
-  { slots: ['grunt', 'grunt', 'skirmisher', ['bouncer', 'thornback'], 'brute'], formations: ['rack', 'wall'], formationWeights: W2_FORM },
-  { slots: ['grunt', 'skirmisher', 'bomber', ['broodmother', 'hive'], 'brute'], formations: ['rack', 'wall', 'pincer', 'ring'], formationWeights: W3_FORM, elite: 4 },
-];
+// ---------- v0.3 scaling (DESIGN-v0.3.md "Scaling"; tuned by the multi-stage bot in tests/proto.test.ts) ----------
+/** Per global stage index n: enemy HP x HP_GROWTH^n (boss included), attack x ATK_GROWTH^n, cash x CASH_GROWTH^n. */
+export const HP_GROWTH = 1.22;
+export const ATK_GROWTH = 1.15;
+export const CASH_GROWTH = 1.22;
+/** Cash per kill at n = 0 (Felt 1). */
+export const BASE_CASH_SCALE = 0.5;
+/** Emeralds for the first boss kill of stage n: EMERALD_BASE + n (repeats decay by EMERALD_REPEAT_DECAY). */
+export const EMERALD_BASE = 3;
+/** Modifier strengths. */
+export const HARDY_MOD_HP = 1;
+export const HARDY_MOD_COUNT = 0.2;
+/** Per-slot difficulty (slot 1..4): enemy HP and attack multipliers on top of scaling (smooths modifier bumps). */
+export const SLOT_HP_MULT = [1, 1, 1.2, 1.05];
+export const SLOT_ATK_MULT = [1, 1, 1.1, 1.1];
+export const SWIFT_MOD = 1.5;
+/** Ranged: extra skirmishers per wave and Shoot damage bonus (before attack scaling). */
+export const RANGED_EXTRA = 2;
+export const RANGED_SHOOT = 1;
+export const THIN_RAILS_BOUNCE = 0.6;
+export const EARLY_BOSS_WAVES = 2;
+/** Ice hazard patches: friction and rolling deceleration x this inside a patch (near zero; a trace keeps phases finite). */
+export const ICE_PATCH_FRICTION = 0.1;
+/** Dark: an intent is shown only when the enemy is within max(its reach, DARK_REVEAL_R) px (edge gap) of the hero. */
+export const DARK_REVEAL_R = 80;
 
-const ICE_WAVES: WaveDef[] = [
-  { slots: ['grunt', 'grunt', 'frost', 'skirmisher'], formations: ['rack'], formationWeights: W1_FORM },
-  { slots: ['grunt', 'frost', 'skirmisher', ['bouncer', 'thornback'], 'brute'], formations: ['rack', 'wall'], formationWeights: W2_FORM },
-  { slots: ['grunt', 'frost', 'bomber', ['broodmother', 'thornback'], 'brute'], formations: ['rack', 'wall', 'pincer', 'ring'], formationWeights: W3_FORM, elite: 4 },
-];
-
-export const STAGES: StageDef[] = [
-  {
-    id: 'felt',
-    index: 0,
-    name: 'Felt Hall',
-    friction: 0.6,
-    rollDecel: 70,
-    wallBounce: 0.75,
-    waves: FELT_WAVES,
-    bossWave: { slots: ['boss', 'grunt', 'cleric'], formations: ['pincer', 'ring'], formationWeights: BOSS_FORM },
-    hpScale: 1,
-    cashScale: 0.5,
-    emeraldReward: 5,
-    boss: { name: 'Big Stripe', hp: 60, r: 23, phases: [0.5], cadre: 0 },
-  },
-  {
-    id: 'ice',
-    index: 1,
-    name: 'Ice Cavern',
-    friction: 0.4,
-    rollDecel: 45,
-    wallBounce: 0.92,
-    waves: ICE_WAVES,
-    bossWave: { slots: ['boss', 'frost', 'grunt'], formations: ['pincer', 'ring'], formationWeights: BOSS_FORM },
-    hpScale: 1.5,
-    cashScale: 0.7,
-    emeraldReward: 6,
-    boss: { name: 'Rime Golem', hp: 40, r: 23, phases: [0.5], cadre: 3 },
-  },
-];
-
+/** Stage definitions are generated (core/worlds.ts); this delegates to the memoised generator. */
 export function stageById(id: StageId): StageDef {
-  return STAGES.find((s) => s.id === id) ?? STAGES[0];
+  return makeStage(id);
 }

@@ -2,7 +2,7 @@
 import type { RunResult, RunState, Vec } from '../core/types';
 import { CANCEL_RADIUS, FAST_FORWARD_MULT, MAX_PULL, MIN_POWER, SIM_DT, TABLE } from '../core/types';
 import { PALETTE } from '../render/palette';
-import { drawHud, drawWorld, ringDots } from '../render/renderer';
+import { drawHud, drawWorld, modifierLine, ringDots } from '../render/renderer';
 import { stageById } from '../core/tuning';
 import { Fx } from '../render/fx';
 import { drawText } from '../render/text';
@@ -31,6 +31,10 @@ export class RunScreen implements Screen {
   private prevPhase = '';
   private pulse = 0;
   private phaseHint = 0;
+  /** Modifier banner: shown from run start (bannerWait) until 1.5 s after the first aim ends. */
+  private bannerWait = true;
+  private bannerT = 0;
+  private bannerText = '';
 
   constructor(private app: App) {}
 
@@ -38,6 +42,10 @@ export class RunScreen implements Screen {
     this.state = state;
     this.fx.clear();
     this.fx.bossName = stageById(state.stage).boss.name;
+    this.fx.waves = stageById(state.stage).waves.length;
+    this.bannerText = modifierLine(state.stage);
+    this.bannerWait = true;
+    this.bannerT = 0;
     this.acc = 0;
     this.ff = false;
     this.overTimer = 0;
@@ -81,6 +89,11 @@ export class RunScreen implements Screen {
     sfx.beginFrame();
     this.pulse = Math.max(0, this.pulse - dt);
     this.phaseHint = Math.max(0, this.phaseHint - dt);
+    this.bannerT = Math.max(0, this.bannerT - dt);
+    if (this.bannerWait && s.phase !== 'aim') {
+      this.bannerWait = false;
+      this.bannerT = 1.5;
+    }
     if (s.phase === 'aim' && this.prevPhase !== '' && this.prevPhase !== 'aim') this.pulse = PULSE_T;
     if (s.phase === 'enemy' && this.prevPhase !== 'enemy' && !this.app.save.hints.phaseTaught) {
       this.app.save.hints.phaseTaught = true;
@@ -158,6 +171,7 @@ export class RunScreen implements Screen {
       ctx.globalAlpha = 1;
     }
     this.drawPhaseHint(ctx);
+    this.drawModBanner(ctx);
     this.fx.drawOverlay(ctx);
     ctx.restore();
 
@@ -243,6 +257,15 @@ export class RunScreen implements Screen {
       ctx.fillStyle = i < lit ? color : P['2'];
       ctx.fillRect(px, 4, 3, 3);
     }
+  }
+
+  private drawModBanner(ctx: CanvasRenderingContext2D): void {
+    if (!this.bannerText || !(this.bannerWait || this.bannerT > 0)) return;
+    ctx.globalAlpha = this.bannerWait ? 0.9 : Math.min(1, this.bannerT / 0.4) * 0.9;
+    ctx.fillStyle = P['0'];
+    ctx.fillRect(TABLE.x, 32, TABLE.w, 11);
+    drawText(ctx, this.bannerText, 90, 35, { align: 'center', color: P.o, shadow: P['0'] });
+    ctx.globalAlpha = 1;
   }
 
   /** One-time "THEY MOVE AFTER YOU" plate on the first enemy phase. */

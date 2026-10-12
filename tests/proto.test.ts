@@ -2,8 +2,9 @@
 // Two bots (nearest enemy / largest cluster, always full power) x two stat lines (run 1 base, mid-game) x 30 seeds.
 import { describe, expect, it } from 'vitest';
 import { MAX_PULL, SIM_DT, TABLE, type RunResult, type RunState, type RunStats, type SaveData, type Target } from '../src/core/types';
-import { NODES, bankRun, buildStats, buy, buyState, newSave, nextCost } from '../src/meta/index';
-import { BASE_STATS } from '../src/core/tuning';
+import { bankRun, buildStats, buy, buyState, newSave, nextCost, nodesFor } from '../src/meta/index';
+import { BASE_STATS, stageById } from '../src/core/tuning';
+import { globalIndex, idFromIndex, nextStageId, stageId } from '../src/core/worlds';
 import { createRun, shoot, step } from '../src/sim/index';
 import { maxOverlap } from '../src/sim/physics';
 
@@ -62,7 +63,7 @@ function checkSane(s: RunState, where: string, problems: string[]): void {
 }
 
 function playRun(seed: number, stats: RunStats, bot: Bot): RunLog {
-  const s = createRun('felt', stats, seed);
+  const s = createRun('w1s1', stats, seed);
   const log: RunLog = { hits: [], kills: [], jams: 0, knock: [], enemySec: [], resolveSec: [], dmgPerPhase: [], charges: 0, restGap: [], bumps: 0, direct: 0, connects: 0, blockedCharges: 0, attackAsAdvance: 0, shotsFired: 0, shots: 0, seconds: 0, cash: 0, wave: 0, terminated: false, problems: [] };
   checkSane(s, 'start', log.problems);
   while (s.phase === 'aim' && s.shots < SHOT_CAP) {
@@ -228,13 +229,21 @@ describe('v0.2 prototype bot (30 seeds per config)', () => {
   });
 });
 
-// ---------- Progression bot: newSave -> buildStats -> play -> bankRun -> greedy cheapest buys ----------
+// ---------- Multi-stage progression bot (DESIGN-v0.3 "Scaling": the release gate) ----------
+// newSave -> buildStats -> play the current stage -> bankRun -> greedy cheapest buys -> on a boss kill advance current
+// to nextStageId. Runs-to-clear = runs played on a stage up to and including its first boss kill.
+// Env overrides for tuning: PROG_SEEDS, PROG_RUNS.
 
-const PROG_RUNS = 25;
-const PROG_SEEDS = 8;
+const PROG_SEEDS = Number(process.env.PROG_SEEDS ?? 16);
+const PROG_RUNS = Number(process.env.PROG_RUNS ?? 160);
+const GATE_STAGES = 12; // w1s1 .. w3s4: asserted
+const SMOKE_STAGES = 16; // + w4s1 .. w4s4: reported only
+const GATE: [number, number] = [4, 9];
+const LAST_STAGE_MAX = 20; // stage 11: worst seed
+const BUY_WINDOW = 3; // runs after arrival within which at least one node must be affordable
 
-function playForResult(seed: number, stats: RunStats): RunResult {
-  const s = createRun('felt', stats, seed);
+function playForResult(stage: string, seed: number, stats: RunStats): RunResult {
+  const s = createRun(stage, stats, seed);
   while (s.phase === 'aim' && s.shots < 600) {
     const h = s.balls[0];
     const tg = pickTarget(s, 'cluster');
@@ -242,53 +251,120 @@ function playForResult(seed: number, stats: RunStats): RunResult {
     shoot(s, { x: ((tg.x - h.x) / d) * MAX_PULL, y: ((tg.y - h.y) / d) * MAX_PULL });
     while ((s.phase as string) === 'resolve' || (s.phase as string) === 'enemy') step(s, SIM_DT * 8);
   }
-  expect(s.phase, `seed ${seed}: progression run hit the shot cap`).toBe('over');
+  expect(s.phase, `${stage} seed ${seed}: progression run hit the shot cap`).toBe('over');
   return s.result!;
 }
 
-function greedyBuy(save: SaveData): void {
+/** Greedy cheapest-first shopping. Returns nodes bought and cash spent. */
+function greedyBuy(save: SaveData): { bought: number; cash: number } {
+  const out = { bought: 0, cash: 0 };
   for (;;) {
-    const ok = NODES.filter((n) => buyState(save, n) === 'ok');
-    if (!ok.length) return;
+    const ok = nodesFor(save).filter((n) => buyState(save, n) === 'ok');
+    if (!ok.length) return out;
     ok.sort((a, b) => (nextCost(save, a) ?? 0) - (nextCost(save, b) ?? 0) || a.id.localeCompare(b.id));
+    const c0 = save.cash;
     buy(save, ok[0]);
+    out.bought++;
+    out.cash += c0 - save.cash;
   }
 }
 
-describe('progression bot (greedy cheapest-node shopper, felt)', () => {
-  it('reports first boss reached / killed, run lengths and overtime', () => {
-    const firstReach: number[] = [];
-    const firstKill: number[] = [];
-    const secs: Record<number, number[]> = { 1: [], 5: [], 10: [], 20: [], 25: [] };
-    const otAt20: number[] = [];
-    const waveAt: Record<number, number[]> = { 1: [], 5: [], 10: [], 20: [] };
-    for (let k = 0; k < PROG_SEEDS; k++) {
-      const save = newSave();
-      let reach = 0;
-      let killed = 0;
-      for (let r = 1; r <= PROG_RUNS; r++) {
-        const res = playForResult(5000 + k * 100 + r, buildStats(save));
-        bankRun(save, res);
-        save.current = 'felt';
-        if (!reach && res.wave >= 4) reach = r;
-        if (!killed && res.bossKilled) killed = r;
-        if (secs[r]) secs[r].push(res.seconds);
-        if (waveAt[r]) waveAt[r].push(res.bossKilled ? 4 + res.overtimeWaves : res.wave);
-        if (r === 20) otAt20.push(res.overtimeWaves);
-        greedyBuy(save);
-      }
-      firstReach.push(reach || PROG_RUNS + 1);
-      firstKill.push(killed || PROG_RUNS + 1);
+/** Nodes still worth buying (not maxed, not hidden/locked by world). */
+function openNodes(save: SaveData): number {
+  return nodesFor(save).filter((n) => {
+    const b = buyState(save, n);
+    return b === 'ok' || b === 'poor';
+  }).length;
+}
+
+interface StageLog {
+  runs: number;
+  cleared: boolean;
+  dmg: number;
+  hp: number;
+  open: number;
+  secs: number[];
+  /** Nodes bought from arrival through the first BUY_WINDOW runs on the stage. */
+  earlyBuys: number;
+}
+
+interface ProgLog {
+  stages: StageLog[];
+  earned60: number;
+  spent60: number;
+}
+
+function progression(seed: number): ProgLog {
+  const save = newSave();
+  save.current = stageId(1, 1);
+  save.unlocked = 0;
+  const log: ProgLog = { stages: [], earned60: 0, spent60: 0 };
+  let cur: StageLog | null = null;
+  let arrivalBuys = 0;
+  for (let r = 1; r <= PROG_RUNS; r++) {
+    const n = globalIndex(save.current);
+    if (!cur) {
+      const st = buildStats(save);
+      cur = { runs: 0, cleared: false, dmg: st.damage, hp: st.maxHp, open: openNodes(save), secs: [], earlyBuys: arrivalBuys };
+      log.stages[n] = cur;
     }
-    const med = (a: number[]) => pct(a, 0.5);
-    const table: Record<string, Record<string, string | number>> = {
-      'first boss reached (run)': { median: med(firstReach), min: Math.min(...firstReach), max: Math.max(...firstReach) },
-      'first boss kill (run)': { median: med(firstKill), min: Math.min(...firstKill), max: Math.max(...firstKill) },
-    };
-    for (const r of [1, 5, 10, 20, 25]) table[`r${r} seconds`] = { median: f1(med(secs[r])), min: f1(Math.min(...secs[r])), max: f1(Math.max(...secs[r])) };
-    for (const r of [1, 5, 10, 20]) table[`r${r} wave (5+ = overtime)`] = { median: med(waveAt[r]), min: Math.min(...waveAt[r]), max: Math.max(...waveAt[r]) };
-    table['r20 overtime waves'] = { median: med(otAt20), min: Math.min(...otAt20), max: Math.max(...otAt20) };
-    console.log(`Progression (${PROG_SEEDS} seeds x ${PROG_RUNS} runs; ${PROG_RUNS + 1} = never)`);
+    const res = playForResult(save.current, seed * 1000 + r, buildStats(save));
+    bankRun(save, res);
+    if (r <= 60) log.earned60 += res.cash;
+    cur.runs++;
+    cur.secs.push(res.seconds);
+    const onStage = cur;
+    if (res.bossKilled) {
+      cur.cleared = true;
+      cur = null;
+      if (n + 1 >= SMOKE_STAGES) break;
+      save.current = nextStageId(save.current);
+      save.unlocked = Math.max(save.unlocked, globalIndex(save.current));
+    }
+    const b = greedyBuy(save);
+    if (r <= 60) log.spent60 += b.cash;
+    if (onStage.runs <= BUY_WINDOW && !onStage.cleared) onStage.earlyBuys += b.bought;
+    arrivalBuys = cur ? 0 : b.bought; // buys right after a clear count for the next stage's arrival
+  }
+  return log;
+}
+
+describe('multi-stage progression bot (greedy cheapest-node shopper)', () => {
+  it('runs-to-clear per stage is within [4, 9] (median over seeds), stage 11 worst <= 20, no dead economy', () => {
+    const all = Array.from({ length: PROG_SEEDS }, (_, k) => progression(7 + k));
+    const table: Record<string, Record<string, string | number>> = {};
+    const fails: string[] = [];
+    for (let n = 0; n < SMOKE_STAGES; n++) {
+      const logs = all.map((l) => l.stages[n]).filter((x): x is StageLog => !!x);
+      if (!logs.length) continue;
+      // A seed still on the stage when the budget ran out counts as runs + 1 (censored) once it is past the gate.
+      const rtc = logs.filter((l) => l.cleared || l.runs > GATE[1]).map((l) => (l.cleared ? l.runs : l.runs + 1));
+      const st = stageById(idFromIndex(n));
+      const med = rtc.length ? pct(rtc, 0.5) : NaN;
+      const secs = logs.flatMap((l) => l.secs);
+      // Dead zone: a seed that stayed BUY_WINDOW+ runs on the stage without being able to buy anything.
+      const dead = logs.filter((l) => l.runs > BUY_WINDOW && l.earlyBuys === 0).length;
+      table[`${n} ${st.id}`] = {
+        mods: st.modifiers.join(',') || '-',
+        reached: logs.length,
+        cleared: logs.filter((l) => l.cleared).length,
+        'rtc median': med,
+        'rtc min-max': rtc.length ? `${Math.min(...rtc)}-${Math.max(...rtc)}` : '-',
+        'run s median': f1(pct(secs, 0.5)),
+        'dmg/hp arrive': `${f1(mean(logs.map((l) => l.dmg)))}/${f1(mean(logs.map((l) => l.hp)))}`,
+        'open nodes': f1(mean(logs.map((l) => l.open))),
+        'dead seeds': dead,
+      };
+      if (n >= GATE_STAGES) continue; // smoke only
+      if (rtc.length * 2 > logs.length && (med < GATE[0] || med > GATE[1])) fails.push(`${st.id}: median ${med}`);
+      if (n === GATE_STAGES - 1 && rtc.length && Math.max(...rtc) > LAST_STAGE_MAX) fails.push(`${st.id}: worst ${Math.max(...rtc)}`);
+      if (dead > 0) fails.push(`${st.id}: ${dead} seeds could not buy anything in ${BUY_WINDOW} runs`);
+    }
+    console.log(`Multi-stage progression (${PROG_SEEDS} seeds x up to ${PROG_RUNS} runs; rtc = runs to clear; stages 12+ smoke only)`);
     console.table(table);
-  });
+    const earned = mean(all.map((l) => l.earned60));
+    const spent = mean(all.map((l) => l.spent60));
+    console.log(`Cash by run 60 (mean over seeds): earned ${Math.round(earned)}, spent on the tree ${Math.round(spent)} (${Math.round((100 * spent) / Math.max(1, earned))} %)`);
+    expect(fails).toEqual([]);
+  }, 3_600_000);
 });
