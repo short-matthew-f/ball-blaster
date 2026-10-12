@@ -8,6 +8,8 @@ import { globalIndex, idFromIndex, nextStageId, stageId } from '../src/core/worl
 import { createRun, shoot, step } from '../src/sim/index';
 import { maxOverlap } from '../src/sim/physics';
 import { Rng } from '../src/core/rng';
+// Env lookup without @types/node (CI typechecks tests without node types).
+const ENV: Record<string, string | undefined> = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
 
 const SEEDS = 30;
 const SHOT_CAP = 300;
@@ -235,8 +237,8 @@ describe('v0.2 prototype bot (30 seeds per config)', () => {
 // to nextStageId. Runs-to-clear = runs played on a stage up to and including its first boss kill.
 // Env overrides for tuning: PROG_SEEDS, PROG_RUNS.
 
-const PROG_SEEDS = Number(process.env.PROG_SEEDS ?? 16);
-const PROG_RUNS = Number(process.env.PROG_RUNS ?? 160);
+const PROG_SEEDS = Number(ENV.PROG_SEEDS ?? 16);
+const PROG_RUNS = Number(ENV.PROG_RUNS ?? 160);
 const GATE_STAGES = 12; // w1s1 .. w3s4: asserted
 const SMOKE_STAGES = 16; // + w4s1 .. w4s4: reported only
 const GATE: [number, number] = [4, 9];
