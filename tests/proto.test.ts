@@ -5,7 +5,7 @@ import { MAX_PULL, SIM_DT, TABLE, TOKEN_OF_WORLD, type RelicId, type RunResult, 
 import { bankRun, buildStats, buy, buyState, equip, newSave, nodeLevel, nodesFor, ownedGear, relicSlots, trickSlotOpen } from '../src/meta/index';
 import { CARDS, buyBase, buyCard, cardBuyState, cardById, cardOwned, setCap, setFork } from '../src/meta/cards';
 import { nodeById } from '../src/meta/tree';
-import { BASE_STATS, ISLAND_PRICE_MULT, TARGET_DEFS, TRICK_USES, stageById } from '../src/core/tuning';
+import { BASE_STATS, ISLAND_PRICE_MULT, TARGET_DEFS, TRICK_USES, stageById, TOOTH_HIT } from '../src/core/tuning';
 import { globalIndex, idFromIndex, nextStageId, stageId } from '../src/core/worlds';
 import { createRun, previewShot, shoot, step, useTrick } from '../src/sim/index';
 import { maxOverlap } from '../src/sim/physics';
@@ -262,8 +262,8 @@ describe('loot goblin: hits per pull (perfect bot, 30 seeds, w1s1)', () => {
     });
     const perRun = (a: number[]) => Array.from({ length: a.length / 3 }, (_, k) => a[3 * k] + a[3 * k + 1] + a[3 * k + 2]);
     const t = { perfect: row(pulls), noisy: row(noisy) };
-    t.perfect['tooth %'] = `${Math.round((100 * perRun(pulls).filter((x) => x >= 3).length) / SEEDS)}%`;
-    t.noisy['tooth %'] = `${Math.round((100 * perRun(noisy).filter((x) => x >= 3).length) / SEEDS)}%`;
+    t.perfect['tooth %'] = `${Math.round((100 * perRun(pulls).filter((x) => x >= TOOTH_HIT).length) / SEEDS)}%`;
+    t.noisy['tooth %'] = `${Math.round((100 * perRun(noisy).filter((x) => x >= TOOTH_HIT).length) / SEEDS)}%`;
     console.log(`Loot Goblin hits per pull (w1s1, goblin r ${TARGET_DEFS.goblin.r} mass ${TARGET_DEFS.goblin.mass}, perfect aim ${LOOT_AIM})`);
     console.table(t);
     console.log('perfect mean by pull 1/2/3:', [0, 1, 2].map((k) => f2(mean(pulls.filter((_, i) => i % 3 === k)))).join(' / '), ' noisy:', [0, 1, 2].map((k) => f2(mean(noisy.filter((_, i) => i % 3 === k)))).join(' / '));
