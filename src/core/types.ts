@@ -321,6 +321,8 @@ export interface RunState {
   stage: StageId;
   /** Board hazards for this run (from the stage). */
   hazards: Hazard[];
+  /** Shoot damage taken in the current enemy phase (capped at RANGED_PHASE_CAP x maxHp). */
+  rangedTaken?: number;
   /** 'dark' modifier: the renderer shows an enemy's intent only when sim intentVisible(s, t) is true. */
   dark: boolean;
   seed: number;

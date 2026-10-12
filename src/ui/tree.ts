@@ -267,7 +267,7 @@ export class TreeScreen implements Screen {
       let hint = '';
       if (st === 'locked') {
         const w = node.graft ? WORLDS.find((x) => x.index === node.graft) : undefined;
-        hint = w ? `CLEAR ${w.name.toUpperCase()}` : 'REQUIRES MORE';
+        hint = w ? `REACH ${w.name.toUpperCase()}` : 'REQUIRES MORE';
       }
       const cost = nextCost(save, node);
       if (cost !== null) {
@@ -371,7 +371,7 @@ export class TreeScreen implements Screen {
       if (!stubSeen.has(n.graft)) {
         stubSeen.add(n.graft);
         const w = WORLDS.find((x) => x.index === n.graft);
-        if (w) drawText(ctx, `CLEAR ${w.name.toUpperCase()}`, cx, ty, { align: 'center', color: P.p, shadow: P['0'] });
+        if (w) drawText(ctx, `REACH ${w.name.toUpperCase()}`, cx, ty, { align: 'center', color: P.p, shadow: P['0'] });
       }
       return;
     }

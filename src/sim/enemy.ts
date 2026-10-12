@@ -10,6 +10,7 @@ import {
   ENEMY_FRICTION_MULT,
   stageById,
   CLERIC_RANGE,
+  RANGED_PHASE_CAP,
   DARK_REVEAL_R,
   ENRAGE_BASE,
   ENRAGE_OVERTIME_TURN,
@@ -52,6 +53,7 @@ export function startEnemyPhase(s: RunState, fx: FxEvent[]): void {
   s.lastHit = {};
   s.touching = {};
   s.acted = [];
+  s.rangedTaken = 0;
   for (const t of s.targets) t.chargeDmg = 0;
   // Freezes tick down first, so a freeze set this phase lasts FREEZE_PHASES full phases.
   for (const t of s.targets) {
@@ -326,11 +328,18 @@ function executeIntent(s: RunState, e: Target, fx: FxEvent[]): boolean {
     }
     case 'advance':
       return advance(s, e, h, fx);
-    case 'shoot':
+    case 'shoot': {
       fx.push({ t: 'tracer', x0: e.x, y0: e.y, x1: h.x, y1: h.y });
-      // Thick Skin: flat reduction on ranged damage (min 1), then armor.
-      heroDamage(s, Math.max(1, (it.n ?? 1) + rage - s.stats.rangedResist), e.kind, h.x, h.y, fx, 'shot');
+      // Thick Skin: flat reduction on ranged damage (min 1), then armor. Unblockable, so capped per enemy phase at
+      // RANGED_PHASE_CAP x max HP (the excess is dropped); charges stay uncapped (they can be dodged or blocked).
+      const dmg = Math.max(1, Math.round(Math.max(1, (it.n ?? 1) + rage - s.stats.rangedResist)) - s.stats.armor);
+      const give = Math.min(dmg, Math.floor(RANGED_PHASE_CAP * s.maxHp) - (s.rangedTaken ?? 0));
+      if (give > 0) {
+        s.rangedTaken = (s.rangedTaken ?? 0) + give;
+        heroDamage(s, give + s.stats.armor, e.kind, h.x, h.y, fx, 'shot');
+      }
       return false;
+    }
     case 'charge':
       e.charged = true;
       return false;

@@ -7,6 +7,7 @@ import { BASE_STATS, stageById } from '../src/core/tuning';
 import { globalIndex, idFromIndex, nextStageId, stageId } from '../src/core/worlds';
 import { createRun, shoot, step } from '../src/sim/index';
 import { maxOverlap } from '../src/sim/physics';
+import { Rng } from '../src/core/rng';
 
 const SEEDS = 30;
 const SHOT_CAP = 300;
@@ -240,18 +241,37 @@ const GATE_STAGES = 12; // w1s1 .. w3s4: asserted
 const SMOKE_STAGES = 16; // + w4s1 .. w4s4: reported only
 const GATE: [number, number] = [4, 9];
 const LAST_STAGE_MAX = 20; // stage 11: worst seed
-const BUY_WINDOW = 3; // runs after arrival within which at least one node must be affordable
+const BUY_WINDOW = 3;
+const PERFECT_MIN = 2; // perfect bot: no stage may be a 1-run clear (median) // runs after arrival within which at least one node must be affordable
 
-function playForResult(stage: string, seed: number, stats: RunStats): RunResult {
+type ProgBot = 'perfect' | 'noisy';
+
+/** Noisy (human-like) aim: +-NOISE_DEG error, 70-100 % power, 15 % of shots at the second-nearest enemy. */
+const NOISE_DEG = 6;
+const NOISE_POWER: [number, number] = [0.7, 1];
+const NOISE_SECOND = 0.15;
+
+function playForResult(stage: string, seed: number, stats: RunStats, bot: ProgBot = 'perfect'): RunResult {
   const s = createRun(stage, stats, seed);
+  const noise = new Rng(seed * 7919 + 17);
   while (s.phase === 'aim' && s.shots < 600) {
     const h = s.balls[0];
-    const tg = pickTarget(s, 'cluster');
-    const d = Math.hypot(tg.x - h.x, tg.y - h.y) || 1;
-    shoot(s, { x: ((tg.x - h.x) / d) * MAX_PULL, y: ((tg.y - h.y) / d) * MAX_PULL });
+    let tg: Target;
+    let ang: number;
+    let power = 1;
+    if (bot === 'perfect') {
+      tg = pickTarget(s, 'cluster');
+      ang = Math.atan2(tg.y - h.y, tg.x - h.x);
+    } else {
+      const live = s.targets.filter((t) => !t.dead).sort((a, b) => Math.hypot(a.x - h.x, a.y - h.y) - Math.hypot(b.x - h.x, b.y - h.y) || a.id - b.id);
+      tg = live.length > 1 && noise.chance(NOISE_SECOND) ? live[1] : live[0];
+      ang = Math.atan2(tg.y - h.y, tg.x - h.x) + ((noise.range(-NOISE_DEG, NOISE_DEG) * Math.PI) / 180);
+      power = noise.range(NOISE_POWER[0], NOISE_POWER[1]);
+    }
+    shoot(s, { x: Math.cos(ang) * MAX_PULL * power, y: Math.sin(ang) * MAX_PULL * power });
     while ((s.phase as string) === 'resolve' || (s.phase as string) === 'enemy') step(s, SIM_DT * 8);
   }
-  expect(s.phase, `${stage} seed ${seed}: progression run hit the shot cap`).toBe('over');
+  expect(s.phase, `${stage} seed ${seed} (${bot}): progression run hit the shot cap`).toBe('over');
   return s.result!;
 }
 
@@ -294,7 +314,7 @@ interface ProgLog {
   spent60: number;
 }
 
-function progression(seed: number): ProgLog {
+function progression(seed: number, bot: ProgBot): ProgLog {
   const save = newSave();
   save.current = stageId(1, 1);
   save.unlocked = 0;
@@ -308,7 +328,7 @@ function progression(seed: number): ProgLog {
       cur = { runs: 0, cleared: false, dmg: st.damage, hp: st.maxHp, open: openNodes(save), secs: [], earlyBuys: arrivalBuys };
       log.stages[n] = cur;
     }
-    const res = playForResult(save.current, seed * 1000 + r, buildStats(save));
+    const res = playForResult(save.current, seed * 1000 + r, buildStats(save), bot);
     bankRun(save, res);
     if (r <= 60) log.earned60 += res.cash;
     cur.runs++;
@@ -329,42 +349,59 @@ function progression(seed: number): ProgLog {
   return log;
 }
 
+interface BotReport {
+  table: Record<string, Record<string, string | number>>;
+  med: number[];
+  worst: number[];
+  dead: number[];
+  earned: number;
+  spent: number;
+}
+
+function runBot(bot: ProgBot): BotReport {
+  const all = Array.from({ length: PROG_SEEDS }, (_, k) => progression(7 + k, bot));
+  const rep: BotReport = { table: {}, med: [], worst: [], dead: [], earned: mean(all.map((l) => l.earned60)), spent: mean(all.map((l) => l.spent60)) };
+  for (let n = 0; n < SMOKE_STAGES; n++) {
+    const logs = all.map((l) => l.stages[n]).filter((x): x is StageLog => !!x);
+    if (!logs.length) continue;
+    // A seed still on the stage when the budget ran out counts as runs + 1 (censored) once it is past the gate.
+    const rtc = logs.filter((l) => l.cleared || l.runs > GATE[1]).map((l) => (l.cleared ? l.runs : l.runs + 1));
+    const st = stageById(idFromIndex(n));
+    rep.med[n] = rtc.length * 2 > logs.length ? pct(rtc, 0.5) : NaN;
+    rep.worst[n] = rtc.length ? Math.max(...rtc) : NaN;
+    // Dead zone: a seed that stayed BUY_WINDOW+ runs on the stage without being able to buy anything.
+    rep.dead[n] = logs.filter((l) => l.runs > BUY_WINDOW && l.earlyBuys === 0).length;
+    rep.table[`${n} ${st.id}`] = {
+      mods: st.modifiers.join(',') || '-',
+      reached: logs.length,
+      cleared: logs.filter((l) => l.cleared).length,
+      'rtc median': rep.med[n],
+      'rtc min-max': rtc.length ? `${Math.min(...rtc)}-${Math.max(...rtc)}` : '-',
+      'run s median': f1(pct(logs.flatMap((l) => l.secs), 0.5)),
+      'dmg/hp arrive': `${f1(mean(logs.map((l) => l.dmg)))}/${f1(mean(logs.map((l) => l.hp)))}`,
+      'open nodes': f1(mean(logs.map((l) => l.open))),
+      'dead seeds': rep.dead[n],
+    };
+  }
+  console.log(`Multi-stage progression, ${bot} bot (${PROG_SEEDS} seeds x up to ${PROG_RUNS} runs; rtc = runs to clear; stages 12+ smoke only)`);
+  console.table(rep.table);
+  console.log(`Cash by run 60 (${bot}, mean over seeds): earned ${Math.round(rep.earned)}, spent on the tree ${Math.round(rep.spent)} (${Math.round((100 * rep.spent) / Math.max(1, rep.earned))} %)`);
+  return rep;
+}
+
 describe('multi-stage progression bot (greedy cheapest-node shopper)', () => {
-  it('runs-to-clear per stage is within [4, 9] (median over seeds), stage 11 worst <= 20, no dead economy', () => {
-    const all = Array.from({ length: PROG_SEEDS }, (_, k) => progression(7 + k));
-    const table: Record<string, Record<string, string | number>> = {};
+  it('noisy bot: rtc median in [4, 9], stage 11 worst <= 20, no dead economy; perfect bot: median >= 2 (no trivial stage)', () => {
+    const noisy = runBot('noisy');
+    const perfect = runBot('perfect');
     const fails: string[] = [];
-    for (let n = 0; n < SMOKE_STAGES; n++) {
-      const logs = all.map((l) => l.stages[n]).filter((x): x is StageLog => !!x);
-      if (!logs.length) continue;
-      // A seed still on the stage when the budget ran out counts as runs + 1 (censored) once it is past the gate.
-      const rtc = logs.filter((l) => l.cleared || l.runs > GATE[1]).map((l) => (l.cleared ? l.runs : l.runs + 1));
-      const st = stageById(idFromIndex(n));
-      const med = rtc.length ? pct(rtc, 0.5) : NaN;
-      const secs = logs.flatMap((l) => l.secs);
-      // Dead zone: a seed that stayed BUY_WINDOW+ runs on the stage without being able to buy anything.
-      const dead = logs.filter((l) => l.runs > BUY_WINDOW && l.earlyBuys === 0).length;
-      table[`${n} ${st.id}`] = {
-        mods: st.modifiers.join(',') || '-',
-        reached: logs.length,
-        cleared: logs.filter((l) => l.cleared).length,
-        'rtc median': med,
-        'rtc min-max': rtc.length ? `${Math.min(...rtc)}-${Math.max(...rtc)}` : '-',
-        'run s median': f1(pct(secs, 0.5)),
-        'dmg/hp arrive': `${f1(mean(logs.map((l) => l.dmg)))}/${f1(mean(logs.map((l) => l.hp)))}`,
-        'open nodes': f1(mean(logs.map((l) => l.open))),
-        'dead seeds': dead,
-      };
-      if (n >= GATE_STAGES) continue; // smoke only
-      if (rtc.length * 2 > logs.length && (med < GATE[0] || med > GATE[1])) fails.push(`${st.id}: median ${med}`);
-      if (n === GATE_STAGES - 1 && rtc.length && Math.max(...rtc) > LAST_STAGE_MAX) fails.push(`${st.id}: worst ${Math.max(...rtc)}`);
-      if (dead > 0) fails.push(`${st.id}: ${dead} seeds could not buy anything in ${BUY_WINDOW} runs`);
+    for (let n = 0; n < GATE_STAGES; n++) {
+      const id = idFromIndex(n);
+      const m = noisy.med[n];
+      if (!(m >= GATE[0] && m <= GATE[1])) fails.push(`noisy ${id}: median ${m}`);
+      if (n === GATE_STAGES - 1 && !(noisy.worst[n] <= LAST_STAGE_MAX)) fails.push(`noisy ${id}: worst ${noisy.worst[n]}`);
+      if ((noisy.dead[n] ?? 0) > 0) fails.push(`noisy ${id}: ${noisy.dead[n]} seeds could not buy anything in ${BUY_WINDOW} runs`);
+      if (!(perfect.med[n] >= PERFECT_MIN)) fails.push(`perfect ${id}: median ${perfect.med[n]}`);
     }
-    console.log(`Multi-stage progression (${PROG_SEEDS} seeds x up to ${PROG_RUNS} runs; rtc = runs to clear; stages 12+ smoke only)`);
-    console.table(table);
-    const earned = mean(all.map((l) => l.earned60));
-    const spent = mean(all.map((l) => l.spent60));
-    console.log(`Cash by run 60 (mean over seeds): earned ${Math.round(earned)}, spent on the tree ${Math.round(spent)} (${Math.round((100 * spent) / Math.max(1, earned))} %)`);
     expect(fails).toEqual([]);
   }, 3_600_000);
 });

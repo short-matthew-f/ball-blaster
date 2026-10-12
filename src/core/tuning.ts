@@ -139,6 +139,8 @@ export const ENRAGE_OVERTIME_TURN = 6;
  * as an instant strike. Liveness backstop: a brute caged behind bumpers made a 600-shot run (v0.3 step 2 bot).
  */
 export const ENRAGE_STRIKE_LEVEL = 5;
+/** Unblockable (Shoot) damage per enemy phase is capped at this fraction of the hero's max HP; the excess is dropped. */
+export const RANGED_PHASE_CAP = 0.5;
 export const OVERTIME_CASH_MULT = 2;
 /** Only the first this-many Overtime waves pay OVERTIME_CASH_MULT; later ones pay 1x. */
 export const OVERTIME_CASH_WAVES = 5;
@@ -223,12 +225,14 @@ export const EMERALD_BASE = 3;
 export const HARDY_MOD_HP = 1;
 export const HARDY_MOD_COUNT = 0.2;
 /** Per-slot difficulty (slot 1..4): enemy HP and attack multipliers on top of scaling (smooths modifier bumps). */
-export const SLOT_HP_MULT = [1, 1, 1.2, 1.05];
-export const SLOT_ATK_MULT = [1, 1, 1.1, 1.1];
+export const SLOT_HP_MULT = [1, 1.05, 1.2, 1.05];
+export const SLOT_ATK_MULT = [1, 1, 1.1, 1];
 export const SWIFT_MOD = 1.5;
 /** Ranged: extra skirmishers per wave and Shoot damage bonus (before attack scaling). */
-export const RANGED_EXTRA = 2;
+export const RANGED_EXTRA = 1;
 export const RANGED_SHOOT = 1;
+/** Ranged's Shoot bonus applies from this slot on. */
+export const RANGED_SHOOT_SLOT = 3;
 export const THIN_RAILS_BOUNCE = 0.6;
 export const EARLY_BOSS_WAVES = 2;
 /** Ice hazard patches: friction and rolling deceleration x this inside a patch (near zero; a trace keeps phases finite). */

@@ -14,8 +14,13 @@ export function nextCost(save: SaveData, node: UpgradeNode): number | null {
 }
 
 /** A world is cleared when any of its stages (in any loop) has a boss kill. */
+/**
+ * A world's graft opens when the player REACHES the world (its first stage is unlocked), not when they clear it:
+ * the graft is what makes the world beatable. Loops never re-lock a graft.
+ */
 export function worldCleared(save: SaveData, world: number): boolean {
   if (world <= 1) return true; // Felt Hall's graft is available from the start
+  if (save.unlocked >= 4 * (world - 1)) return true;
   return Object.entries(save.bossKills).some(([id, n]) => n > 0 && worldOf(id) === world);
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FAST_FORWARD_MULT, MAX_LAUNCH_SPEED, MAX_PULL, MIN_POWER, SIM_DT, TABLE, type FxEvent, type RunState, type TargetKind, type Vec } from '../src/core/types';
-import { ATK_GROWTH, BASE_STATS, CASH_GROWTH, HARDY_MOD_HP, HP_GROWTH, SLOT_ATK_MULT, SLOT_HP_MULT, SPAWN_ZONE, TARGET_DEFS, WAVE_CASH, stageById } from '../src/core/tuning';
+import { ATK_GROWTH, BASE_STATS, CASH_GROWTH, HARDY_MOD_HP, HP_GROWTH, RANGED_PHASE_CAP, SLOT_ATK_MULT, SLOT_HP_MULT, SPAWN_ZONE, TARGET_DEFS, WAVE_CASH, stageById } from '../src/core/tuning';
 import { WORLDS, allStageIds, globalIndex, idFromIndex, makeStage, nextStageId, parseStageId, stageId } from '../src/core/worlds';
 import { rollIntent as rollIntentForTest } from '../src/sim/intents';
 import type { Modifier, TargetKind as TK } from '../src/core/types';
@@ -736,5 +736,19 @@ describe('v0.3 step 2b: enrage liveness backstop', () => {
     fx = enemyPhaseOnly(c);
     expect(fx.some((f) => f.t === 'heroHit')).toBe(true);
     expect(c.hp).toBeLessThan(BASE_STATS.maxHp);
+  });
+});
+
+describe('v0.3 step 2c: ranged guardrail', () => {
+  it('Shoot damage in one enemy phase is capped at half max HP; charges are not', () => {
+    const s = lab(90, 260);
+    for (let i = 0; i < 4; i++) put(s, 'skirmisher', 30 + i * 40, 60).intent = { t: 'shoot', n: 16 };
+    enemyPhaseOnly(s);
+    expect(BASE_STATS.maxHp - s.hp).toBe(Math.floor(RANGED_PHASE_CAP * BASE_STATS.maxHp));
+    // The cap resets every enemy phase.
+    s.hp = s.maxHp;
+    for (const t of s.targets) t.intent = { t: 'shoot', n: 3 };
+    enemyPhaseOnly(s);
+    expect(s.maxHp - s.hp).toBe(Math.min(12, Math.floor(RANGED_PHASE_CAP * BASE_STATS.maxHp)));
   });
 });
