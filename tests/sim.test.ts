@@ -1923,7 +1923,7 @@ describe('v0.6 M3: heavy ball', () => {
     expect(off.t.hp).toBe(20 - 2);
     expect(on.v / off.v).toBeCloseTo(WRECK_SHOVE, 1);
   });
-  it('heavy.jugger: the first charge of the phase is blocked, the second lands', () => {
+  it('heavy.jugger: the first charge of the wave is blocked, the second lands', () => {
     const s = mlab(['heavy.jugger'], { ballType: 'heavy', gearLevel: { heavy: 3 } }, 90, 240);
     const a = put(s, 'grunt', 90, 170);
     const b = put(s, 'grunt', 150, 240);

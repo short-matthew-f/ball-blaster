@@ -634,6 +634,22 @@ function baseCost(save: SaveData, id: string): number | null {
  */
 const SAFE_FORK = new Set(['break.crack', 'heavy.wrecking', 'ricochet.bank', 'momentum.streak', 'recall.blink', 'lantern.glare']);
 const SAFE_CAP = new Set(['break.steady', 'heavy.jugger', 'ricochet.ghost', 'momentum.unstop', 'recall.anchor', 'lantern.sunrise']);
+/**
+ * Diagnostic (report only): PROG_SAFE=<card.choice>,... swaps that card's safe fork/cap for the named one (e.g.
+ * break.slam); PROG_SAFE=none buys no fork or cap at all (base III stays locked: the pure gate-lock effect).
+ */
+const PROG_SAFE = ENV.PROG_SAFE;
+const PROG_NOMODS = ENV.PROG_NOMODS === '1';
+/** Diagnostic (report only): PROG_SKIP_CARD=<id>,... never unlocks those cards. */
+const PROG_SKIP_CARD = new Set((ENV.PROG_SKIP_CARD ?? '').split(',').filter(Boolean));
+const NO_CHOICES = PROG_SAFE === 'none';
+for (const id of PROG_SAFE && !NO_CHOICES ? PROG_SAFE.split(',') : []) {
+  const def = cardById(id.split('.')[0]);
+  const set = def?.forks.some((f) => f.id === id) ? SAFE_FORK : def?.caps.some((f) => f.id === id) ? SAFE_CAP : null;
+  if (!def || !set) throw new Error(`PROG_SAFE: unknown choice ${id}`);
+  for (const o of set === SAFE_FORK ? def.forks : def.caps) set.delete(o.id);
+  set.add(id);
+}
 
 /**
  * The safe fork / cap (SAFE_FORK / SAFE_CAP) to buy next for world w: first card in CARD_PRIORITY order that is owned at
@@ -641,6 +657,7 @@ const SAFE_CAP = new Set(['break.steady', 'heavy.jugger', 'ricochet.ghost', 'mom
  * check is load-bearing: setFork/setCap on an owned choice is a free switch (true, no spend), which would spin the loop.
  */
 function safeChoice(save: SaveData, w: number, row: 'fork' | 'cap'): { card: string; choice: string } | undefined {
+  if (NO_CHOICES) return undefined;
   const tok = TOKEN_OF_WORLD[w - 1];
   for (const id of CARD_PRIORITY[w - 1]) {
     const def = cardById(id);
@@ -703,7 +720,7 @@ function greedyBuy(save: SaveData, shop?: Shop): { bought: number; cash: number 
         note(tok, 'fork', fork.choice, t0);
         continue;
       }
-      const card = PROG_CARDS ? CARD_PRIORITY[w - 1].find((id) => cardById(id)?.world === w && cardBuyState(save, id) === 'open') : undefined;
+      const card = PROG_CARDS ? CARD_PRIORITY[w - 1].find((id) => !PROG_SKIP_CARD.has(id) && cardById(id)?.world === w && cardBuyState(save, id) === 'open') : undefined;
       if (card && buyCard(save, card)) {
         note(tok, 'card', card, t0);
         continue;
@@ -793,6 +810,8 @@ function progression(seed: number, bot: ProgBot): ProgLog {
     chooseLoadout(save);
     equipFork(save);
     const st = diagStats(save, buildStats(save));
+    // Diagnostic (report only): PROG_NOMODS=1 strips fork/cap mods from the run (purchases, base III unlocks kept).
+    if (PROG_NOMODS) st.mods = [];
     if (PROG_FORK && !forkWarned && n >= 4 && !(st.mods ?? []).includes(PROG_FORK)) {
       forkWarned = true;
       console.warn(`PROG_FORK=${PROG_FORK}: not in stats.mods at ${save.current} (mods: ${(st.mods ?? []).join(',') || '-'}): buildStats plumbing missing?`);
@@ -915,7 +934,7 @@ describe('multi-stage progression bot (greedy cheapest-node shopper)', () => {
     const noisy = PROG_ONLY === 'perfect' ? empty : runBot('noisy');
     const perfect = PROG_ONLY === 'noisy' ? empty : runBot('perfect');
     // Diagnostic runs (forced loadouts, gear off, one bot) only report.
-    if (DIAG || PROG_FORK || !PROG_GEAR || !PROG_CARDS || PROG_ONLY) return;
+    if (DIAG || PROG_FORK || PROG_SAFE || PROG_NOMODS || PROG_SKIP_CARD.size || !PROG_GEAR || !PROG_CARDS || PROG_ONLY) return;
     const fails: string[] = [];
     for (let n = 0; n < GATE_STAGES; n++) {
       const id = idFromIndex(n);

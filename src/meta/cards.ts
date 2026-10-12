@@ -150,7 +150,7 @@ const CHOICES: Record<string, { forks: ForkChoice[]; caps: ForkChoice[] }> = {
   },
   heavy: {
     forks: [ch('heavy', 'anvil', 'ANVIL', '1ST HIT X2, STOPS', 1), ch('heavy', 'wrecking', 'WRECKING', 'SHOVES X1.5, NO +1', 1)],
-    caps: [ch('heavy', 'jugger', 'JUGGERNAUT', 'BLOCKS A CHARGE/TURN', 2), ch('heavy', 'avalanche', 'AVALANCHE', 'BUMPS DEAL 2', 2)],
+    caps: [ch('heavy', 'jugger', 'JUGGERNAUT', 'BLOCKS 1 CHARGE/WAVE', 2), ch('heavy', 'avalanche', 'AVALANCHE', 'BUMPS DEAL 2', 2)],
   },
   ricochet: {
     forks: [ch('ricochet', 'bank', 'BANK', '2+ RAILS: +2 EACH', 1), ch('ricochet', 'carom', 'CAROM', 'HITS COUNT AS RAILS', 1)],

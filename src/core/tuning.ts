@@ -373,7 +373,7 @@ export const TOKENS_KILL = 1;
 
 // ---------- v0.6 M2: islands and gallery cards ----------
 /** Price lever per island: [k] multiplies every cash node of island k ([0] unused). Read lazily by the cost functions. */
-export const ISLAND_PRICE_MULT: number[] = [1, 0.7, 0.8, 0.8, 1, 1, 1]; // M2 gate: world 1 lost its themed nodes; prices are the lever, not enemy numbers
+export const ISLAND_PRICE_MULT: number[] = [1, 0.7, 1, 1, 1, 1, 1]; // M2 gate: world 1 lost its themed nodes; prices are the lever, not enemy numbers
 /** Card base price (cash) before x CASH_GROWTH^(4(world-1)) x 2^level. */
 export const CARD_BASE_PRICE = { cue: 150, ball: 150, relic: 200, trick: 300 } as const;
 

@@ -63,7 +63,6 @@ export function startEnemyPhase(s: RunState, fx: FxEvent[]): void {
   s.touching = {};
   s.acted = [];
   s.rangedTaken = 0;
-  s.juggerUsed = false;
   s.mothLeft = mod(s, 'lantern.moth') ? MOTH_CAP : 0;
   for (const t of s.targets) t.chargeDmg = 0;
   // Freezes tick down first, so a freeze set this phase lasts FREEZE_PHASES full phases.
@@ -162,6 +161,7 @@ function advanceWave(s: RunState, fx: FxEvent[]): Set<number> {
   if (s.wave >= 1) payClear(s, fx, s.wave);
   s.wave++;
   s.wavePending = false;
+  s.juggerUsed = false; // Juggernaut: one blocked charge per WAVE (per phase trivialised w1s2-w1s4 in the sweep)
   for (const e of spawnWave(s, fx)) fresh.add(e.id);
   s.waveTurn = -1; // the arrival phase is not a turn of the new wave (enrage clock)
   return fresh;
