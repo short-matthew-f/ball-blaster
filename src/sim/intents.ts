@@ -1,6 +1,7 @@
 // Intent rolls. Not reach-aware (execution is): an Attack rolled out of reach executes as Advance.
 import type { RunState, Target } from '../core/types';
 import { BOSS_ATTACK, BOSS_COG_CAP, BOSS_SLAM, REPAIR_RANGE, TARGET_DEFS, stageById } from '../core/tuning';
+import { mod } from './gear';
 
 /** Stage attack scaling (x ATK_GROWTH^n): the shown number is the hit. */
 function atk(s: RunState, n: number): number {
@@ -22,6 +23,8 @@ export function repairTarget(s: RunState, e: Target): Target | undefined {
   let best: Target | undefined;
   for (const o of s.targets) {
     if (o === e || o.dead || o.kind === 'boss' || o.kind === 'cadre' || o.hp >= o.maxHp) continue;
+    // Grounded (static capstone): a staggered enemy cannot be repaired (inline: enemy.ts imports this module).
+    if (o.stagger >= TARGET_DEFS[o.kind].staggerAt && mod(s, 'static.grounded')) continue;
     if (Math.hypot(o.x - e.x, o.y - e.y) - o.r - e.r > REPAIR_RANGE) continue;
     const miss = o.maxHp - o.hp;
     const bm = best ? best.maxHp - best.hp : -1;

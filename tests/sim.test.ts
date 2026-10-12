@@ -2196,3 +2196,821 @@ describe('v0.6 M3: lantern', () => {
     expect(s.mothLeft).toBe(0);
   });
 });
+
+// ---------- v0.6 M3 parts 2-3: world-2 and world-3 forks and capstones (stats.mods) ----------
+import {
+  ABSORB_HEAL,
+  CHAIN_DMG,
+  CHILL_PHASES,
+  DEEP_FREEZE_PHASES,
+  EPICENTRE_DMG,
+  GATLING_MULT,
+  HEAVY_SPIT_DMG,
+  JUMP_PENALTY,
+  LIGHT_SPEED,
+  MORTAR_BLASTS,
+  MORTAR_MULT,
+  POUNCE_MULT,
+  PULL_K,
+  PULSE_PUSH,
+  SNAP_RETURN,
+  SPIT_LIVE_CAP,
+  STOMP_STAGGER,
+  SWARM_EXTRA,
+  TAILWIND_MULT,
+  TESLA_DMG,
+  TRAP_MULT,
+  ZIP_MULT,
+} from '../src/core/tuning';
+import { addStagger } from '../src/sim/damage';
+
+/** Resolve the current shot to its end, collecting fx (stops at the enemy phase). */
+function resolveAll(s: RunState): FxEvent[] {
+  const fx: FxEvent[] = [];
+  while (s.phase === 'resolve') fx.push(...step(s, SIM_DT));
+  return fx;
+}
+/** Hero hits (fx) of one ball kind. */
+const hitsOf = (fx: FxEvent[], kind: string) => fx.filter((f): f is Extract<FxEvent, { t: 'hit' }> => f.t === 'hit' && f.ballKind === kind);
+/** A resting test enemy with `hp` and a Rest intent. */
+function dummy(s: RunState, kind: TargetKind, x: number, y: number, hp = 20): Target {
+  const e = put(s, kind, x, y);
+  e.hp = e.maxHp = hp;
+  e.intent = { t: 'rest' };
+  return e;
+}
+/** Shoot, then stop the hero dead (a resolve with no hero contact). */
+function stillShot(s: RunState): void {
+  shoot(s, { x: 0, y: 20 });
+  s.balls[0].vx = s.balls[0].vy = 0;
+  s.balls[0].resting = true;
+}
+/** Put the hero on a velocity (after shoot) for a contact at a known speed. */
+function launchAt(s: RunState, vx: number, vy: number): void {
+  shoot(s, { x: 0, y: -MAX_PULL });
+  s.balls[0].vx = vx;
+  s.balls[0].vy = vy;
+}
+
+describe('v0.6 M3: jump cue', () => {
+  const JUMP = { cue: 'jump' as const, gearLevel: { jump: 2 } };
+  it('jump.long: hops two enemies, the third collides', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, JUMP, 90, 270);
+      const es = [dummy(s, 'grunt', 90, 215, 10), dummy(s, 'grunt', 90, 165, 10), dummy(s, 'brute', 90, 100, 20)];
+      shoot(s, { x: 0, y: -MAX_PULL });
+      while (s.combo.hits === 0 && s.phase === 'resolve') step(s, SIM_DT);
+      return { s, hp: es.map((e) => e.hp) };
+    };
+    const land = 1 - gearVal(JUMP_PENALTY, 2); // the landing hit (level II: +1)
+    const on = run(['jump.long']);
+    expect(on.hp).toEqual([10, 10, 20 - land]);
+    expect(on.s.jumpsLeft).toBe(0);
+    const off = run([]);
+    expect(off.hp).toEqual([10, 10 - land, 20]);
+  });
+  it('jump.stomp: the landing staggers the jumped enemy +1, no damage', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, JUMP, 90, 270);
+      const g = dummy(s, 'brute', 90, 200, 10);
+      shoot(s, { x: 0, y: -MAX_PULL });
+      while (!s.balls[0].jumpLanded && s.phase === 'resolve') step(s, SIM_DT);
+      return g;
+    };
+    const on = run(['jump.stomp']);
+    expect(on.stagger).toBe(STOMP_STAGGER);
+    expect(on.hp).toBe(10);
+    expect(run([]).stagger).toBe(0);
+  });
+  it('jump.pounce: the landing hit is (dmg x2) - penalty', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, { cue: 'jump', gearLevel: { jump: 3 }, damage: 3 }, 90, 270);
+      dummy(s, 'grunt', 90, 200, 10);
+      const b = dummy(s, 'brute', 90, 110, 20);
+      shoot(s, { x: 0, y: -MAX_PULL });
+      while (s.combo.hits === 0 && s.phase === 'resolve') step(s, SIM_DT);
+      return b.hp;
+    };
+    const pen = gearVal(JUMP_PENALTY, 3);
+    expect(run(['jump.pounce'])).toBe(20 - (3 * POUNCE_MULT - pen));
+    expect(run(['jump.pounce'])).toBe(20 - 8);
+    expect(run([])).toBe(20 - (3 - pen));
+  });
+  it('jump.trample: the jumped enemy takes the landing hit too; no second blast', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, { cue: 'jump', gearLevel: { jump: 3 }, damage: 3, relics: ['explosive'] }, 90, 270);
+      const g = dummy(s, 'grunt', 90, 200, 10);
+      const b = dummy(s, 'brute', 90, 110, 20);
+      shoot(s, { x: 0, y: -MAX_PULL });
+      const fx: FxEvent[] = [];
+      while (s.combo.hits === 0 && s.phase === 'resolve') fx.push(...step(s, SIM_DT));
+      return { g, b, fx };
+    };
+    const on = run(['jump.trample']);
+    expect(on.b.hp).toBe(20 - 5);
+    expect(on.g.hp).toBe(10 - 5);
+    expect(on.fx.filter((f) => f.t === 'blast').length).toBe(1);
+    expect(run([]).g.hp).toBe(10);
+  });
+});
+
+describe('v0.6 M3: light ball', () => {
+  it('light.zip: launch x1.1; with Break III the stack caps at 1.4', () => {
+    const s = mlab(['light.zip'], { ballType: 'light', gearLevel: { light: 2 } });
+    shoot(s, { x: 0, y: -MAX_PULL });
+    expect(speedOf(s)).toBeCloseTo(MAX_LAUNCH_SPEED * gearVal(LIGHT_SPEED, 2) * ZIP_MULT, 6);
+    const c = mlab(['light.zip'], { ballType: 'light', cue: 'break', gearLevel: { light: 2, break: 3 } });
+    shoot(c, { x: 0, y: -MAX_PULL });
+    expect(gearVal(BREAK_SPEED_MULT_LV, 3) * ZIP_MULT).toBeCloseTo(1.43, 6);
+    expect(speedOf(c)).toBeCloseTo(MAX_LAUNCH_SPEED * gearVal(LIGHT_SPEED, 2) * LAUNCH_MULT_CAP, 6);
+  });
+  it('light.dart: +1 damage at 450 px/s, +0 at 350', () => {
+    const run = (v: number, mods = ['light.dart']) => {
+      const s = mlab(mods, { ballType: 'light', gearLevel: { light: 2 } }, 90, 240);
+      const g = dummy(s, 'brute', 90, 205);
+      launchAt(s, 0, -v);
+      untilFirstHit(s);
+      return g.hp;
+    };
+    expect(run(470)).toBe(20 - 2);
+    expect(run(350)).toBe(20 - 1);
+    expect(run(470, [])).toBe(20 - 1);
+  });
+  it('light.blur: a 250 px/s hero contact staggers 2', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, { ballType: 'light', gearLevel: { light: 3 } }, 90, 240);
+      const g = dummy(s, 'brute', 90, 205);
+      launchAt(s, 0, -260);
+      untilFirstHit(s);
+      return g.stagger;
+    };
+    expect(run(['light.blur'])).toBe(2);
+    expect(run([])).toBe(1);
+  });
+  it('light.tailwind: hero rails x1.15 during the shot; enemies bounce as before', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, { ballType: 'light', gearLevel: { light: 3 } }, 90, 230);
+      const g = dummy(s, 'grunt', 40, 100);
+      launchAt(s, 0, 150);
+      g.vx = -150;
+      g.resting = false;
+      let hero = 0;
+      let enemy = 0;
+      for (let i = 0; i < 400 && (!hero || !enemy); i++) {
+        const pre = speedOf(s);
+        const pe = Math.abs(g.vx);
+        const fx = step(s, SIM_DT);
+        if (!hero && fx.some((f) => f.t === 'wall')) hero = speedOf(s) / pre;
+        if (!enemy && g.vx > 0) enemy = g.vx / pe;
+      }
+      return { hero, enemy };
+    };
+    const on = run(['light.tailwind']);
+    const off = run([]);
+    expect(on.hero / off.hero).toBeCloseTo(TAILWIND_MULT, 2);
+    expect(on.enemy).toBeCloseTo(off.enemy, 9);
+  });
+});
+
+describe('v0.6 M3: chill', () => {
+  const CHILL = { relics: ['chill' as const], gearLevel: { chill: 2 } };
+  it('chill.brittle: the 2nd contact (chilled) deals +1, the 1st +0', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, CHILL, 90, 240);
+      dummy(s, 'grunt', 90, 170, 40);
+      shoot(s, { x: 15, y: -MAX_PULL });
+      return hitsOf(resolveAll(s), 'main').map((h) => h.dmg);
+    };
+    expect(run(['chill.brittle'])).toEqual([1, 2]);
+    expect(run([])).toEqual([1, 1]);
+  });
+  it('chill.numb: a chilled 1-damage charge still deals 1; 3 deals 2', () => {
+    const run = (mods: string[], n: number) => {
+      const s = mlab(mods, CHILL, 90, 240);
+      const g = put(s, 'grunt', 90, 240 - 24 - 40);
+      g.intent = { t: 'attack', n };
+      g.chill = 1;
+      enemyPhaseOnly(s);
+      return BASE_STATS.maxHp - s.hp;
+    };
+    expect(run(['chill.numb'], 1)).toBe(1);
+    expect(run(['chill.numb'], 3)).toBe(2);
+    expect(run([], 3)).toBe(3);
+  });
+  it('chill.frostbite: a bump in the shot passes the chill on; an enemy-phase bump does not', () => {
+    const setup = (mods: string[]) => {
+      const s = mlab(mods, { relics: ['chill'], gearLevel: { chill: 3 } }, 90, 270);
+      const a = dummy(s, 'grunt', 40, 100);
+      const b = dummy(s, 'grunt', 100, 100);
+      a.chill = 1;
+      return { s, a, b };
+    };
+    const r = setup(['chill.frostbite']);
+    stillShot(r.s);
+    r.a.vx = 300;
+    r.a.resting = false;
+    resolveAll(r.s);
+    expect(r.b.chill).toBe(gearVal(CHILL_PHASES, 3));
+    const o = setup([]);
+    stillShot(o.s);
+    o.a.vx = 300;
+    o.a.resting = false;
+    resolveAll(o.s);
+    expect(o.b.chill ?? 0).toBe(0);
+    const e = setup(['chill.frostbite']);
+    bareEnemyPhase(e.s);
+    e.a.vx = 300;
+    e.a.resting = false;
+    for (let i = 0; i < 60; i++) step(e.s, SIM_DT);
+    expect(e.b.hp).toBeLessThan(20);
+    expect(e.b.chill ?? 0).toBe(0);
+  });
+  it('chill.deepfreeze: a hit on a chilled enemy freezes it (2), it skips one phase; never the boss', () => {
+    const s = mlab(['chill.deepfreeze'], { relics: ['chill'], gearLevel: { chill: 3 } }, 90, 240);
+    const g = dummy(s, 'grunt', 90, 170);
+    g.chill = 1;
+    shoot(s, { x: 0, y: -MAX_PULL });
+    const fx = untilFirstHit(s);
+    expect(g.frozen).toBe(DEEP_FREEZE_PHASES);
+    expect(fx.some((f) => f.t === 'freeze')).toBe(true);
+    untilSettled(s);
+    expect(s.acted).not.toContain(g.id);
+    expect(g.frozen).toBe(1);
+    enemyPhaseOnly(s);
+    expect(g.frozen).toBe(0);
+    expect(s.acted).toContain(g.id);
+    // A fresh (unchilled) enemy is not frozen by its first contact; the boss never.
+    const t = mlab(['chill.deepfreeze'], { relics: ['chill'], gearLevel: { chill: 3 } }, 90, 240);
+    const f = dummy(t, 'grunt', 90, 170);
+    shoot(t, { x: 0, y: -MAX_PULL });
+    untilFirstHit(t);
+    expect(f.frozen ?? 0).toBe(0);
+    const u = mlab(['chill.deepfreeze'], { relics: ['chill'], gearLevel: { chill: 3 } }, 90, 260);
+    const boss = put(u, 'boss', 90, 160);
+    boss.intent = { t: 'rest' };
+    boss.chill = 1;
+    shoot(u, { x: 0, y: -MAX_PULL });
+    untilFirstHit(u);
+    expect(boss.frozen ?? 0).toBe(0);
+  });
+});
+
+describe('v0.6 M3: mirror', () => {
+  const shooters = (mods: string[], over: Partial<RunStats> = {}, chance = true) => {
+    const s = mlab(mods, { relics: ['mirror'], maxHp: 50, ...over }, 90, 260);
+    s.hp = s.maxHp = 50;
+    let calls = 0;
+    s.rng.chance = () => (calls++, chance);
+    return { s, calls: () => calls };
+  };
+  it('mirror.lens: the reflection deals the hero damage stat', () => {
+    const { s } = shooters(['mirror.lens'], { damage: 3 });
+    const k = dummy(s, 'skirmisher', 40, 60);
+    k.intent = { t: 'shoot', n: 2 };
+    enemyPhaseOnly(s);
+    expect(k.hp).toBe(20 - 3);
+    expect(s.hp).toBe(50);
+  });
+  it('mirror.absorb: a reflection heals the hero 1; the shooter still takes 1', () => {
+    const { s } = shooters(['mirror.absorb']);
+    s.hp = 40;
+    const k = dummy(s, 'skirmisher', 40, 60);
+    k.intent = { t: 'shoot', n: 2 };
+    const fx = enemyPhaseOnly(s);
+    expect(s.hp).toBe(40 + ABSORB_HEAL);
+    expect(k.hp).toBe(20 - 1);
+    expect(fx.some((f) => f.t === 'heroHeal')).toBe(true);
+  });
+  it('mirror.flawless: the first Shoot of the phase is reflected at chance 0 (no roll), the second is not', () => {
+    const { s, calls } = shooters(['mirror.flawless'], {}, false);
+    const a = dummy(s, 'skirmisher', 40, 60);
+    const b = dummy(s, 'skirmisher', 140, 60);
+    a.intent = { t: 'shoot', n: 2 };
+    b.intent = { t: 'shoot', n: 2 };
+    const fx = enemyPhaseOnly(s);
+    expect(fx.filter((f) => f.t === 'mirror').length).toBe(1);
+    expect(a.hp).toBe(19);
+    expect(b.hp).toBe(20);
+    expect(s.hp).toBe(48);
+    expect(calls()).toBe(1);
+  });
+  it('mirror.prism: the reflection splashes 1 to a neighbour of the shooter', () => {
+    const { s } = shooters(['mirror.prism']);
+    const k = dummy(s, 'skirmisher', 40, 60);
+    k.intent = { t: 'shoot', n: 2 };
+    const near = dummy(s, 'grunt', 70, 60);
+    const far = dummy(s, 'grunt', 150, 60);
+    enemyPhaseOnly(s);
+    expect(k.hp).toBe(19);
+    expect(near.hp).toBe(19);
+    expect(far.hp).toBe(20);
+  });
+});
+
+describe('v0.6 M3: split', () => {
+  const SPLIT = { relics: ['split' as const], splitCount: 2 };
+  it('split.swarm: +2 children, every child deals 1', () => {
+    const s = mlab(['split.swarm'], { ...SPLIT, damage: 3 }, 90, 240);
+    dummy(s, 'grunt', 108, 170); // glancing: the hero keeps its speed, so do the children
+    for (const [x, y] of [[40, 110], [90, 90], [140, 110], [40, 60], [140, 60]]) dummy(s, 'brute', x, y);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    const fx = untilFirstHit(s);
+    expect(s.balls.filter((b) => b.kind === 'split').length).toBe(2 + SWARM_EXTRA);
+    fx.push(...resolveAll(s));
+    const kids = hitsOf(fx, 'split');
+    expect(kids.length).toBeGreaterThan(0);
+    expect(kids.every((h) => h.dmg === 1)).toBe(true);
+    expect(hitsOf(fx, 'main')[0].dmg).toBe(3);
+  });
+  it('split.rail: the first rail before a hit releases the split; the hit then does not', () => {
+    const s = mlab(['split.rail'], SPLIT, 90, 230);
+    dummy(s, 'grunt', 90, 120);
+    shoot(s, { x: 0, y: MAX_PULL });
+    let atRail = -1;
+    const fx: FxEvent[] = [];
+    while (s.phase === 'resolve') {
+      const f = step(s, SIM_DT);
+      if (atRail < 0 && f.some((e) => e.t === 'split')) atRail = s.firstHitDone ? 1 : 0;
+      fx.push(...f);
+    }
+    expect(atRail).toBe(0);
+    expect(fx.filter((f) => f.t === 'split').length).toBe(1);
+    // No rail first: the hit splits as before.
+    const t = mlab(['split.rail'], SPLIT, 90, 240);
+    dummy(t, 'grunt', 90, 170);
+    shoot(t, { x: 0, y: -MAX_PULL });
+    const g = untilFirstHit(t);
+    expect(g.some((f) => f.t === 'split')).toBe(true);
+  });
+  it('split.mitosis: the first child kill releases 2 more children, once a shot', () => {
+    const s = mlab(['split.mitosis'], SPLIT, 90, 260);
+    stillShot(s);
+    const kid = { id: s.nextId++, kind: 'split' as const, x: 90, y: 150, vx: 0, vy: -200, r: 2.5, mass: 0.5, life: Infinity, resting: false, banked: false };
+    s.balls.push(kid);
+    const a = dummy(s, 'grunt', 40, 60, 1);
+    const b = dummy(s, 'grunt', 140, 60, 1);
+    const n0 = s.balls.length;
+    kill(s, a, 'split', [], kid);
+    expect(s.balls.length).toBe(n0 + 2);
+    kill(s, b, 'split', [], kid);
+    expect(s.balls.length).toBe(n0 + 2);
+    // Without the capstone (or a hero kill): nothing.
+    const t = mlab([], SPLIT, 90, 260);
+    stillShot(t);
+    t.balls.push({ ...kid });
+    const c = dummy(t, 'grunt', 40, 60, 1);
+    const m = t.balls.length;
+    kill(t, c, 'split', [], t.balls[1]);
+    expect(t.balls.length).toBe(m);
+  });
+  it('split.homing: child i heads for the i-th nearest enemy near the hero', () => {
+    const s = mlab(['split.homing'], SPLIT, 90, 240);
+    dummy(s, 'grunt', 90, 170);
+    const side = dummy(s, 'grunt', 140, 200);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    untilFirstHit(s);
+    const kids = s.balls.filter((b) => b.kind === 'split');
+    expect(kids.length).toBe(2);
+    const k = kids[1];
+    const dx = side.x - k.x;
+    const dy = side.y - k.y;
+    const dot = (k.vx * dx + k.vy * dy) / (Math.hypot(k.vx, k.vy) * Math.hypot(dx, dy));
+    expect(dot).toBeGreaterThan(0.999);
+  });
+});
+
+describe('v0.6 M3: shockwave', () => {
+  const SW = { trick: 'shockwave' as const, trickUses: 2 };
+  const gapPut = (s: RunState, kind: TargetKind, gap: number, hp = 10) => dummy(s, kind, 90, 240 - 12 - TARGET_DEFS[kind].r - gap, hp);
+  it('shockwave.quake: radius 90 (gap 80 staggers; without it does not)', () => {
+    const on = mlab(['shockwave.quake'], SW);
+    const g = gapPut(on, 'brute', 80);
+    useTrick(on);
+    expect(g.stagger).toBe(1);
+    const off = mlab([], SW);
+    const h = gapPut(off, 'brute', 80);
+    useTrick(off);
+    expect(h.stagger).toBe(0);
+  });
+  it('shockwave.pulse: shoves 30 px away from the hero, no stagger', () => {
+    const s = mlab(['shockwave.pulse'], { ...SW, relics: ['static'] });
+    const g = gapPut(s, 'skirmisher', 20);
+    const y0 = g.y;
+    useTrick(s);
+    expect(y0 - g.y).toBeCloseTo(PULSE_PUSH, 6);
+    expect(g.stagger).toBe(0);
+    expect(g.hp).toBe(10);
+  });
+  it('shockwave.aftershock: the wave fires again in the enemy phase of shot +2 (Pulse shape)', () => {
+    const s = mlab(['shockwave.aftershock', 'shockwave.pulse'], SW);
+    const g = gapPut(s, 'brute', 10);
+    useTrick(s);
+    step(s, SIM_DT); // flush the trick's own fx
+    expect(s.aftershockShot).toBe(2);
+    const gap = () => Math.hypot(g.x - s.balls[0].x, g.y - s.balls[0].y) - g.r - 12;
+    expect(gap()).toBeCloseTo(10 + PULSE_PUSH, 6);
+    const f1 = enemyPhaseOnly(s);
+    expect(f1.some((f) => f.t === 'trick')).toBe(false);
+    expect(gap()).toBeCloseTo(10 + PULSE_PUSH, 6);
+    const f2 = enemyPhaseOnly(s);
+    expect(f2.filter((f) => f.t === 'trick').length).toBe(1);
+    expect(gap()).toBeCloseTo(10 + 2 * PULSE_PUSH, 6);
+    expect(s.trickUsesLeft).toBe(1);
+  });
+  it('shockwave.epicentre: 2 to an enemy at gap 20, 0 at gap 30', () => {
+    const s = mlab(['shockwave.epicentre'], SW);
+    const a = gapPut(s, 'brute', 20);
+    const t = mlab(['shockwave.epicentre'], SW);
+    const b = gapPut(t, 'brute', 30);
+    useTrick(s);
+    useTrick(t);
+    expect(a.hp).toBe(10 - EPICENTRE_DMG);
+    expect(b.hp).toBe(10);
+    expect(a.stagger).toBe(1);
+  });
+});
+
+describe('v0.6 M3: draw cue', () => {
+  const DRAW = { cue: 'draw' as const, gearLevel: { draw: 2 } };
+  it('draw.snap: returns at 80 % of launch speed', () => {
+    const s = mlab(['draw.snap'], DRAW, 90, 240);
+    dummy(s, 'grunt', 90, 170);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    const v = s.launch!.speed;
+    untilFirstHit(s);
+    expect(s.balls[0].vy).toBeGreaterThan(0);
+    expect(Math.abs(speedOf(s) - SNAP_RETURN * v)).toBeLessThan(4);
+  });
+  it('draw.seek: the return heads for the nearest other enemy near the hero', () => {
+    const s = mlab(['draw.seek'], DRAW, 90, 240);
+    dummy(s, 'grunt', 90, 170);
+    const g2 = dummy(s, 'grunt', 140, 215);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    untilFirstHit(s);
+    const h = s.balls[0];
+    const dx = g2.x - h.x;
+    const dy = g2.y - h.y;
+    expect((h.vx * dx + h.vy * dy) / (speedOf(s) * Math.hypot(dx, dy))).toBeGreaterThan(0.999);
+  });
+  it('draw.masse: the preview ends with the return to the hero', () => {
+    const s = mlab(['draw.masse'], { ...DRAW, aimPreview: 1 }, 90, 240);
+    dummy(s, 'grunt', 90, 170);
+    const pts = previewShot(s, { x: 0, y: -MAX_PULL });
+    expect(pts[pts.length - 1]).toEqual({ x: 90, y: 240 });
+    expect(pts.length).toBe(3);
+    const t = mlab([], { ...DRAW, aimPreview: 1 }, 90, 240);
+    dummy(t, 'grunt', 90, 170);
+    expect(previewShot(t, { x: 0, y: -MAX_PULL }).length).toBe(2);
+  });
+  it('draw.pull: the struck enemy is dragged along the return (x0.5), no extra damage', () => {
+    const s = mlab(['draw.pull'], DRAW, 90, 240);
+    const g = dummy(s, 'grunt', 90, 170);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    untilFirstHit(s);
+    const h = s.balls[0];
+    expect(g.vy).toBeGreaterThan(0);
+    // Same direction as the return, PULL_K x its speed (both lost one substep of friction since).
+    expect((g.vx * h.vx + g.vy * h.vy) / (enemySpeed(g) * speedOf(s))).toBeGreaterThan(0.9999);
+    expect(enemySpeed(g) / speedOf(s)).toBeCloseTo(PULL_K, 2);
+    expect(g.hp).toBe(19);
+  });
+});
+
+describe('v0.6 M3: sticky ball', () => {
+  const STICKY = { ballType: 'sticky' as const, gearLevel: { sticky: 2 } };
+  it('sticky.glue: the stuck enemy is held: it acts again only in phase 3', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, STICKY, 90, 240);
+      const g = dummy(s, 'grunt', 90, 170);
+      shoot(s, { x: 0, y: -MAX_PULL });
+      untilSettled(s);
+      const acted = [s.acted.includes(g.id)];
+      for (let i = 0; i < 2; i++) {
+        g.intent = { t: 'rest' };
+        enemyPhaseOnly(s);
+        acted.push(s.acted.includes(g.id));
+      }
+      return acted;
+    };
+    expect(run(['sticky.glue'])).toEqual([false, false, true]);
+    expect(run([])).toEqual([false, true, true]);
+  });
+  it('sticky.web: enemies near the stuck one take +1 stagger', () => {
+    const s = mlab(['sticky.web'], STICKY, 90, 240);
+    dummy(s, 'grunt', 90, 170);
+    const n = dummy(s, 'brute', 90 + 12 + 19 + 20, 160);
+    const far = dummy(s, 'brute', 160, 60);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    untilFirstHit(s);
+    expect(n.stagger).toBe(1);
+    expect(n.hp).toBe(20);
+    expect(far.stagger).toBe(0);
+  });
+  it('sticky.trap: the sticking hit deals x1, the next shot\'s hit x2', () => {
+    const s = mlab(['sticky.trap'], STICKY, 90, 240);
+    const g = dummy(s, 'brute', 90, 170, 40);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    untilFirstHit(s);
+    expect(g.hp).toBe(39);
+    expect(g.trapped).toBe(true);
+    untilSettled(s);
+    g.intent = { t: 'rest' };
+    shoot(s, aimAt(s, g.x, g.y));
+    untilFirstHit(s);
+    expect(g.hp).toBe(39 - TRAP_MULT);
+  });
+  it('sticky.cling: the stuck enemy\'s charge is blocked (0); a boss charge lands', () => {
+    const s = mlab(['sticky.cling'], { ...STICKY, maxHp: 50 }, 90, 240);
+    s.hp = s.maxHp = 50;
+    const g = dummy(s, 'grunt', 90, 170);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    untilSettled(s);
+    expect(s.stuckId).toBe(g.id);
+    const hp = s.hp;
+    g.intent = { t: 'attack', n: 3 };
+    s.waveTurn = 0;
+    const fx = enemyPhaseOnly(s);
+    expect(fx.some((f) => f.t === 'launch' && f.id === g.id)).toBe(true);
+    expect(fx.some((f) => f.t === 'blocked')).toBe(true);
+    expect(s.hp).toBe(hp);
+    const t = mlab(['sticky.cling'], { ...STICKY, maxHp: 50 }, 90, 240);
+    t.hp = t.maxHp = 50;
+    const boss = put(t, 'boss', 90, 160);
+    boss.intent = { t: 'attack', n: 3 };
+    t.stuckId = boss.id;
+    enemyPhaseOnly(t);
+    expect(t.hp).toBeLessThan(50);
+  });
+});
+
+describe('v0.6 M3: lightning', () => {
+  const LIT = { relics: ['lightning' as const], lightningChance: 1, lightningArcs: 1, lightningRange: 80, lightningDamage: 1 };
+  const line = (mods: string[], over: Partial<RunStats> = {}) => {
+    const s = mlab(mods, { ...LIT, ...over }, 90, 240);
+    const a = dummy(s, 'grunt', 90, 170);
+    const b = dummy(s, 'brute', 90, 120);
+    const c = dummy(s, 'brute', 150, 120);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    const fx = untilFirstHit(s);
+    return { s, a, b, c, fx };
+  };
+  it('lightning.chain: each arc hops once more for 1', () => {
+    const on = line(['lightning.chain']);
+    expect(on.b.hp).toBe(19);
+    expect(on.c.hp).toBe(20 - CHAIN_DMG);
+    expect(on.fx.filter((f) => f.t === 'lightning').length).toBe(2);
+    expect(line([]).c.hp).toBe(20);
+  });
+  it('lightning.thunder: one arc at full damage, stagger 2', () => {
+    const on = line(['lightning.thunder'], { lightningArcs: 3, damage: 3 });
+    expect(on.b.hp).toBe(20 - 3);
+    expect(on.b.stagger).toBe(2);
+    expect(on.c.hp).toBe(20);
+    const off = line([], { lightningArcs: 3, damage: 3 });
+    expect(off.c.hp).toBe(19);
+  });
+  it('lightning.storm: a ball kill also arcs (chance 1)', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, LIT, 90, 240);
+      dummy(s, 'grunt', 90, 170, 1);
+      dummy(s, 'brute', 90, 120);
+      shoot(s, { x: 0, y: -MAX_PULL });
+      return untilFirstHit(s).filter((f) => f.t === 'lightning').length;
+    };
+    expect(run(['lightning.storm'])).toBe(2);
+    expect(run([])).toBe(1);
+  });
+  it('lightning.surge: the first hero contact arcs at chance 0; the second does not', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, { ...LIT, lightningChance: 0 }, 90, 240);
+      dummy(s, 'grunt', 90, 170, 40);
+      dummy(s, 'brute', 150, 150);
+      shoot(s, { x: 15, y: -MAX_PULL });
+      const fx = resolveAll(s);
+      return { arcs: fx.filter((f) => f.t === 'lightning').length, hits: hitsOf(fx, 'main').length };
+    };
+    const on = run(['lightning.surge']);
+    expect(on.hits).toBeGreaterThanOrEqual(2);
+    expect(on.arcs).toBe(1);
+    expect(run([]).arcs).toBe(0);
+  });
+});
+
+describe('v0.6 M3: static', () => {
+  const ST = { relics: ['static' as const] };
+  it('static.overload: a crossing also zaps the nearest other enemy 1 (no stagger)', () => {
+    const s = mlab(['static.overload'], ST, 90, 240);
+    const k = dummy(s, 'skirmisher', 90, 170);
+    const n = dummy(s, 'brute', 90 + 12 + 19 + 20, 160);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    untilFirstHit(s);
+    expect(k.hp).toBe(20 - 1 - 1);
+    expect(n.hp).toBe(19);
+    expect(n.stagger).toBe(0);
+  });
+  it('static.paralysis: a crossing in the shot holds a grunt one more phase; never the boss', () => {
+    const s = mlab(['static.paralysis'], ST, 90, 240);
+    const g = dummy(s, 'grunt', 90, 170);
+    g.stagger = 1;
+    shoot(s, { x: 0, y: -MAX_PULL });
+    untilFirstHit(s);
+    expect(g.held).toBe(1);
+    untilSettled(s);
+    expect(s.acted).not.toContain(g.id);
+    g.intent = { t: 'rest' };
+    enemyPhaseOnly(s);
+    expect(s.acted).not.toContain(g.id);
+    enemyPhaseOnly(s);
+    expect(s.acted).toContain(g.id);
+    const t = mlab(['static.paralysis'], ST, 90, 260);
+    const boss = put(t, 'boss', 90, 160);
+    boss.intent = { t: 'rest' };
+    boss.stagger = TARGET_DEFS.boss.staggerAt - 1;
+    shoot(t, { x: 0, y: -MAX_PULL });
+    untilFirstHit(t);
+    expect(boss.stagger).toBeGreaterThanOrEqual(TARGET_DEFS.boss.staggerAt);
+    expect(boss.held ?? 0).toBe(0);
+  });
+  it('static.tesla: the 3rd crossing of a shot zaps the nearest enemy for 2, once', () => {
+    const s = mlab(['static.tesla'], ST, 90, 270);
+    const ks = [30, 70, 110].map((x) => dummy(s, 'skirmisher', x, 60));
+    const z = dummy(s, 'brute', 150, 60);
+    stillShot(s);
+    const fx: FxEvent[] = [];
+    addStagger(ks[0], 1, fx, s);
+    addStagger(ks[1], 1, fx, s);
+    expect(z.hp).toBe(20);
+    addStagger(ks[2], 1, fx, s);
+    expect(z.hp).toBe(20 - TESLA_DMG);
+    expect(s.teslaHits).toBe(3);
+    addStagger(z, 5, fx, s);
+    expect(ks.map((k) => k.hp)).toEqual([19, 19, 19]);
+  });
+  it('static.grounded: a staggered ally is neither repaired nor shielded', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, ST, 90, 270);
+      const g = dummy(s, 'grunt', 60, 80, 10);
+      g.hp = 5;
+      g.stagger = 2;
+      const tk = dummy(s, 'tinker', 100, 80);
+      tk.intent = { t: 'repair' };
+      const cl = dummy(s, 'cleric', 60, 120);
+      cl.intent = { t: 'guard' };
+      enemyPhaseOnly(s);
+      return { hp: g.hp, shield: g.shield ?? 0 };
+    };
+    expect(run(['static.grounded'])).toEqual({ hp: 5, shield: 0 });
+    const off = run([]);
+    expect(off.hp).toBeGreaterThan(5);
+    expect(off.shield).toBe(1);
+  });
+});
+
+describe('v0.6 M3: spitter', () => {
+  const SP = { relics: ['spitter' as const], spitInterval: 0.05, spitLife: 1, spitDamage: 1 };
+  it('spitter.gatling: interval x0.6; never more than 10 live spat balls', () => {
+    const s = mlab(['spitter.gatling'], SP, 90, 240);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    expect(s.spitTimer).toBeCloseTo(0.05 * GATLING_MULT, 9);
+    const run = (mods: string[]) => {
+      const t = mlab(mods, { ...SP, spitInterval: 0.001, spitLife: 3 }, 90, 240);
+      shoot(t, { x: 10, y: -MAX_PULL });
+      let most = 0;
+      for (let i = 0; i < 200 && t.phase === 'resolve'; i++) {
+        step(t, SIM_DT);
+        most = Math.max(most, t.balls.filter((b) => b.kind === 'spat').length);
+      }
+      return most;
+    };
+    expect(run(['spitter.gatling'])).toBe(SPIT_LIVE_CAP);
+    expect(run([])).toBeGreaterThan(SPIT_LIVE_CAP);
+  });
+  it('spitter.mortar: interval x1.5; spat contacts blast neighbours for 1, the 4th is silent', () => {
+    const s = mlab(['spitter.mortar'], SP, 90, 240);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    expect(s.spitTimer).toBeCloseTo(0.05 * MORTAR_MULT, 9);
+    const t = mlab(['spitter.mortar'], SP, 90, 280);
+    const a = dummy(t, 'brute', 90, 150, 40);
+    const n = dummy(t, 'grunt', 90 + 19 + 12 + 10, 150, 40);
+    stillShot(t);
+    const spat = (x: number, y: number, vx: number, vy: number) =>
+      t.balls.push({ id: t.nextId++, kind: 'spat', x, y, vx, vy, r: 2, mass: 0.4, life: 5, resting: false, banked: false });
+    spat(30, 150, 300, 0);
+    spat(90, 90, 0, 300);
+    spat(90, 210, 0, -300);
+    spat(45, 105, 200, 200);
+    const fx = resolveAll(t);
+    const onBrute = hitsOf(fx, 'spat').filter((h) => h.targetKind === 'brute').length;
+    expect(onBrute).toBeGreaterThanOrEqual(4);
+    expect(a.hp).toBe(40 - onBrute); // never blasted by its own contacts
+    expect(fx.filter((f) => f.t === 'blast').length).toBe(MORTAR_BLASTS);
+    expect(n.hp).toBe(40 - MORTAR_BLASTS);
+  });
+  it('spitter.aimed: a spit heads for the nearest enemy near the hero', () => {
+    const s = mlab(['spitter.aimed'], SP, 90, 250);
+    const g = dummy(s, 'grunt', 140, 230);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    while (!s.balls.some((b) => b.kind === 'spat')) step(s, SIM_DT);
+    const k = s.balls.find((b) => b.kind === 'spat')!;
+    const dx = g.x - k.x;
+    const dy = g.y - k.y;
+    expect((k.vx * dx + k.vy * dy) / (Math.hypot(k.vx, k.vy) * Math.hypot(dx, dy))).toBeGreaterThan(0.99);
+  });
+  it('spitter.heavyspit: spat contacts deal 2', () => {
+    const s = mlab(['spitter.heavyspit'], SP, 90, 280);
+    dummy(s, 'brute', 90, 150, 40);
+    stillShot(s);
+    s.balls.push({ id: s.nextId++, kind: 'spat', x: 90, y: 210, vx: 0, vy: -300, r: 2, mass: 0.4, life: 5, resting: false, banked: false });
+    const fx = resolveAll(s);
+    expect(hitsOf(fx, 'spat')[0].dmg).toBe(HEAVY_SPIT_DMG);
+  });
+});
+
+describe('v0.6 M3: time stop', () => {
+  const TS = { trick: 'timeStop' as const, trickUses: 1 };
+  it('timeStop.freeze: nobody even moves', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, TS, 90, 260);
+      put(s, 'grunt', 90, 80).intent = { t: 'attack', n: 2 };
+      useTrick(s);
+      return enemyPhaseOnly(s).filter((f) => f.t === 'launch').length;
+    };
+    expect(run(['timeStop.freeze'])).toBe(0);
+    expect(run([])).toBe(1);
+  });
+  it('timeStop.slow: two phases at half damage (4 -> 2), the third full', () => {
+    const s = mlab(['timeStop.slow'], { ...TS, maxHp: 50 }, 90, 260);
+    s.hp = s.maxHp = 50;
+    const k = dummy(s, 'skirmisher', 40, 60);
+    useTrick(s);
+    expect(s.skipNextEnemyPhase).toBe(false);
+    const lost: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      k.intent = { t: 'shoot', n: 4 };
+      s.waveTurn = 0;
+      const hp = s.hp;
+      enemyPhaseOnly(s);
+      lost.push(hp - s.hp);
+    }
+    expect(lost).toEqual([2, 2, 4]);
+  });
+  it('timeStop.clockwork: no belt sweep while a Time Stop is in effect (also under Slow)', () => {
+    const run = (mods: string[]) => {
+      const s = clab([RIGHT_BELT], 40, 150, { ...TS, mods });
+      resting(s, 'grunt', 100, 230);
+      useTrick(s);
+      return belts(enemyPhaseOnly(s)).length;
+    };
+    expect(run(['timeStop.clockwork'])).toBe(0);
+    expect(run(['timeStop.clockwork', 'timeStop.slow'])).toBe(0);
+    expect(run([])).toBeGreaterThan(0);
+  });
+  it('timeStop.stasis: chill and the enrage clock hold through the stopped phase', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, { ...TS, relics: ['chill'] }, 90, 260);
+      const g = dummy(s, 'grunt', 90, 80);
+      g.chill = 2;
+      useTrick(s);
+      const w = s.waveTurn;
+      enemyPhaseOnly(s);
+      return { chill: g.chill, turns: s.waveTurn - w };
+    };
+    expect(run(['timeStop.stasis'])).toEqual({ chill: 2, turns: 0 });
+    expect(run([])).toEqual({ chill: 1, turns: 1 });
+  });
+});
+
+describe('v0.6 M3 w2/w3: determinism with the new choices', () => {
+  const W2: RunStats = {
+    ...BASE_STATS, damage: 2, cue: 'jump', ballType: 'light', relics: ['chill', 'mirror', 'split'], splitCount: 2, trick: 'shockwave', trickUses: 2,
+    gearLevel: { jump: 3, light: 3, chill: 3, mirror: 3, split: 3, shockwave: 3 },
+    mods: ['jump.long', 'jump.trample', 'light.zip', 'light.tailwind', 'chill.brittle', 'chill.deepfreeze', 'mirror.flawless', 'split.swarm', 'split.homing', 'shockwave.pulse', 'shockwave.aftershock'],
+  };
+  const W3: RunStats = {
+    ...BASE_STATS, damage: 2, cue: 'draw', ballType: 'sticky', relics: ['lightning', 'static', 'spitter'], lightningChance: 0.5, lightningArcs: 2, lightningRange: 80, lightningDamage: 1,
+    spitInterval: 0.1, spitLife: 1, spitDamage: 1, trick: 'timeStop', trickUses: 2,
+    gearLevel: { draw: 3, sticky: 3, lightning: 3, static: 3, spitter: 3, timeStop: 3 },
+    mods: ['draw.seek', 'draw.pull', 'sticky.glue', 'sticky.trap', 'lightning.chain', 'lightning.storm', 'static.overload', 'static.tesla', 'spitter.gatling', 'spitter.aimed', 'timeStop.slow', 'timeStop.stasis'],
+  };
+  for (const [name, stage, stats] of [['w2 kit', 'w2s2', W2], ['w3 kit', 'w3s2', W3]] as const) {
+    it(`${name}: same seed => identical state; fast-forward matches`, () => {
+      const go = (dt: number) => {
+        const s = createRun(stage, stats, 7);
+        SHOTS.forEach((p, i) => {
+          if (s.phase !== 'aim') return;
+          if (i === 1) useTrick(s);
+          shoot(s, p);
+          untilSettled(s, dt);
+        });
+        return s;
+      };
+      const a = go(SIM_DT);
+      expect(a.shots).toBeGreaterThan(1);
+      expect(Number.isFinite(a.hp) && a.balls.every((b) => Number.isFinite(b.x) && Number.isFinite(b.y))).toBe(true);
+      expect(snapshot(a)).toEqual(snapshot(go(SIM_DT)));
+      const { t: _a, ...ff } = snapshot(go(SIM_DT * FAST_FORWARD_MULT));
+      const { t: _b, ...normal } = snapshot(go(SIM_DT));
+      expect(ff).toEqual(normal);
+    });
+  }
+});

@@ -31,12 +31,20 @@ import {
   REPAIR_HEAL,
   MOTH_CAP,
   gearVal,
+  ABSORB_HEAL,
+  EPICENTRE_DMG,
+  EPICENTRE_R,
+  PRISM_DMG,
+  PRISM_R,
+  PULSE_PUSH,
+  QUAKE_R,
+  SHOCKWAVE_R,
 } from '../core/tuning';
-import { applyDamage, heal, hero, heroDamage, kill, scaleCash, stageWaves } from './damage';
-import { has, heroGap, lanternR, lv, mod } from './gear';
+import { addStagger, applyDamage, heal, hero, heroDamage, kill, scaleCash, stageWaves, staticZap } from './damage';
+import { has, heroGap, lanternR, lv, mod, timeStopInEffect } from './gear';
 import { bossCogs, repairTarget, rollIntent } from './intents';
 import { runSweep, scheduleSweep } from './belts';
-import { relaxAll } from './physics';
+import { numbed, relaxAll } from './physics';
 import { liveRegulars, spawnWave, summonNear } from './spawn';
 
 /** Turn of the current wave at which enrage starts: ENRAGE_BASE + ENRAGE_PER_WAVE x wave. */
@@ -64,9 +72,14 @@ export function startEnemyPhase(s: RunState, fx: FxEvent[]): void {
   s.acted = [];
   s.rangedTaken = 0;
   s.mothLeft = mod(s, 'lantern.moth') ? MOTH_CAP : 0;
+  s.mirrorFree = mod(s, 'mirror.flawless');
   for (const t of s.targets) t.chargeDmg = 0;
+  // Stasis (time stop capstone): freezes do not tick while a Time Stop is in effect (timeStopped is set below: read the
+  // pending flag).
+  const stasis = mod(s, 'timeStop.stasis') && (s.skipNextEnemyPhase || (s.slowPhases ?? 0) > 0);
   // Freezes tick down first, so a freeze set this phase lasts FREEZE_PHASES full phases.
   for (const t of s.targets) {
+    if (stasis) break;
     if (t.dead || !((t.frozen ?? 0) > 0)) continue;
     t.frozen = (t.frozen ?? 0) - 1;
     if (t.frozen <= 0) fx.push({ t: 'thaw', x: t.x, y: t.y });
@@ -89,12 +102,48 @@ export function startEnemyPhase(s: RunState, fx: FxEvent[]): void {
   const reflex = s.stats.reflex > 0 && s.waveTurn === 0 && fresh.size === 0;
   s.timeStopped = s.skipNextEnemyPhase;
   s.skipNextEnemyPhase = false;
-  s.enemyQueue = reflex ? [] : s.targets.filter((t) => !t.dead && !fresh.has(t.id)).map((t) => t.id);
+  // Freeze (time stop fork): nobody even moves.
+  const frozenTime = s.timeStopped && mod(s, 'timeStop.freeze');
+  s.enemyQueue = reflex || frozenTime ? [] : s.targets.filter((t) => !t.dead && !fresh.has(t.id)).map((t) => t.id);
   s.enemyNext = s.t;
   if (mod(s, 'lantern.glare') && !s.timeStopped) glare(s, fx);
+  // Aftershock (shockwave capstone): the wave fires again from the hero two shots after the trick.
+  if (mod(s, 'shockwave.aftershock') && s.aftershockShot === s.shots) {
+    s.aftershockShot = undefined;
+    shockwaveWave(s, fx);
+    fx.push({ t: 'trick', id: 'shockwave' });
+  }
   // Clockwork: a body on a belt holds the phase BELT_HOLD s, then the sweep runs before anyone acts (also under
-  // Reflex and Time Stop). No belts: no hold, identical to v0.4.
-  scheduleSweep(s);
+  // Reflex and Time Stop). No belts: no hold, identical to v0.4. Clockwork (time stop capstone): no sweep while a Time
+  // Stop is in effect (a pending Wind keeps).
+  if (mod(s, 'timeStop.clockwork') && timeStopInEffect(s)) s.beltAt = undefined;
+  else scheduleSweep(s);
+}
+
+/**
+ * Shockwave trick (useTrick, and Aftershock in startEnemyPhase): +1 stagger to every enemy within SHOCKWAVE_R (Quake:
+ * QUAKE_R) edge gap of the hero; Pulse shoves them PULSE_PUSH px straight away instead (no stagger) and relaxes;
+ * Epicentre: enemies within EPICENTRE_R also take EPICENTRE_DMG as static. Does not drop dead bodies.
+ */
+export function shockwaveWave(s: RunState, fx: FxEvent[]): void {
+  const h = hero(s);
+  const R = mod(s, 'shockwave.quake') ? QUAKE_R : SHOCKWAVE_R;
+  const pulse = mod(s, 'shockwave.pulse');
+  const epicentre = mod(s, 'shockwave.epicentre');
+  for (const t of s.targets.slice()) {
+    if (t.dead || t.kind === 'goblin') continue;
+    const d = Math.hypot(t.x - h.x, t.y - h.y);
+    const gap = d - t.r - h.r;
+    if (gap <= R) {
+      if (!pulse) addStagger(t, 1, fx, s);
+      else if (d > 1e-9) {
+        t.x = Math.max(TABLE.x + t.r, Math.min(TABLE.x + TABLE.w - t.r, t.x + ((t.x - h.x) / d) * PULSE_PUSH));
+        t.y = Math.max(TABLE.y + t.r, Math.min(TABLE.y + TABLE.h - t.r, t.y + ((t.y - h.y) / d) * PULSE_PUSH));
+      }
+    }
+    if (epicentre && !t.dead && gap <= EPICENTRE_R) staticZap(s, t, EPICENTRE_DMG, fx);
+  }
+  if (pulse) relaxAll(s);
 }
 
 /** Glare (lantern fork): the nearest queued shooter within lanternR rests this phase (it rerolls after acting). */
@@ -226,20 +275,27 @@ export function enemyStep(s: RunState, h: number, fx: FxEvent[], physics: (s: Ru
 
 /** Reroll intents for enemies that acted, clear stagger, tick chill, advance the enrage clock. */
 function endEnemyPhase(s: RunState, fx: FxEvent[]): void {
+  // Stasis (time stop capstone): chill and the enrage clock hold while a Time Stop is in effect (read before clearing).
+  const stasis = mod(s, 'timeStop.stasis') && timeStopInEffect(s);
   s.targets = s.targets.filter((t) => !t.dead);
   s.timeStopped = false;
   s.beltAt = undefined;
   const acted = new Set(s.acted);
   for (const t of s.targets) {
     if (acted.has(t.id)) rollIntent(s, t);
-    t.stagger = 0;
+    // Glue / Paralysis: a held enemy stays staggered through the next phase (never the boss).
+    const held = t.kind !== 'boss' && (t.held ?? 0) > 0;
+    t.stagger = held ? TARGET_DEFS[t.kind].staggerAt : 0;
+    if (t.held !== undefined) t.held = Math.max(0, t.held - 1);
     // Chill wears off at the end of a phase, so a chill set during the shot covers the phase that follows it.
-    if ((t.chill ?? 0) > 0) {
+    if (!stasis && (t.chill ?? 0) > 0) {
       t.chill = (t.chill ?? 0) - 1;
       if (t.chill <= 0) fx.push({ t: 'status', id: t.id, kind: 'chill', on: false });
     }
   }
-  s.waveTurn++;
+  if (!stasis) s.waveTurn++;
+  // Slow (time stop fork): one phase of half damage spent.
+  if ((s.slowPhases ?? 0) > 0) s.slowPhases = (s.slowPhases ?? 0) - 1;
   relaxAll(s);
 }
 
@@ -420,7 +476,7 @@ function executeIntent(s: RunState, e: Target, fx: FxEvent[]): boolean {
       // Deep enrage with the line covered (e.g. caged behind bumpers): the blow lands anyway, as an instant strike.
       if (rage >= ENRAGE_STRIKE_LEVEL && blocked(s, e, e.x, e.y, h.x, h.y)) {
         fx.push({ t: 'tracer', x0: e.x, y0: e.y, x1: h.x, y1: h.y });
-        heroDamage(s, (it.n ?? 0) + rage, e.kind, h.x, h.y, fx, 'charge');
+        heroDamage(s, numbed(s, e, (it.n ?? 0) + rage), e.kind, h.x, h.y, fx, 'charge');
         e.charged = false;
         return false;
       }
@@ -443,14 +499,19 @@ function executeIntent(s: RunState, e: Target, fx: FxEvent[]): boolean {
       }
       fx.push({ t: 'tracer', x0: e.x, y0: e.y, x1: h.x, y1: h.y });
       // Mirror relic: the shot is reflected (rng drawn only when equipped, so other runs keep their streams).
-      if (has(s, 'mirror') && s.rng.chance(gearVal(MIRROR_CHANCE, lv(s, 'mirror')))) {
-        fx.push({ t: 'mirror', x: e.x, y: e.y });
-        applyDamage(s, e, MIRROR_DMG, 'mirror', fx);
-        return false;
+      // Flawless: the phase's first Shoot is reflected without a roll.
+      if (has(s, 'mirror')) {
+        const free = !!s.mirrorFree;
+        s.mirrorFree = false;
+        if (free || s.rng.chance(gearVal(MIRROR_CHANCE, lv(s, 'mirror')))) {
+          reflect(s, e, h, fx);
+          return false;
+        }
       }
       // Thick Skin: flat reduction on ranged damage (min 1), then armor. Unblockable, so capped per enemy phase at
       // RANGED_PHASE_CAP x max HP (the excess is dropped); charges stay uncapped (they can be dodged or blocked).
-      const dmg = Math.max(1, Math.round(Math.max(1, (it.n ?? 1) + rage - s.stats.rangedResist)) - s.stats.armor);
+      const n = numbed(s, e, (it.n ?? 1) + rage);
+      const dmg = Math.max(1, Math.round(Math.max(1, n - s.stats.rangedResist)) - s.stats.armor);
       const give = Math.min(dmg, Math.floor(RANGED_PHASE_CAP * s.maxHp) - (s.rangedTaken ?? 0));
       if (give > 0) {
         s.rangedTaken = (s.rangedTaken ?? 0) + give;
@@ -470,6 +531,8 @@ function executeIntent(s: RunState, e: Target, fx: FxEvent[]): boolean {
         for (const o of s.targets) {
           // The boss is never shielded by a cleric (a shield eats a whole hit: boss waves dragged on).
           if (o === e || o.dead || o.kind === 'boss' || (o.shield ?? 0) > 0) continue;
+          // Grounded (static capstone): a staggered enemy cannot be shielded.
+          if (staggered(o) && mod(s, 'static.grounded')) continue;
           const d = Math.hypot(o.x - e.x, o.y - e.y) - o.r - e.r;
           if (d <= CLERIC_RANGE && d < bestD) ((best = o), (bestD = d));
         }
@@ -517,5 +580,21 @@ function executeIntent(s: RunState, e: Target, fx: FxEvent[]): boolean {
     case 'flee': // Loot Goblin: scurry is driven by the loot phase, never by intent execution
     case 'rest':
       return false;
+  }
+}
+
+/**
+ * Mirror reflection: the shooter takes MIRROR_DMG (Lens: the hero's damage stat). Absorb heals the hero ABSORB_HEAL;
+ * Prism splashes PRISM_DMG to live enemies within PRISM_R (edge gap) of the shooter.
+ */
+function reflect(s: RunState, e: Target, h: Ball, fx: FxEvent[]): void {
+  fx.push({ t: 'mirror', x: e.x, y: e.y });
+  applyDamage(s, e, mod(s, 'mirror.lens') ? s.stats.damage : MIRROR_DMG, 'mirror', fx);
+  if (mod(s, 'mirror.absorb')) heal(s, ABSORB_HEAL, h.x, h.y, fx);
+  if (mod(s, 'mirror.prism')) {
+    for (const o of s.targets.slice()) {
+      if (o === e || o.dead || o.kind === 'goblin') continue;
+      if (Math.hypot(o.x - e.x, o.y - e.y) - o.r - e.r <= PRISM_R) applyDamage(s, o, PRISM_DMG, 'mirror', fx);
+    }
   }
 }

@@ -1,5 +1,5 @@
 // v0.6 gallery cards (M2). Every piece of gear is a card with the same tree: unlock -> base I/II -> fork -> base III -> capstone.
-// Forks (base II, 1 token) and capstones (base III, 2 tokens) are the world-1 choices (M3 part 1); other worlds stay empty. Leaf module: imports only core/types and core/tuning.
+// Forks (base II, 1 token) and capstones (base III, 2 tokens) are the world 1-3 choices (M3); worlds 4-6 stay empty. Leaf module: imports only core/types and core/tuning.
 import {
   CARD_BASE_PRICE, CASH_GROWTH, CHILL_PHASES, EXPLOSIVE_R, HEAVY_MASS, LANTERN_REACH, LIGHT_SPEED, MIRROR_CHANCE, MOMENTUM_MAX,
   POISON_MAX, RICOCHET_MAX, SHRAPNEL_COUNT, SPIT_LIFE_CAP, STATIC_DMG, STICKY_STAGGER, THORNS_RELIC_DMG, TRICK_USES,
@@ -168,6 +168,55 @@ const CHOICES: Record<string, { forks: ForkChoice[]; caps: ForkChoice[] }> = {
     forks: [ch('lantern', 'beacon', 'BEACON', 'LIT KILLS +10%/LEVEL', 1), ch('lantern', 'glare', 'GLARE', 'DAZZLES 1 SHOOTER', 1)],
     caps: [ch('lantern', 'sunrise', 'SUNRISE', 'REACH: WHOLE TABLE', 2), ch('lantern', 'moth', 'MOTH', 'SHOOTERS COME TO YOU', 2)],
   },
+  // ---- M3 parts 2-3: worlds 2 (frost) and 3 (cog)
+  jump: {
+    forks: [ch('jump', 'long', 'LONG JUMP', 'HOPS 2 FOES A SHOT', 1), ch('jump', 'stomp', 'STOMP', 'LANDING STAGGERS +1', 1)],
+    caps: [ch('jump', 'pounce', 'POUNCE', 'LANDING HIT X2', 2), ch('jump', 'trample', 'TRAMPLE', 'JUMPED FOE HIT TOO', 2)],
+  },
+  light: {
+    forks: [ch('light', 'zip', 'ZIP', '+10% LAUNCH, CAPPED', 1), ch('light', 'dart', 'DART', '+1 DMG OVER 400 PX/S', 1)],
+    caps: [ch('light', 'blur', 'BLUR', 'FAST HITS STAGGER +1', 2), ch('light', 'tailwind', 'TAILWIND', 'RAILS ADD 15% SPEED', 2)],
+  },
+  chill: {
+    forks: [ch('chill', 'brittle', 'BRITTLE', 'CHILLED TAKE +1', 1), ch('chill', 'numb', 'NUMB', 'CHILLED DEAL -1', 1)],
+    caps: [ch('chill', 'frostbite', 'FROSTBITE', 'BUMPS SPREAD CHILL', 2), ch('chill', 'deepfreeze', 'DEEP FREEZE', '2ND HIT FREEZES 1', 2)],
+  },
+  mirror: {
+    forks: [ch('mirror', 'lens', 'LENS', 'REFLECT: YOUR DMG', 1), ch('mirror', 'absorb', 'ABSORB', 'REFLECT HEALS 1', 1)],
+    caps: [ch('mirror', 'flawless', 'FLAWLESS', '1ST SHOT/PHASE: SURE', 2), ch('mirror', 'prism', 'PRISM', 'REFLECT SPLASHES 1', 2)],
+  },
+  split: {
+    forks: [ch('split', 'swarm', 'SWARM', '+2 KIDS, ALL DEAL 1', 1), ch('split', 'rail', 'RAIL SPLIT', '1ST RAIL SPLITS TOO', 1)],
+    caps: [ch('split', 'mitosis', 'MITOSIS', '1ST KID KILL SPLITS', 2), ch('split', 'homing', 'HOMING', 'KIDS AIM AT FOES', 2)],
+  },
+  shockwave: {
+    forks: [ch('shockwave', 'quake', 'QUAKE', 'RADIUS 90', 1), ch('shockwave', 'pulse', 'PULSE', 'SHOVES 30PX, NO STUN', 1)],
+    caps: [ch('shockwave', 'aftershock', 'AFTERSHOCK', 'FIRES AGAIN IN 2', 2), ch('shockwave', 'epicentre', 'EPICENTRE', 'TOUCHING YOU TAKE 2', 2)],
+  },
+  draw: {
+    forks: [ch('draw', 'snap', 'SNAP BACK', 'RETURNS AT 80%', 1), ch('draw', 'seek', 'SEEK', 'RETURN AIMS AT A FOE', 1)],
+    caps: [ch('draw', 'masse', 'MASSE', 'RETURN PATH SHOWN', 2), ch('draw', 'pull', 'PULL', 'FOE DRAGGED WITH YOU', 2)],
+  },
+  sticky: {
+    forks: [ch('sticky', 'glue', 'GLUE', 'STUCK: HELD 2 PHASES', 1), ch('sticky', 'web', 'WEB', 'NEARBY +1 STAGGER', 1)],
+    caps: [ch('sticky', 'trap', 'TRAP', 'STUCK: NEXT HIT X2', 2), ch('sticky', 'cling', 'CLING', 'STUCK FOE: NO CHARGE', 2)],
+  },
+  lightning: {
+    forks: [ch('lightning', 'chain', 'CHAIN', 'ARCS HOP ONCE MORE', 1), ch('lightning', 'thunder', 'THUNDER', 'ONE FULL ARC, STUNS', 1)],
+    caps: [ch('lightning', 'storm', 'STORM', 'KILLS ALSO ARC', 2), ch('lightning', 'surge', 'SURGE', '1ST HIT ALWAYS ARCS', 2)],
+  },
+  static: {
+    forks: [ch('static', 'overload', 'OVERLOAD', 'ALSO ZAPS NEAREST 1', 1), ch('static', 'paralysis', 'PARALYSIS', 'STUN LASTS 2 PHASES', 1)],
+    caps: [ch('static', 'tesla', 'TESLA', '3 STAGGERS: ZAP 2', 2), ch('static', 'grounded', 'GROUNDED', 'STUNNED: NO HEALS', 2)],
+  },
+  spitter: {
+    forks: [ch('spitter', 'gatling', 'GATLING', 'SPITS 40% FASTER', 1), ch('spitter', 'mortar', 'MORTAR', 'SLOWER, SPITS BLAST', 1)],
+    caps: [ch('spitter', 'aimed', 'AIMED', 'SPITS AIM AT FOES', 2), ch('spitter', 'heavyspit', 'HEAVY SPIT', 'SPIT DEALS 2', 2)],
+  },
+  timeStop: {
+    forks: [ch('timeStop', 'freeze', 'FREEZE', 'NOBODY EVEN MOVES', 1), ch('timeStop', 'slow', 'SLOW', '2 PHASES: HALF DMG', 1)],
+    caps: [ch('timeStop', 'clockwork', 'CLOCKWORK', 'BELTS STOP TOO', 2), ch('timeStop', 'stasis', 'STASIS', 'STATUS & RAGE HOLD', 2)],
+  },
 };
 
 /** The card catalogue: 24 real cards + 6 stubs, ordered by world then the spec table. */
@@ -262,6 +311,8 @@ function choiceState(save: SaveData, card: string, id: string, row: 'fork' | 'ca
   const list = row === 'fork' ? def.forks : def.caps;
   const ch = list.find((x) => x.id === id);
   if (!ch || c.level < (row === 'fork' ? 2 : 3)) return 'locked';
+  // A capstone also needs an active fork (a pre-M3 save can hold base III with none).
+  if (row === 'cap' && c.fork === null) return 'locked';
   if ((row === 'fork' ? c.fork : c.cap) === id) return 'active';
   if ((row === 'fork' ? c.forks : c.caps).includes(id)) return 'owned';
   return (save.tokens[cardToken(def)] ?? 0) >= ch.cost ? 'open' : 'poor';

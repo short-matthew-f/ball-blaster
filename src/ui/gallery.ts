@@ -508,7 +508,8 @@ export class GalleryScreen implements Screen {
       drawSprite(ctx, `token_${tokenOf(def)}`, 85, ty + 3);
     }
     wrapText(ch.desc, 21).slice(0, 2).forEach((l, k) => drawText(ctx, l, 7, ty + 9 + k * 7, { color: P['4'] }));
-    const label = st === 'open' ? 'BUY' : st === 'owned' ? 'SELECT' : st === 'active' ? 'ACTIVE' : st === 'poor' ? 'NEED MORE' : `NEEDS ${need}`;
+    const noFork = row === 'c' && (this.app.save.cards[def.id]?.level ?? 0) >= 3 && this.app.save.cards[def.id].fork === null;
+    const label = st === 'open' ? 'BUY' : st === 'owned' ? 'SELECT' : st === 'active' ? 'ACTIVE' : st === 'poor' ? 'NEED MORE' : noFork ? 'PICK FORK' : `NEEDS ${need}`;
     btns.push({ id: 'choice', x: 100, y: PANEL_Y + 3, w: 74, h: 14, label, scale: label === 'BUY' || label === 'SELECT' ? 2 : 1, style: 'gold', disabled: label !== 'BUY' && label !== 'SELECT' });
   }
 
@@ -586,7 +587,8 @@ export class GalleryScreen implements Screen {
           app.sfx.ui();
           const cdef = cardById(this.page);
           if (cdef && /^[fc]\d$/.test(n.id) && this.choiceState(cdef, n.id[0] as 'f' | 'c', (n.id[0] === 'f' ? cdef.forks : cdef.caps)[Number(n.id[1])].id) === 'locked') {
-            this.say(!this.app.save.cards[cdef.id] ? 'UNLOCK THE CARD FIRST' : n.id[0] === 'f' ? 'NEEDS BASE II' : 'NEEDS BASE III');
+            const cs = this.app.save.cards[cdef.id];
+            this.say(!cs ? 'UNLOCK THE CARD FIRST' : n.id[0] === 'f' ? 'NEEDS BASE II' : cs.level >= 3 && cs.fork === null ? 'PICK FORK' : 'NEEDS BASE III');
           }
         }
       } else if (d.slot >= 0 && this.slotAt(x, y) === d.slot) {

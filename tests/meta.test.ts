@@ -376,8 +376,10 @@ describe('cards', () => {
       expect(c.name.length, c.id).toBeLessThanOrEqual(12);
       expect(c.desc.length, c.id).toBeLessThanOrEqual(20);
       expect(c.icon).toBe(`gear_${c.id}`);
-      expect(c.forks.length, c.id).toBe(c.world === 1 ? 2 : 0);
-      expect(c.caps.length, c.id).toBe(c.world === 1 ? 2 : 0);
+      expect(c.forks.length, c.id).toBe(c.world <= 3 ? 2 : 0);
+      expect(c.caps.length, c.id).toBe(c.world <= 3 ? 2 : 0);
+      for (const f of c.forks) expect(f.cost, f.id).toBe(1);
+      for (const f of c.caps) expect(f.cost, f.id).toBe(2);
       for (const f of [...c.forks, ...c.caps]) {
         expect(f.id.startsWith(`${c.id}.`)).toBe(true);
         expect(f.name.length, f.id).toBeLessThanOrEqual(12);
@@ -445,8 +447,8 @@ describe('cards', () => {
     const sv = newSave();
     sv.cash = 1e6;
     sv.cards.ricochet = card(2);
-    sv.cards.jump = card(2);
-    expect(baseBuyState(sv, 'jump')).toBe('ok'); // world 2: no forks yet
+    sv.cards.follow = card(2);
+    expect(baseBuyState(sv, 'follow')).toBe('ok'); // world 4: no forks yet
     expect(baseBuyState(sv, 'ricochet')).toBe('locked');
     expect(buyBase(sv, 'ricochet')).toBe(false);
     sv.tokens.stripe = 1;
@@ -454,6 +456,21 @@ describe('cards', () => {
     expect(baseBuyState(sv, 'ricochet')).toBe('ok');
     expect(buyBase(sv, 'ricochet')).toBe(true);
     expect(sv.cards.ricochet.level).toBe(3);
+  });
+  it('capstone needs an active fork; forks of worlds 2-3 spend frost / cog', () => {
+    const sv = newSave();
+    sv.cards.split = card(3);
+    sv.tokens = { ...zero, frost: 6, cog: 6 };
+    expect(capBuyState(sv, 'split', 'split.mitosis')).toBe('locked');
+    expect(setCap(sv, 'split', 'split.mitosis')).toBe(false);
+    expect(setFork(sv, 'split', 'split.swarm')).toBe(true);
+    expect(sv.tokens.frost).toBe(5);
+    expect(capBuyState(sv, 'split', 'split.mitosis')).toBe('open');
+    expect(setCap(sv, 'split', 'split.mitosis')).toBe(true);
+    expect(sv.tokens.frost).toBe(3);
+    sv.cards.timeStop = card(2);
+    expect(setFork(sv, 'timeStop', 'timeStop.slow')).toBe(true);
+    expect(sv.tokens).toMatchObject({ frost: 3, cog: 5 });
   });
   it('setFork / setCap: buy, switch free, one active, level gates', () => {
     const sv = newSave();

@@ -203,6 +203,8 @@ export interface Ball {
   jumpOver?: number;
   /** Jump cue: landed; the next enemy contact deals -1 (min 1). */
   jumpLanded?: boolean;
+  /** v0.6 M3 Trample (jump.trample): id of the enemy last jumped (hit too on the landing contact). */
+  lastJumped?: number;
 }
 
 export type TargetKind =
@@ -292,6 +294,10 @@ export interface Target {
   railHits?: number;
   /** Per-body cash override (boss-summoned cogs pay 1). kill() reads it instead of the kind's cash. */
   cashBase?: number;
+  /** v0.6 M3 Glue / Paralysis: extra enemy phases it stays staggered (applied at the end of each enemy phase; never the boss). */
+  held?: number;
+  /** v0.6 M3 Trap (sticky.trap): the next hero contact on it deals x TRAP_MULT. */
+  trapped?: boolean;
 }
 
 export type ObstacleKind = 'bumper' | 'crate' | 'chest' | 'shrine' | 'gear';
@@ -463,6 +469,22 @@ export interface RunState {
   anchorShot?: number;
   /** v0.6 M3 Encore (recall.encore): wave in which the free recall was spent. */
   encoreWave?: number;
+  /** v0.6 M3 Jump: hops left this shot (Long Jump: LONG_JUMP_HOPS, else 1). */
+  jumpsLeft?: number;
+  /** v0.6 M3 Mitosis (split.mitosis): the child-kill split was spent this shot. */
+  childSplitUsed?: boolean;
+  /** v0.6 M3 Flawless (mirror.flawless): the next Shoot this enemy phase is reflected without a roll. */
+  mirrorFree?: boolean;
+  /** v0.6 M3 Slow (timeStop.slow): enemy phases left at half hero damage. */
+  slowPhases?: number;
+  /** v0.6 M3 Cling (sticky.cling): id of the enemy the hero last stuck to (its charges are blocked). */
+  stuckId?: number;
+  /** v0.6 M3 Tesla (static.tesla): stagger crossings this shot. */
+  teslaHits?: number;
+  /** v0.6 M3 Mortar (spitter.mortar): spat blasts this shot. */
+  mortarBlasts?: number;
+  /** v0.6 M3 Aftershock (shockwave.aftershock): shot number whose enemy phase repeats the wave. */
+  aftershockShot?: number;
 }
 
 /** Public sim API implemented by sim/index.ts. */

@@ -25,7 +25,6 @@ import {
   MOMENTUM_MAX,
   RACK_PULL,
   RECALL_Y_OFFSET,
-  SHOCKWAVE_R,
   WAVES_PER_STAGE,
   gearVal,
   stageById,
@@ -37,13 +36,16 @@ import {
   SLAM_MIN_POWER,
   SLAM_MULT,
   BLINK_MARGIN,
+  LONG_JUMP_HOPS,
+  SLOW_PHASES,
+  SPIT_LIVE_CAP,
+  ZIP_MULT,
 } from '../core/tuning';
-import { addStagger } from './damage';
-import { has, lv, mod } from './gear';
+import { has, lv, mod, spitInterval } from './gear';
 import { Rng } from '../core/rng';
 import { physicsStep, relaxAll, spawnSpat } from './physics';
 import { emptyCombo, evaluateCombos } from './combos';
-import { effectiveReach, enemyStep, startEnemyPhase } from './enemy';
+import { effectiveReach, enemyStep, shockwaveWave, startEnemyPhase } from './enemy';
 import { endLootShot, inLoot, lootStep, startLoot } from './loot';
 import { OBSTACLE_R, spawnObstacle, spawnWave } from './spawn';
 import { hero, stageWaves } from './damage';
@@ -149,7 +151,9 @@ export function shoot(s: RunState, pull: Vec): boolean {
   const cueMult = cue === 'break' ? gearVal(BREAK_SPEED_MULT_LV, lv(s, 'break')) : cue === 'draw' ? gearVal(DRAW_POWER_LV, lv(s, 'draw')) : 1;
   // v0.6 M3 speed stacks (Slam, Overdrive) share one cap with the cue's own multiplier.
   const overdrive = mod(s, 'momentum.overdrive') && s.momentum >= gearVal(MOMENTUM_MAX, lv(s, 'momentum'));
-  const launchMult = Math.min(LAUNCH_MULT_CAP, cueMult * (slam ? SLAM_MULT : 1) * (overdrive ? OVERDRIVE_MULT : 1));
+  // Zip (light fork) joins the same cap (Light's own speedMult stays outside it).
+  const zip = mod(s, 'light.zip') ? ZIP_MULT : 1;
+  const launchMult = Math.min(LAUNCH_MULT_CAP, cueMult * (slam ? SLAM_MULT : 1) * (overdrive ? OVERDRIVE_MULT : 1) * zip);
   const speed = power * MAX_LAUNCH_SPEED * ballSpec(s.stats.ballType, s.stats.gearLevel[s.stats.ballType] ?? 0).speedMult * launchMult;
   b.vx = (pull.x / len) * speed;
   b.vy = (pull.y / len) * speed;
@@ -157,14 +161,20 @@ export function shoot(s: RunState, pull: Vec): boolean {
   b.banked = false;
   b.jumpOver = undefined;
   b.jumpLanded = false;
+  b.lastJumped = undefined;
   s.launch = { x: b.x, y: b.y, speed };
+  // v0.6 M3 per-shot counters (Long Jump hops, Mitosis, Tesla, Mortar).
+  s.jumpsLeft = mod(s, 'jump.long') ? LONG_JUMP_HOPS : 1;
+  s.childSplitUsed = false;
+  s.teslaHits = 0;
+  s.mortarBlasts = 0;
   s.shotBounces = 0;
   s.firstHitDone = false;
   s.shots++;
   s.combo = emptyCombo();
   s.splitUsed = false;
   s.stickyUsed = false;
-  s.spitTimer = s.stats.spitInterval;
+  s.spitTimer = spitInterval(s);
   s.resolveTime = 0;
   s.lastHit = {};
   s.touching = {};
@@ -226,8 +236,10 @@ function resolveStep(s: RunState, h: number, fx: FxEvent[]): void {
   if (s.stats.spitInterval > 0 && s.stats.spitLife > 0 && !main.resting && has(s, 'spitter')) {
     s.spitTimer -= h;
     if (s.spitTimer <= 0) {
-      s.spitTimer += s.stats.spitInterval;
-      spawnSpat(s, main, fx);
+      s.spitTimer += spitInterval(s);
+      // Gatling (spitter fork): no new spit while SPIT_LIVE_CAP spat balls are live.
+      const full = mod(s, 'spitter.gatling') && s.balls.filter((b) => b.kind === 'spat' && !b.shard).length >= SPIT_LIVE_CAP;
+      if (!full) spawnSpat(s, main, fx);
     }
   }
 
@@ -372,7 +384,9 @@ export function useTrick(s: RunState): boolean {
       break;
     }
     case 'timeStop':
-      s.skipNextEnemyPhase = true;
+      // Slow (fork): no stopped phase; the next SLOW_PHASES enemy phases deal half damage.
+      if (mod(s, 'timeStop.slow')) s.slowPhases = SLOW_PHASES;
+      else s.skipNextEnemyPhase = true;
       break;
     case 'rackEm': {
       const cx = TABLE.x + TABLE.w / 2;
@@ -389,12 +403,12 @@ export function useTrick(s: RunState): boolean {
       break;
     }
     case 'shockwave':
-      for (const t of s.targets.slice()) {
-        if (t.dead) continue;
-        if (Math.hypot(t.x - h.x, t.y - h.y) - t.r - h.r <= SHOCKWAVE_R) addStagger(t, 1, fx, s);
-      }
+      shockwaveWave(s, fx);
+      // Aftershock (capstone): the wave fires again in the enemy phase two shots from now.
+      if (mod(s, 'shockwave.aftershock')) s.aftershockShot = s.shots + 2;
       // Static may have killed something during aim: drop the bodies (rewards were paid at the kill).
       s.targets = s.targets.filter((t) => !t.dead);
+      if (mod(s, 'shockwave.pulse')) jamRule(s, fx);
       break;
   }
   s.trickUsesLeft--;
@@ -495,6 +509,8 @@ export function previewShot(s: RunState, pull: Vec): Vec[] {
     }
     if (tc <= tw) {
       pts.push({ x: px + dx * tc, y: py + dy * tc });
+      // Masse (draw capstone): the return leg to the launch point (the hero) is drawn too.
+      if (mod(s, 'draw.masse')) pts.push({ x: b.x, y: b.y });
       return pts;
     }
     px += dx * tw;

@@ -1,6 +1,6 @@
 // Gear helpers (DESIGN-v0.4-loadout): is a relic equipped, and at what level.
 import type { RunState, RelicId, Target } from '../core/types';
-import { LANTERN_R_LV, gearVal } from '../core/tuning';
+import { GATLING_MULT, LANTERN_R_LV, MORTAR_MULT, gearVal } from '../core/tuning';
 
 export function has(s: RunState, id: RelicId): boolean {
   return s.stats.relics.includes(id);
@@ -26,4 +26,15 @@ export function heroGap(s: RunState, t: Target): number {
   const h = s.balls.find((b) => b.kind === 'main');
   if (!h) return Infinity;
   return Math.hypot(h.x - t.x, h.y - t.y) - h.r - t.r;
+}
+
+/** Time Stop "in effect" (v0.6 M3): a stopped enemy phase, or a Slow phase (Clockwork and Stasis work under both). */
+export function timeStopInEffect(s: RunState): boolean {
+  return !!s.timeStopped || (s.slowPhases ?? 0) > 0;
+}
+
+/** Seconds between spat balls (Gatling x GATLING_MULT, Mortar x MORTAR_MULT). */
+export function spitInterval(s: RunState): number {
+  const k = mod(s, 'spitter.gatling') ? GATLING_MULT : mod(s, 'spitter.mortar') ? MORTAR_MULT : 1;
+  return s.stats.spitInterval * k;
 }

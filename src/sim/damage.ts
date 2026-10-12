@@ -29,8 +29,16 @@ import {
   POCKET_MULT,
   SNOWBALL_CASH,
   UNSTOPPABLE_AT,
+  CHAIN_DMG,
+  OVERLOAD_DMG,
+  OVERLOAD_R,
+  SLOW_MULT,
+  TESLA_AT,
+  TESLA_DMG,
+  TESLA_R,
 } from '../core/tuning';
 import { makeEnemy } from './spawn';
+import { mitosis } from './balls';
 import { has, heroGap, lanternR, lv, mod } from './gear';
 
 /** poison/static/mirror/thorns: relic damage that never staggers and never counts as a hit. */
@@ -104,7 +112,54 @@ export function addStagger(t: Target, n: number, fx: FxEvent[], s?: RunState): v
   t.stagger += n;
   if (before < at && t.stagger >= at) {
     fx.push({ t: 'stagger', x: t.x, y: t.y });
-    if (s && !t.dead && has(s, 'static')) applyDamage(s, t, gearVal(STATIC_DMG, lv(s, 'static')), 'static', fx);
+    if (s && has(s, 'static')) staticCrossing(s, t, fx);
+  }
+}
+
+/** Nearest live enemy (not the goblin, not `t`) within `R` px (edge gap) of `t`; ties: lowest id. */
+function nearestTo(s: RunState, t: Target, R: number): Target | undefined {
+  let best: Target | undefined;
+  let bestD = Infinity;
+  for (const o of s.targets) {
+    if (o.dead || o === t || isGoblin(o)) continue;
+    const d = Math.hypot(o.x - t.x, o.y - t.y) - o.r - t.r;
+    if (d <= R && (d < bestD || (d === bestD && best && o.id < best.id))) ((best = o), (bestD = d));
+  }
+  return best;
+}
+
+/**
+ * v0.6 M3 Overload / Epicentre: `n` static damage (no stagger, no hit count, respects 1-hit shields) with a cosmetic
+ * 'hit' fx (static damage is otherwise silent).
+ */
+export function staticZap(s: RunState, o: Target, n: number, fx: FxEvent[]): void {
+  if (o.dead || isGoblin(o)) return;
+  const hp = o.hp;
+  applyDamage(s, o, n, 'static', fx);
+  fx.push({ t: 'hit', x: o.x, y: o.y, targetKind: o.kind, ballKind: 'main', dmg: hp - Math.max(0, o.hp), killed: o.dead });
+}
+
+/**
+ * Static relic: an enemy crossing its stagger threshold takes STATIC_DMG. v0.6 M3: Overload zaps the nearest other
+ * enemy; Paralysis holds it one more phase (resolve only, never the boss); Tesla zaps on the shot's TESLA_AT-th crossing.
+ */
+function staticCrossing(s: RunState, t: Target, fx: FxEvent[]): void {
+  if (!t.dead) applyDamage(s, t, gearVal(STATIC_DMG, lv(s, 'static')), 'static', fx);
+  if (mod(s, 'static.overload')) {
+    const o = nearestTo(s, t, OVERLOAD_R);
+    if (o) staticZap(s, o, OVERLOAD_DMG, fx);
+  }
+  if (s.phase !== 'resolve') return;
+  if (mod(s, 'static.paralysis') && !t.dead && t.kind !== 'boss') t.held = Math.max(t.held ?? 0, 1);
+  if (mod(s, 'static.tesla')) {
+    s.teslaHits = (s.teslaHits ?? 0) + 1;
+    if (s.teslaHits === TESLA_AT) {
+      const o = nearestTo(s, t, TESLA_R);
+      if (o) {
+        fx.push({ t: 'lightning', points: [{ x: t.x, y: t.y }, { x: o.x, y: o.y }] });
+        hitEnemy(s, o, TESLA_DMG, 'lightning', fx);
+      }
+    }
   }
 }
 
@@ -265,6 +320,12 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
   if (!t.summon && t.kind !== 'boss' && (s.waveKillShot ?? -1) < 0 && src !== 'poison') s.waveKillShot = s.shots;
   if (!quiet && src === 'main' && s.phase === 'resolve' && has(s, 'shrapnel')) spawnShards(s, t, fx);
   if (t.kind === 'cadre') updateBossShield(s);
+  if (!quiet && s.phase === 'resolve') {
+    // Mitosis (split capstone): the shot's first kill by a child releases more children from it.
+    if (src === 'split' && killer && mod(s, 'split.mitosis')) mitosis(s, killer, fx);
+    // Storm (lightning capstone): a ball kill also arcs (its own roll).
+    if (isBallSource(src) && mod(s, 'lightning.storm')) chainLightning(s, t, fx);
+  }
   if (def.splitsInto) {
     const { kind, count } = def.splitsInto;
     const cr = TARGET_DEFS[kind].r;
@@ -295,6 +356,8 @@ export function blast(s: RunState, x: number, y: number, src: TargetKind, fx: Fx
 /** Damage to the hero: attack - armor, minimum 1. Death is checked after the enemy phase. */
 export function heroDamage(s: RunState, n: number, src: TargetKind, x: number, y: number, fx: FxEvent[], how: 'charge' | 'shot' | 'blast' | 'thorns'): number {
   if (n <= 0) return 0;
+  // Slow (time stop fork): hero damage halved (rounded up) while Slow lasts.
+  if ((s.slowPhases ?? 0) > 0) n = Math.ceil(n * SLOW_MULT);
   // Follow cue trade: charges hit harder.
   if (how === 'charge' && s.stats.cue === 'follow') n += FOLLOW_CHARGE_EXTRA;
   const dmg = Math.max(1, Math.round(n) - s.stats.armor);
@@ -320,23 +383,45 @@ export function heal(s: RunState, base: number, x = 0, y = 0, fx?: FxEvent[]): n
   return granted;
 }
 
-/** Chain lightning from a struck enemy to the nearest other live enemies. */
-export function chainLightning(s: RunState, from: Target, fx: FxEvent[]): void {
-  const { lightningChance, lightningArcs, lightningRange, lightningDamage } = s.stats;
-  if (lightningChance <= 0 || lightningArcs <= 0 || lightningRange <= 0 || !has(s, 'lightning')) return;
-  if (!s.rng.chance(lightningChance)) return;
-  if (isGoblin(from)) return;
-  const cands = s.targets
-    .filter((o) => !o.dead && o !== from && !isGoblin(o))
+/** Live enemies (not the goblin, not in `skip`) within lightningRange of `from`, nearest first (ties: id). */
+function arcCands(s: RunState, from: Target, skip: Set<Target>): Target[] {
+  const range = s.stats.lightningRange;
+  return s.targets
+    .filter((o) => !o.dead && !skip.has(o) && !isGoblin(o))
     .map((o) => ({ o, d: Math.hypot(o.x - from.x, o.y - from.y) }))
-    .filter((c) => c.d <= lightningRange + c.o.r)
+    .filter((c) => c.d <= range + c.o.r)
     .sort((a, b) => a.d - b.d || a.o.id - b.o.id)
-    .slice(0, lightningArcs);
+    .map((c) => c.o);
+}
+
+/**
+ * Chain lightning from a struck enemy to the nearest other live enemies. `sure` (Surge) skips the roll (even at chance
+ * 0). Thunder: one arc at the hero's damage, stagger 2. Chain: each arc target hops once more to its nearest unvisited
+ * enemy for CHAIN_DMG (no second roll).
+ */
+export function chainLightning(s: RunState, from: Target, fx: FxEvent[], sure = false): void {
+  const { lightningChance, lightningRange, lightningDamage } = s.stats;
+  const thunder = mod(s, 'lightning.thunder');
+  const arcs = thunder ? Math.min(1, s.stats.lightningArcs) : s.stats.lightningArcs;
+  if ((lightningChance <= 0 && !sure) || arcs <= 0 || lightningRange <= 0 || !has(s, 'lightning')) return;
+  if (!sure && !s.rng.chance(lightningChance)) return;
+  if (isGoblin(from)) return;
+  const visited = new Set<Target>([from]);
+  const cands = arcCands(s, from, visited).slice(0, arcs);
   if (cands.length === 0) return;
   const points: Vec[] = [{ x: from.x, y: from.y }];
-  for (const c of cands) points.push({ x: c.o.x, y: c.o.y });
+  for (const c of cands) points.push({ x: c.x, y: c.y });
   fx.push({ t: 'lightning', points });
-  for (const c of cands) hitEnemy(s, c.o, lightningDamage, 'lightning', fx);
+  for (const c of cands) visited.add(c);
+  for (const c of cands) hitEnemy(s, c, thunder ? s.stats.damage : lightningDamage, 'lightning', fx, undefined, thunder ? 2 : 1);
+  if (!mod(s, 'lightning.chain')) return;
+  for (const c of cands) {
+    const next = arcCands(s, c, visited)[0];
+    if (!next) continue;
+    visited.add(next);
+    fx.push({ t: 'lightning', points: [{ x: c.x, y: c.y }, { x: next.x, y: next.y }] });
+    hitEnemy(s, next, CHAIN_DMG, 'lightning', fx);
+  }
 }
 
 function clampX(x: number, r: number): number {

@@ -55,16 +55,36 @@ import {
   POCKET_MULT,
   POCKET_RAILS,
   WRECK_SHOVE,
+  AIMED_R,
+  BRITTLE_DMG,
+  DART_DMG,
+  DART_SPEED,
+  DEEP_FREEZE_PHASES,
+  FREEZE_CAP,
+  HEAVY_SPIT_DMG,
+  MORTAR_BLASTS,
+  MORTAR_DMG,
+  MORTAR_R,
+  NUMB_DMG,
+  POUNCE_MULT,
+  PULL_K,
+  SEEK_R,
+  SNAP_RETURN,
+  STOMP_STAGGER,
+  SWARM_DMG,
+  TAILWIND_MULT,
+  TRAP_MULT,
+  WEB_R,
+  WEB_STAGGER,
 } from '../core/tuning';
 import { addPoison, addStagger, applyDamage, chainLightning, heal, heroDamage, hitEnemy, scaleAtk, scaleCash } from './damage';
-import { has, lv, mod } from './gear';
+import { clampIn, spawnSplit } from './balls';
+import { has, heroGap, lv, mod } from './gear';
 import { goblinHit } from './loot';
 
 export const MAX_BALL_SPEED = MAX_LAUNCH_SPEED * 1.5;
 const OBSTACLE_RESTITUTION = 0.8;
 const BUMPER_MIN_KICK = 80;
-const SPLIT_R = 2.5;
-const SPLIT_MASS = 0.5;
 const SPAT_R = 2;
 const SPAT_MASS = 0.4;
 /** Pairs closer than r1 + r2 + this are "touching" (contact bookkeeping). */
@@ -138,7 +158,26 @@ function mainDamage(s: RunState, speed: number): number {
   const bt = BALL_TYPES[s.stats.ballType];
   // Wrecking (heavy fork): Heavy's +1 goes; every contact shoves instead.
   const bonus = mod(s, 'heavy.wrecking') ? 0 : bt.dmgBonus;
-  return s.stats.damage + bonus + Math.floor(speed / SPEED_DMG_REF) * s.stats.speedDamage;
+  // Dart (light fork): a flat +DART_DMG at DART_SPEED or faster (Velocity still adds).
+  const dart = mod(s, 'light.dart') && speed >= DART_SPEED ? DART_DMG : 0;
+  return s.stats.damage + bonus + dart + Math.floor(speed / SPEED_DMG_REF) * s.stats.speedDamage;
+}
+
+/** Numb (chill fork): a chilled enemy's blow deals NUMB_DMG less (min 1; a 0 stays 0). */
+export function numbed(s: RunState, t: Target, n: number): number {
+  return n > 0 && (t.chill ?? 0) > 0 && mod(s, 'chill.numb') ? Math.max(1, n - NUMB_DMG) : n;
+}
+
+/** Nearest live enemy (not the goblin, not `except`) within `R` (edge gap) of the hero; ties: lowest id. */
+function nearestToHero(s: RunState, R: number, except?: Target): Target | undefined {
+  let best: Target | undefined;
+  let bestD = Infinity;
+  for (const o of s.targets) {
+    if (o.dead || o === except || o.kind === 'goblin') continue;
+    const d = heroGap(s, o);
+    if (d <= R && (d < bestD || (d === bestD && best && o.id < best.id))) ((best = o), (bestD = d));
+  }
+  return best;
 }
 
 /** Breaker / Wrecking: scale an enemy's (post-impact) velocity by k, speed-capped. */
@@ -164,6 +203,14 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
   if (s.phase === 'enemy') {
     // Enemy phase: a charging enemy deals its attack on first hero contact.
     if (b.kind === 'main' && (t.chargeDmg ?? 0) > 0) {
+      // Cling (sticky capstone): the enemy the hero last stuck to cannot land a charge (never the boss; no Thorns).
+      if (mod(s, 'sticky.cling') && t.id === s.stuckId && t.kind !== 'boss') {
+        t.chargeDmg = 0;
+        t.vx = 0;
+        t.vy = 0;
+        fx.push({ t: 'blocked', x: (b.x + t.x) / 2, y: (b.y + t.y) / 2 });
+        return;
+      }
       // Juggernaut (heavy capstone): the first charge to land each enemy phase is blocked (no blow, no Thorns).
       if (mod(s, 'heavy.jugger') && !s.juggerUsed) {
         s.juggerUsed = true;
@@ -173,7 +220,7 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
         fx.push({ t: 'blocked', x: (b.x + t.x) / 2, y: (b.y + t.y) / 2 });
         return;
       }
-      heroDamage(s, t.chargeDmg ?? 0, t.kind, b.x, b.y, fx, 'charge');
+      heroDamage(s, numbed(s, t, t.chargeDmg ?? 0), t.kind, b.x, b.y, fx, 'charge');
       t.chargeDmg = 0;
       // Thorns relic: the charger pays for landing its blow.
       if (has(s, 'thorns')) applyDamage(s, t, gearVal(THORNS_RELIC_DMG, lv(s, 'thorns')), 'thorns', fx);
@@ -192,6 +239,8 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
   }
   let dmg: number;
   const first = b.kind === 'main' && !s.firstHitDone;
+  // Brittle / Deep Freeze read the chill from before this contact (the Chill relic sets it below).
+  const chilled = (t.chill ?? 0) > 0;
   const carom = b.kind === 'main' && mod(s, 'ricochet.carom');
   const anvil = first && mod(s, 'heavy.anvil');
   if (b.kind === 'main') {
@@ -209,18 +258,30 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
     }
     // Anchor: the shot after a Recall hits harder on every hero contact.
     if (mod(s, 'recall.anchor') && s.anchorShot === s.shots) dmg += ANCHOR_DMG;
-    // Jump: the first contact after landing is softer.
+    // Brittle (chill fork): chilled enemies take +BRITTLE_DMG from the hero.
+    if (chilled && mod(s, 'chill.brittle')) dmg += BRITTLE_DMG;
+    // Jump: the first contact after landing is softer (Pounce: doubled first, then the level penalty/bonus).
     if (b.jumpLanded) {
       b.jumpLanded = false;
-      dmg = Math.max(1, dmg - gearVal(JUMP_PENALTY, lv(s, 'jump')));
+      dmg = Math.max(1, dmg * (mod(s, 'jump.pounce') ? POUNCE_MULT : 1) - gearVal(JUMP_PENALTY, lv(s, 'jump')));
+      // Trample (jump capstone): the enemy just jumped takes the landing hit too (no status, lightning or blast).
+      const j = mod(s, 'jump.trample') && b.lastJumped !== undefined ? s.targets.find((o) => o.id === b.lastJumped) : undefined;
+      if (j && !j.dead && j !== t) hitEnemy(s, j, dmg, 'main', fx, b, 1, speed);
+      b.lastJumped = undefined;
+    }
+    // Trap (sticky capstone): a later hero contact on the enemy the hero stuck to deals x TRAP_MULT, once.
+    if (t.trapped) {
+      t.trapped = false;
+      dmg *= TRAP_MULT;
     }
     // Anvil: the first contact doubles after every additive bonus (and stops the hero, below).
     if (anvil) dmg *= ANVIL_MULT;
   } else if (b.shard) dmg = SHARD_DMG;
-  else if (b.kind === 'spat') dmg = s.stats.spitDamage > 0 ? s.stats.spitDamage : s.stats.damage;
-  else dmg = s.stats.damage;
+  else if (b.kind === 'spat') dmg = mod(s, 'spitter.heavyspit') ? HEAVY_SPIT_DMG : s.stats.spitDamage > 0 ? s.stats.spitDamage : s.stats.damage;
+  else dmg = mod(s, 'split.swarm') ? SWARM_DMG : s.stats.damage;
   const sticky = b.kind === 'main' && s.stats.ballType === 'sticky' && !s.stickyUsed;
-  const heavy = b.kind === 'main' && s.stats.heavyHits > 0 && speed >= HEAVY_HIT_SPEED;
+  // Heavy Hits relic or Blur (light capstone): a fast hero contact staggers 2 (never 3).
+  const heavy = b.kind === 'main' && (s.stats.heavyHits > 0 || mod(s, 'light.blur')) && speed >= HEAVY_HIT_SPEED;
   const thorns = thornsOf(s, t);
   // Crack (break fork): the first hero contact of the shot staggers +1.
   const crack = first && mod(s, 'break.crack') ? 1 : 0;
@@ -231,11 +292,31 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
     if (mod(s, 'heavy.wrecking')) shove(t, WRECK_SHOVE);
   }
   if (carom) s.shotBounces++;
+  // Mortar (spitter fork): a spat contact also blasts the others near the struck enemy (MORTAR_BLASTS a shot).
+  if (b.kind === 'spat' && !b.shard && mod(s, 'spitter.mortar') && (s.mortarBlasts ?? 0) < MORTAR_BLASTS) {
+    s.mortarBlasts = (s.mortarBlasts ?? 0) + 1;
+    fx.push({ t: 'blast', x: t.x, y: t.y, r: MORTAR_R + t.r });
+    for (const o of s.targets.slice()) {
+      if (o.dead || o === t) continue;
+      if (Math.hypot(o.x - t.x, o.y - t.y) - o.r - t.r <= MORTAR_R) hitEnemy(s, o, MORTAR_DMG, 'explosion', fx);
+    }
+  }
   addPoison(s, t, fx);
   if (!t.dead && has(s, 'chill')) {
     const was = t.chill ?? 0;
     t.chill = Math.max(was, gearVal(CHILL_PHASES, lv(s, 'chill')));
     if (was <= 0) fx.push({ t: 'status', id: t.id, kind: 'chill', on: true });
+  }
+  // Deep Freeze (chill capstone): a hero contact on an already-chilled enemy freezes it (not boss/cadre, FREEZE_CAP).
+  if (b.kind === 'main' && chilled && !t.dead && mod(s, 'chill.deepfreeze') && t.kind !== 'boss' && t.kind !== 'cadre' && !((t.frozen ?? 0) > 0)) {
+    if (s.targets.filter((o) => !o.dead && (o.frozen ?? 0) > 0).length < FREEZE_CAP) {
+      t.frozen = DEEP_FREEZE_PHASES;
+      t.vx = 0;
+      t.vy = 0;
+      t.resting = true;
+      t.chargeDmg = 0;
+      fx.push({ t: 'freeze', x: t.x, y: t.y });
+    }
   }
   if (b.kind === 'main') {
     if (thorns > 0) heroDamage(s, thorns, t.kind, b.x, b.y, fx, 'thorns');
@@ -244,6 +325,7 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
       s.stickyUsed = true;
       b.vx = 0;
       b.vy = 0;
+      stick(s, t, fx);
     }
     if (anvil) {
       b.vx = 0;
@@ -251,7 +333,7 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
     }
     if (first) {
       s.firstHitDone = true;
-      if (!sticky && !anvil) cueAfterContact(s, b, pvx, pvy);
+      if (!sticky && !anvil) cueAfterContact(s, b, pvx, pvy, t, fx);
       if (has(s, 'explosive')) explode(s, b, t, dmg, fx);
     }
     if (s.stats.splitCount > 0 && !s.splitUsed && has(s, 'split')) {
@@ -259,7 +341,22 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
       spawnSplit(s, b, fx);
     }
   }
-  chainLightning(s, t, fx);
+  // Surge (lightning capstone): the hero's first contact of the shot always arcs.
+  chainLightning(s, t, fx, first && mod(s, 'lightning.surge'));
+}
+
+/** Sticky ball forks/capstones, at the stick: Glue holds, Web staggers neighbours, Trap arms, Cling marks. */
+function stick(s: RunState, t: Target, fx: FxEvent[]): void {
+  if (mod(s, 'sticky.web')) {
+    for (const o of s.targets.slice()) {
+      if (o.dead || o === t) continue;
+      if (Math.hypot(o.x - t.x, o.y - t.y) - o.r - t.r <= WEB_R) addStagger(o, WEB_STAGGER, fx, s);
+    }
+  }
+  if (t.dead) return;
+  if (mod(s, 'sticky.glue') && t.kind !== 'boss') t.held = Math.max(t.held ?? 0, 1);
+  if (mod(s, 'sticky.trap')) t.trapped = true;
+  if (mod(s, 'sticky.cling')) s.stuckId = t.id;
 }
 
 /**
@@ -272,7 +369,7 @@ function ballHitsGoblin(s: RunState, b: Ball, g: Target, fx: FxEvent[], pvx: num
   if (b.kind !== 'main') return;
   if (!s.firstHitDone) {
     s.firstHitDone = true;
-    cueAfterContact(s, b, pvx, pvy);
+    cueAfterContact(s, b, pvx, pvy, g, fx);
   }
   if (s.stats.splitCount > 0 && !s.splitUsed && has(s, 'split')) {
     s.splitUsed = true;
@@ -280,18 +377,29 @@ function ballHitsGoblin(s: RunState, b: Ball, g: Target, fx: FxEvent[], pvx: num
   }
 }
 
-/** Draw / Follow: replace the hero's post-impact velocity after the first contact of the shot. */
-function cueAfterContact(s: RunState, b: Ball, pvx: number, pvy: number): void {
+/**
+ * Draw / Follow: replace the hero's post-impact velocity after the first contact of the shot (struck body `t`).
+ * Snap Back: faster return. Seek: the return heads for the nearest other enemy near the hero. Pull: `t` is dragged along.
+ */
+function cueAfterContact(s: RunState, b: Ball, pvx: number, pvy: number, t: Target, fx: FxEvent[]): void {
   if (s.stats.cue === 'draw' && s.launch) {
-    const dx = s.launch.x - b.x;
-    const dy = s.launch.y - b.y;
+    const seek = mod(s, 'draw.seek') ? nearestToHero(s, SEEK_R, t) : undefined;
+    const dx = (seek ? seek.x : s.launch.x) - b.x;
+    const dy = (seek ? seek.y : s.launch.y) - b.y;
     const d = Math.hypot(dx, dy);
-    const sp = s.launch.speed * DRAW_RETURN;
+    const sp = s.launch.speed * (mod(s, 'draw.snap') ? SNAP_RETURN : DRAW_RETURN);
     // Already on the launch point: just reverse the pre-impact direction.
     const ux = d > 1 ? dx / d : -pvx / (Math.hypot(pvx, pvy) || 1);
     const uy = d > 1 ? dy / d : -pvy / (Math.hypot(pvx, pvy) || 1);
     b.vx = ux * sp;
     b.vy = uy * sp;
+    if (mod(s, 'draw.pull') && !t.dead && t.kind !== 'goblin') {
+      t.vx = ux * sp * PULL_K;
+      t.vy = uy * sp * PULL_K;
+      t.resting = false;
+      capSpeed(t);
+      fx.push({ t: 'ballClack', x: t.x, y: t.y, speed: sp * PULL_K });
+    }
   } else if (s.stats.cue === 'follow') {
     const keep = gearVal(FOLLOW_KEEP_LV, lv(s, 'follow'));
     b.vx = pvx * keep;
@@ -333,6 +441,16 @@ export function onIce(s: RunState, x: number, y: number): boolean {
  */
 function enemyBump(s: RunState, a: Target, b: Target, rel: number, spA: number, spB: number, fx: FxEvent[]): void {
   if (a.kind === 'goblin' || b.kind === 'goblin') return;
+  // Frostbite (chill capstone): a bump during the shot passes the chill from a chilled body to an unchilled one.
+  if (s.phase === 'resolve' && mod(s, 'chill.frostbite')) {
+    const ca = (a.chill ?? 0) > 0;
+    const cb = (b.chill ?? 0) > 0;
+    const o = ca && !cb ? b : cb && !ca ? a : undefined;
+    if (o && !o.dead) {
+      o.chill = Math.max(o.chill ?? 0, gearVal(CHILL_PHASES, lv(s, 'chill')));
+      fx.push({ t: 'status', id: o.id, kind: 'chill', on: true });
+    }
+  }
   const cogA = a.kind === 'cog' && (a.chargeDmg ?? 0) > 0;
   const cogB = b.kind === 'cog' && (b.chargeDmg ?? 0) > 0;
   if (cogA !== cogB) {
@@ -379,8 +497,10 @@ function collidePair(s: RunState, A: Body, B: Body, fx: FxEvent[]): void {
   {
     const ball = A.ball ?? B.ball;
     const en = A.en ?? B.en;
-    if (ball && en && en.kind !== 'goblin' && ball.kind === 'main' && s.phase === 'resolve' && s.stats.cue === 'jump' && ball.jumpOver === undefined && !s.firstHitDone) {
+    if (ball && en && en.kind !== 'goblin' && ball.kind === 'main' && s.phase === 'resolve' && s.stats.cue === 'jump' && (ball.jumpOver === undefined || ball.jumpOver === 0) && (s.jumpsLeft ?? 0) > 0 && !s.firstHitDone) {
+      // Long Jump: LONG_JUMP_HOPS hops a shot (set in shoot()), else one.
       ball.jumpOver = en.id;
+      s.jumpsLeft = (s.jumpsLeft ?? 0) - 1;
       return;
     }
   }
@@ -441,9 +561,11 @@ function collidePair(s: RunState, A: Body, B: Body, fx: FxEvent[]): void {
 
 function wallBounceOf(s: RunState, b: Body): number {
   if (b.en) return Math.min(1, ENEMY_WALL_BOUNCE * kindBounce(b));
+  const hero = b.ball?.kind === 'main' && s.phase === 'resolve';
   // Ghost Rail (ricochet capstone): the hero banks at full speed until its first hit of the shot.
-  if (b.ball?.kind === 'main' && s.phase === 'resolve' && !s.firstHitDone && mod(s, 'ricochet.ghost')) return 1;
-  return stageById(s.stage).wallBounce;
+  const e = hero && !s.firstHitDone && mod(s, 'ricochet.ghost') ? 1 : stageById(s.stage).wallBounce;
+  // Tailwind (light capstone): the hero's rails add speed during the shot (MAX_BALL_SPEED bounds it).
+  return hero && mod(s, 'light.tailwind') ? e * TAILWIND_MULT : e;
 }
 
 /** Clamp inside the rails; reflect velocity with restitution `e`. Returns the impact speed (0 if none). */
@@ -548,42 +670,16 @@ function gearSpin(s: RunState, b: Body, o: Obstacle, fx: FxEvent[]): void {
   }
 }
 
-function spawnSplit(s: RunState, b: Ball, fx: FxEvent[]): void {
-  const n = s.stats.splitCount;
-  const sp = Math.hypot(b.vx, b.vy);
-  if (sp < 1e-6) return;
-  const base = Math.atan2(b.vy, b.vx);
-  const deg = Math.PI / 180;
-  for (let i = 0; i < n; i++) {
-    const side = i % 2 === 0 ? 1 : -1;
-    const step = Math.floor(i / 2) + 1;
-    const spread = Math.min(25, (25 * step) / Math.ceil(n / 2));
-    const a = base + side * spread * deg;
-    const off = b.r + SPLIT_R + 0.5;
-    s.balls.push({
-      id: s.nextId++,
-      kind: 'split',
-      x: clampIn(b.x + Math.cos(a) * off, TABLE.x + SPLIT_R, TABLE.x + TABLE.w - SPLIT_R),
-      y: clampIn(b.y + Math.sin(a) * off, TABLE.y + SPLIT_R, TABLE.y + TABLE.h - SPLIT_R),
-      vx: Math.cos(a) * sp * 0.9,
-      vy: Math.sin(a) * sp * 0.9,
-      r: SPLIT_R,
-      mass: SPLIT_MASS,
-      life: Infinity,
-      resting: false,
-      banked: b.banked,
-    });
-  }
-  fx.push({ t: 'split', x: b.x, y: b.y });
-}
-
 export function spawnSpat(s: RunState, b: Ball, fx: FxEvent[]): void {
   const sp = Math.hypot(b.vx, b.vy);
   if (sp < 1e-6) return;
   const life = Math.min(s.stats.spitLife, SPIT_LIFE_CAP);
   if (life <= 0) return;
   const side = s.rng.chance(0.5) ? 1 : -1;
-  const a = Math.atan2(b.vy, b.vx) + side * s.rng.range(0.6, 1.2);
+  let a = Math.atan2(b.vy, b.vx) + side * s.rng.range(0.6, 1.2);
+  // Aimed (spitter capstone): the spit heads for the nearest enemy near the hero (the side roll is still drawn).
+  const aim = mod(s, 'spitter.aimed') ? nearestToHero(s, AIMED_R) : undefined;
+  if (aim) a = Math.atan2(aim.y - b.y, aim.x - b.x);
   const off = b.r + SPAT_R + 0.5;
   s.balls.push({
     id: s.nextId++,
@@ -599,10 +695,6 @@ export function spawnSpat(s: RunState, b: Ball, fx: FxEvent[]): void {
     banked: false,
   });
   fx.push({ t: 'spit', x: b.x, y: b.y });
-}
-
-function clampIn(v: number, a: number, b: number): number {
-  return Math.max(a, Math.min(b, v));
 }
 
 /**
@@ -683,6 +775,7 @@ export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
   const st = stageById(s.stage);
   const list = bodies(s);
 
+  let railSplit: Ball | undefined;
   for (const b of list) {
     if (b.resting || b.im === 0) continue;
     b.x += b.vx * h;
@@ -690,7 +783,14 @@ export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
     const sp = wallCollide(b, wallBounceOf(s, b));
     if (sp > 0 && b.ball) {
       b.ball.banked = true;
-      if (b.ball.kind === 'main' && s.phase === 'resolve' && (!s.firstHitDone || mod(s, 'ricochet.carom'))) s.shotBounces++;
+      const heroShot = b.ball.kind === 'main' && s.phase === 'resolve';
+      if (heroShot && (!s.firstHitDone || mod(s, 'ricochet.carom'))) s.shotBounces++;
+      if (heroShot && mod(s, 'light.tailwind')) capSpeed(b);
+      // Rail Split (split fork): the hero's first rail before any hit releases the split (spawned after writeBack).
+      if (heroShot && !s.firstHitDone && !s.splitUsed && mod(s, 'split.rail') && s.stats.splitCount > 0 && has(s, 'split')) {
+        s.splitUsed = true;
+        railSplit = b.ball;
+      }
       fx.push({ t: 'wall', x: b.x, y: b.y, speed: sp });
     }
     // Cog: a charge ricochets off one rail; the second rail contact of the same charge stops it dead.
@@ -718,6 +818,7 @@ export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
     }
   }
   writeBack(list);
+  if (railSplit) spawnSplit(s, railSplit, fx);
 
   // Jump cue: the hero lands once it no longer overlaps the enemy it jumped (or that enemy died).
   for (const b of list) {
@@ -725,8 +826,11 @@ export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
     if (!jb || jb.kind !== 'main' || !((jb.jumpOver ?? 0) > 0)) continue;
     const e = s.targets.find((t) => t.id === jb.jumpOver);
     if (!e || e.dead || Math.hypot(e.x - jb.x, e.y - jb.y) >= e.r + jb.r) {
+      jb.lastJumped = jb.jumpOver;
       jb.jumpOver = 0;
       jb.jumpLanded = true;
+      // Stomp (jump fork): the landing staggers the jumped enemy.
+      if (e && !e.dead && mod(s, 'jump.stomp')) addStagger(e, STOMP_STAGGER, fx, s);
     }
   }
 

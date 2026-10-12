@@ -411,3 +411,60 @@ export const BLINK_MARGIN = 8;
 export const MOTH_CAP = 2;
 /** Lantern reach (edge gap px from the hero) by card level, for the forks and capstones (Sunrise: whole table). */
 export const LANTERN_R_LV = [80, 100, 120, 140];
+
+// ---------- v0.6 M3 parts 2-3: world-2 and world-3 card forks and capstones ----------
+/** Jump / Long Jump: hops a shot (base 1). Stomp: stagger on landing. Pounce: landing hit x this (before the jump bonus). */
+export const LONG_JUMP_HOPS = 2;
+export const STOMP_STAGGER = 1;
+export const POUNCE_MULT = 2;
+/** Light / Zip: launch x this (inside LAUNCH_MULT_CAP). Dart: +DART_DMG on hero contacts at >= DART_SPEED px/s. Tailwind: hero rail bounce x this. */
+export const ZIP_MULT = 1.1;
+export const DART_SPEED = 400;
+export const DART_DMG = 1;
+export const TAILWIND_MULT = 1.15;
+/** Chill / Brittle: +dmg on chilled enemies. Numb: chilled enemies deal -this (min 1). Deep Freeze: frozen phases (2 = one skipped). */
+export const BRITTLE_DMG = 1;
+export const NUMB_DMG = 1;
+export const DEEP_FREEZE_PHASES = 2;
+/** Mirror / Absorb: heal per reflection. Prism: reflection splash radius (edge gap from the shooter) and damage. */
+export const ABSORB_HEAL = 1;
+export const PRISM_R = 40;
+export const PRISM_DMG = 1;
+/** Split / Swarm: extra children, every child deals SWARM_DMG. Mitosis: kids from the first child kill. Homing: aim radius (edge gap from the hero). */
+export const SWARM_EXTRA = 2;
+export const SWARM_DMG = 1;
+export const MITOSIS_KIDS = 2;
+export const HOMING_R = 60;
+/** Shockwave / Quake: radius. Pulse: shove (px). Epicentre: touching radius (edge gap) and static damage. */
+export const QUAKE_R = 90;
+export const PULSE_PUSH = 30;
+export const EPICENTRE_R = 24;
+export const EPICENTRE_DMG = 2;
+/** Draw / Snap Back: return speed (x launch). Seek: aim radius (edge gap from the hero). Pull: struck enemy velocity x return velocity. */
+export const SNAP_RETURN = 0.8;
+export const SEEK_R = 100;
+export const PULL_K = 0.5;
+/** Sticky / Web: radius (edge gap from the stuck enemy) and stagger. Trap: the stuck enemy's next hero hit x this. */
+export const WEB_R = 30;
+export const WEB_STAGGER = 1;
+export const TRAP_MULT = 2;
+/** Lightning / Chain: damage of each extra hop. */
+export const CHAIN_DMG = 1;
+/** Static / Overload: zap radius (edge gap) and damage. Tesla: crossings a shot, zap radius (edge gap), damage. */
+export const OVERLOAD_R = 40;
+export const OVERLOAD_DMG = 1;
+export const TESLA_AT = 3;
+export const TESLA_R = 60;
+export const TESLA_DMG = 2;
+/** Spitter / Gatling: interval x this, live spat cap. Mortar: interval x this, blast radius (edge gap), damage, blasts a shot. Aimed: radius. Heavy Spit: damage. */
+export const GATLING_MULT = 0.6;
+export const SPIT_LIVE_CAP = 10;
+export const MORTAR_MULT = 1.5;
+export const MORTAR_R = 24;
+export const MORTAR_DMG = 1;
+export const MORTAR_BLASTS = 3;
+export const AIMED_R = 80;
+export const HEAVY_SPIT_DMG = 2;
+/** Time Stop / Slow: phases at half damage (ceil). */
+export const SLOW_PHASES = 2;
+export const SLOW_MULT = 0.5;
