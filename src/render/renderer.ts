@@ -401,10 +401,10 @@ function drawEnemyOverlay(ctx: CanvasRenderingContext2D, s: RunState, t: Target,
   if (t.kind === 'goblin') {
     // coin-sack meter: TOOTH_HIT coins, one gone per hit; the last is the tooth
     const left = Math.max(0, TOOTH_HIT - s.goblinHits);
-    const py = Math.round(t.y + t.r + 3), px = Math.round(t.x) - 6;
+    const py = Math.round(t.y + t.r + 3), px = Math.round(t.x) - Math.floor((TOOTH_HIT * 5 - 1) / 2);
     ctx.fillStyle = P['0'];
-    ctx.fillRect(px - 1, py - 1, 15, 5);
-    for (let i = 0; i < 3; i++) {
+    ctx.fillRect(px - 1, py - 1, TOOTH_HIT * 5 + 1, 5);
+    for (let i = 0; i < TOOTH_HIT; i++) {
       ctx.fillStyle = i < left ? P.Y : P['2'];
       ctx.fillRect(px + i * 5, py, 4, 3);
       if (i < left) { ctx.fillStyle = P['5']; ctx.fillRect(px + i * 5, py, 2, 1); }
