@@ -686,7 +686,7 @@ export interface CardState {
 }
 
 export type Currency = 'cash' | TokenId;
-export type NodeKind = 'stat' | 'unlock' | 'keystone' | 'capstone' | 'counter';
+export type NodeKind = 'stat' | 'unlock' | 'keystone' | 'capstone' | 'counter' | 'portal';
 export type Trunk = 'power' | 'vitality' | 'tactics' | 'combo';
 
 export interface UpgradeNode {
@@ -712,6 +712,8 @@ export interface UpgradeNode {
   graft?: number;
   /** Loop index for procedural loop rings. */
   loop?: number;
+  /** v0.6 islands: 1..6 = world islands, 6+L = loop L. Undefined on the pre-island tree. */
+  island?: number;
   /** Sprite name for the icon (render/sprites.ts). */
   icon: string;
   /** Applies this node's effect at `level` onto stats. */
