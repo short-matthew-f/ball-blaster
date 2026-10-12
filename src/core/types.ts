@@ -222,6 +222,7 @@ export type TargetKind =
   | 'hive'
   | 'frost' // freezes an ally (Ice)
   | 'cadre' // boss shield minion (Rime Golem)
+  | 'goblin' // Loot Goblin (loot phase): unkillable, never attacks; every player-ball contact drops loot
   | 'cog' // Clockwork: rolling gear; banked charge that ricochets and bumps its own side
   | 'tinker' // Clockwork: repairs (heals) the most damaged ally in range
   | 'boss';
@@ -229,7 +230,7 @@ export type TargetKind =
 /** Alias: v0.2 enemies are physics bodies. `Target` is kept so render/ui keep compiling. */
 export type EnemyKind = TargetKind;
 
-export type IntentType = 'attack' | 'shoot' | 'advance' | 'charge' | 'guard' | 'detonate' | 'summon' | 'rest' | 'repair' | 'wind';
+export type IntentType = 'attack' | 'shoot' | 'advance' | 'charge' | 'guard' | 'detonate' | 'summon' | 'rest' | 'repair' | 'wind' | 'flee';
 
 export interface Intent {
   t: IntentType;
@@ -318,6 +319,7 @@ export type TurnPhase =
   | 'aim' // waiting for player input; all balls at rest
   | 'resolve' // balls moving
   | 'enemy' // enemy phase animating (moves, respawns, boss arrival)
+  | 'loot' // Loot Goblin phase after the boss dies: scurry/arrival animating; no intents, waves, poison, belts or enrage
   | 'over'; // hero HP <= 0 after an enemy phase (or a shot); summary pending
 
 export interface ComboTally {
@@ -375,6 +377,16 @@ export interface RunState {
   beltAt?: number;
   /** Clockwork: the Mainspring's Wind intent: the next sweep runs twice. */
   beltWound?: boolean;
+  /** Loot phase: shots left (3 -> 0). Undefined before the boss dies. */
+  pulls?: number;
+  /** Cash taken from the Loot Goblin this run. */
+  loot: number;
+  /** Player-ball contacts with the goblin this run (3rd = golden tooth). */
+  goblinHits: number;
+  /** Golden tooth taken this run (+1 token). */
+  tooth: boolean;
+  /** Boss tokens earned this run (banked into save.tokens[stats.tokenId] at run end). */
+  tokens: number;
   seed: number;
   rng: Rng;
   stats: RunStats;
@@ -540,7 +552,19 @@ export type FxEvent =
   /** Clockwork: a tinker repaired an ally at (x,y). */
   | { t: 'repair'; x: number; y: number; amount: number }
   /** Clockwork: the Mainspring reversed every conveyor (phase 2 entry). */
-  | { t: 'beltReverse' };
+  | { t: 'beltReverse' }
+  /** Loot phase begins (goblin arriving). */
+  | { t: 'lootStart' }
+  /** A player ball hit the goblin: loot tier and cash paid. */
+  | { t: 'goblinHit'; x: number; y: number; tier: 'small' | 'big' | 'jackpot'; cash: number }
+  /** Third goblin hit: the golden tooth (+1 token). */
+  | { t: 'tooth'; x: number; y: number }
+  /** The goblin scurried from its old spot to (x, y). */
+  | { t: 'scurry'; id: number; x: number; y: number }
+  /** Loot phase over (after the third shot's balls stop). */
+  | { t: 'lootEnd'; cash: number; hits: number }
+  /** Boss token(s) earned (boss kill or tooth). */
+  | { t: 'token'; x: number; y: number; amount: number };
 
 // ---------- Derived per-run stats (meta -> sim contract) ----------
 
@@ -605,6 +629,10 @@ export interface RunStats {
   trick: TrickId | null;
   /** Trick uses per run (0 if no trick). */
   trickUses: number;
+  /** The boss token this stage drops (world's token; loops reuse). */
+  tokenId: TokenId;
+  /** Active fork / capstone ids of equipped cards (M3; the sim keys behaviour on these). */
+  mods: string[];
   /** Upgrade level per equipped gear id (0 = base), e.g. gearLevel.poison = 1. */
   gearLevel: Record<string, number>;
 }
@@ -636,7 +664,23 @@ export interface SaveData {
 
 // ---------- Upgrade tree data (meta) ----------
 
-export type Currency = 'cash' | 'emerald';
+/** Boss tokens: one kind per world's boss (loops reuse their world's). */
+export type TokenId = 'stripe' | 'frost' | 'cog' | 'pearl' | 'ember' | 'house';
+export const TOKEN_OF_WORLD: TokenId[] = ['stripe', 'frost', 'cog', 'pearl', 'ember', 'house'];
+
+/** Gallery card progress (v0.6). Presence in SaveData.cards = unlocked. */
+export interface CardState {
+  /** Base nodes bought: 0..3 (I, II, III). */
+  level: number;
+  /** Owned fork-choice ids; `fork` = the active one (must be in `forks`). */
+  forks: string[];
+  fork: string | null;
+  /** Owned capstone ids; `cap` = the active one. */
+  caps: string[];
+  cap: string | null;
+}
+
+export type Currency = 'cash' | 'emerald' | TokenId;
 export type NodeKind = 'stat' | 'unlock' | 'keystone' | 'capstone' | 'counter';
 export type Trunk = 'power' | 'vitality' | 'tactics' | 'combo';
 

@@ -93,6 +93,10 @@ export function createRun(stage: StageId, stats: RunStats, seed: number, _bestWa
     shotBounces: 0,
     firstHitDone: false,
     lanternOn: (stats.relics ?? []).includes('lantern'),
+    loot: 0,
+    goblinHits: 0,
+    tooth: false,
+    tokens: 0,
   };
   s.balls.push({
     id: s.nextId++,

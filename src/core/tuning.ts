@@ -65,6 +65,11 @@ export const TARGET_DEFS: Record<TargetKind, TargetDef> = {
     hp: 3, r: 12, mass: 1.2, cash: 8, bounce: 1, staggerAt: 1, chargeSpeed: 0, reach: 0,
     intents: [{ t: 'repair', weight: 60 }, { t: 'shoot', n: 1, weight: 40 }], // repair = heal most damaged ally within 70 px
   },
+  // Loot Goblin (loot phase; spec numbers, sim owner may retune within the hits-per-pull test)
+  goblin: {
+    hp: Infinity, r: 13, mass: 1.5, cash: 0, bounce: 1.3, staggerAt: Infinity, chargeSpeed: 0, reach: 0,
+    intents: [{ t: 'flee', weight: 100 }],
+  },
   boss: {
     hp: 40, r: 23, mass: 8, cash: 60, bounce: 0.9, staggerAt: 4, chargeSpeed: 240, chargedSpeed: 400, reach: 90,
     intents: [], // scripted per phase (sim/enemy.ts)
@@ -174,6 +179,8 @@ export const BASE_STATS: RunStats = {
   speedDamage: 0,
   aimPreview: 0,
   beltGrip: 0,
+  tokenId: 'stripe',
+  mods: [],
   healOnKill: 0,
   waveHeal: 3,
   bossHeal: 0,

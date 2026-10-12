@@ -2,7 +2,7 @@
 import type { FxEvent, TargetKind } from '../core/types';
 
 const HIT_PITCH: Record<TargetKind, number> = {
-  grunt: 520, skirmisher: 760, bouncer: 700, bomber: 330, broodmother: 400, grub: 820, thornback: 900, brute: 260, cleric: 600, hive: 360, boss: 170, frost: 800, cadre: 600, cog: 640, tinker: 560,
+  grunt: 520, skirmisher: 760, bouncer: 700, bomber: 330, broodmother: 400, grub: 820, thornback: 900, brute: 260, cleric: 600, hive: 360, boss: 170, frost: 800, cadre: 600, cog: 640, tinker: 560, goblin: 880,
 };
 
 type Wave = OscillatorType;

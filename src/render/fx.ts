@@ -32,6 +32,7 @@ const KIND_COLORS: Record<TargetKind, string[]> = {
   boss: [P['0'], P['3'], P['5'], P.Y],
   cog: [P.y, P.o, P['3']],
   tinker: [P.o, P.y, P.b],
+  goblin: [P.Y, P.y, P.o],
 };
 
 const TRICK_NAMES: Record<string, string> = { recall: 'RECALL', timeStop: 'TIME STOP', rackEm: "RACK 'EM", shockwave: 'SHOCKWAVE' };
