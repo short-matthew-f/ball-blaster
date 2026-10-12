@@ -1,5 +1,5 @@
 import { CASH_GROWTH, SPIT_LIFE_CAP } from '../core/tuning';
-import type { Currency, NodeKind, RunStats, Trunk, UpgradeNode } from '../core/types';
+import type { CueId, Currency, RelicId, TrickId, NodeKind, RunStats, Trunk, UpgradeNode } from '../core/types';
 
 export const ROOT_ID = 'hero';
 const CX = 320;
@@ -132,6 +132,67 @@ const CORE_ROWS: Array<[string, [number, number], string[], Core]> = [
   ['ballSticky', [-2, -3], ['ballHeavy'], em({ name: 'STICKY BALL', desc: 'Unlock sticky ball', trunk: 'tactics', max: 1, cost: () => 4, icon: 'icon_ball', apply: () => {} })],
 ];
 
+
+// ---------------------------------------------------------------- gear nodes
+// Gear unlocks are one-shot emerald keystones whose node id IS the gear id; `${id}_lv` cash nodes sit behind them.
+// lightning / split / spitter are existing cash nodes that double as the relic unlock (owned = level > 0).
+export const CUE_IDS: CueId[] = ['break', 'jump', 'draw', 'follow'];
+export const RELIC_IDS: RelicId[] = ['lightning', 'split', 'spitter', 'poison', 'explosive', 'chill', 'shrapnel', 'static', 'ricochet', 'lantern', 'thorns', 'momentum', 'mirror'];
+export const TRICK_IDS: TrickId[] = ['recall', 'timeStop', 'rackEm', 'shockwave'];
+
+/** [id, name, desc, icon, emerald price, grid, extra links]. Chains link each gear to the previous one. */
+type GearRow = [string, string, string, string, number, [number, number], string[]];
+const CUE_ROWS: GearRow[] = [
+  ['break', 'BREAK CUE', '+35% speed, no aim', 'icon_speed', 3, [1, -1], ['damage', 'comboChain']],
+  ['jump', 'JUMP CUE', 'Hop 1st enemy', 'icon_reflex', 5, [2, -3], ['break']],
+  ['draw', 'DRAW CUE', 'Backspin pullback', 'icon_aim', 6, [2, -4], ['jump']],
+  ['follow', 'FOLLOW CUE', 'Topspin carry', 'icon_mass', 8, [2, -5], ['draw']],
+];
+const RELIC_ROWS: GearRow[] = [
+  // NW chain
+  ['poison', 'POISON', 'Hits add poison', 'icon_heal', 3, [-1, -1], ['aim', 'damage']],
+  ['chill', 'CHILL', 'Hits slow enemies', 'icon_wave', 5, [-4, -3], ['poison']],
+  ['static', 'STATIC', 'Stagger deals dmg', 'icon_stagger', 6, [-4, -4], ['chill']],
+  ['ricochet', 'RICOCHET', 'Rail bounces +dmg', 'icon_aim', 8, [-4, -5], ['static']],
+  ['lantern', 'LANTERN', 'Intents stay lit', 'icon_shrine', 8, [-4, -6], ['ricochet']],
+  // SE chain
+  ['explosive', 'EXPLOSIVE', 'First hit blasts', 'icon_bumper', 3, [1, 1], ['comboChain']],
+  ['shrapnel', 'SHRAPNEL', 'Kills fire shards', 'icon_spit', 5, [3, 2], ['explosive']],
+  ['momentum', 'MOMENTUM', 'Streaks add dmg', 'icon_combo', 6, [4, 3], ['shrapnel']],
+  ['thorns', 'THORNS', 'Chargers take dmg', 'icon_armor', 8, [4, 4], ['momentum']],
+  ['mirror', 'MIRROR', 'Reflect ranged', 'icon_mass', 8, [4, 5], ['thorns']],
+];
+const TRICK_ROWS: GearRow[] = [
+  ['recall', 'RECALL', 'Ball to safe spot', 'icon_ball', 10, [-1, 1], ['maxHp', 'armor']],
+  ['shockwave', 'SHOCKWAVE', 'Stagger nearby', 'icon_stagger', 10, [-3, 2], ['recall']],
+  ['rackEm', "RACK 'EM", 'Pull enemies in', 'icon_mass', 12, [-4, 3], ['shockwave']],
+  ['timeStop', 'TIME STOP', 'Skip enemy phase', 'icon_overtime', 15, [-4, 4], ['rackEm']],
+];
+
+const lvRow = (id: string, name: string, icon: string, max: number, g: [number, number], base: number): [string, [number, number], string[], Core] => [
+  `${id}_lv`, g, [id],
+  { name, desc: 'Gear level +1', kind: 'stat', trunk: trunkOf(id), ring: 3, max, cost: geo(base, 2), icon,
+    apply: (s, l) => { s.gearLevel = { ...s.gearLevel, [id]: l }; } },
+];
+function trunkOf(id: string): Trunk {
+  if (CUE_IDS.includes(id as CueId)) return 'combo';
+  if (TRICK_IDS.includes(id as TrickId)) return 'vitality';
+  return ['poison', 'chill', 'static', 'ricochet', 'lantern'].includes(id) ? 'tactics' : 'combo';
+}
+/** Level-node cells that differ from "one cell outward" because the cell is taken. */
+const LV_AT: Record<string, [number, number]> = {
+  break: [3, -2], jump: [1, -4], draw: [3, -4], follow: [3, -5], poison: [-3, -2],
+  explosive: [2, 3], shrapnel: [3, 1], momentum: [5, 3], thorns: [5, 4], mirror: [5, 5],
+  recall: [-2, 3], shockwave: [-5, 3], rackEm: [-5, 4], timeStop: [-4, 5],
+};
+const GEAR_ROWS: Array<[string, [number, number], string[], Core]> = [];
+for (const [rows, max, lvBase] of [[CUE_ROWS, 1, 150], [RELIC_ROWS, 2, 200], [TRICK_ROWS, 2, 300]] as const) {
+  for (const [id, name, desc, icon, price, g, links] of rows) {
+    GEAR_ROWS.push([id, g, links, em({ name, desc, trunk: trunkOf(id), ring: 3, max: 1, cost: () => price, icon, apply: () => {} })]);
+    GEAR_ROWS.push(lvRow(id, `${name.replace(' CUE', '').slice(0, 9)} II`, icon, max, LV_AT[id] ?? [g[0] + (g[0] < 0 ? -1 : 1), g[1]], lvBase));
+  }
+}
+
 const ROOT: UpgradeNode = mk({
   id: ROOT_ID, name: 'HERO', desc: 'The 8-ball', kind: 'unlock', trunk: 'power', g: [0, 0], links: [], max: 1, cost: () => 0, icon: 'icon_ball', ring: 0, apply: () => {},
 });
@@ -139,6 +200,7 @@ const ROOT: UpgradeNode = mk({
 export const CORE_NODES: UpgradeNode[] = [
   ROOT,
   ...CORE_ROWS.map(([id, g, links, c]) => mk({ ...c, id, g, links })),
+  ...GEAR_ROWS.map(([id, g, links, c]) => mk({ ...c, id, g, links })),
 ];
 
 // -------------------------------------------------------------------- grafts

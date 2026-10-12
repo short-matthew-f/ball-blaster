@@ -16,7 +16,23 @@ import {
   type StageId,
   type Vec,
 } from '../core/types';
-import { BALL_TYPES, JAM_CLEAR, WAVES_PER_STAGE, stageById } from '../core/tuning';
+import {
+  BALL_TYPES,
+  BREAK_MIN_POWER,
+  BREAK_SPEED_MULT,
+  DRAW_POWER,
+  JAM_CLEAR,
+  MOMENTUM_HITS,
+  MOMENTUM_MAX,
+  RACK_PULL,
+  RECALL_Y_OFFSET,
+  SHOCKWAVE_R,
+  WAVES_PER_STAGE,
+  gearVal,
+  stageById,
+} from '../core/tuning';
+import { addStagger } from './damage';
+import { has, lv } from './gear';
 import { Rng } from '../core/rng';
 import { physicsStep, relaxAll, spawnSpat } from './physics';
 import { emptyCombo, evaluateCombos } from './combos';
@@ -37,7 +53,7 @@ export function createRun(stage: StageId, stats: RunStats, seed: number, _bestWa
     dark: st.modifiers.includes('dark'),
     seed,
     rng: new Rng(seed),
-    stats: { ...stats },
+    stats: { ...stats, relics: [...(stats.relics ?? [])], gearLevel: { ...(stats.gearLevel ?? {}) } },
     phase: 'aim',
     t: 0,
     hp: stats.maxHp,
@@ -70,6 +86,12 @@ export function createRun(stage: StageId, stats: RunStats, seed: number, _bestWa
     waveKillShot: -1,
     nextId: 1,
     pendingFx: [],
+    trickUsesLeft: stats.trick ? stats.trickUses : 0,
+    skipNextEnemyPhase: false,
+    momentum: 0,
+    shotBounces: 0,
+    firstHitDone: false,
+    lanternOn: (stats.relics ?? []).includes('lantern'),
   };
   s.balls.push({
     id: s.nextId++,
@@ -100,12 +122,19 @@ export function shoot(s: RunState, pull: Vec): boolean {
   if (len < CANCEL_RADIUS) return false;
   const b = mainBall(s);
   // Minimum shot power: every release is a leave; no free micro-taps.
-  const power = Math.max(MIN_POWER, Math.min(len, MAX_PULL) / MAX_PULL);
-  const speed = power * MAX_LAUNCH_SPEED * BALL_TYPES[s.stats.ballType].speedMult;
+  const cue = s.stats.cue;
+  const power = Math.max(cue === 'break' ? BREAK_MIN_POWER : MIN_POWER, Math.min(len, MAX_PULL) / MAX_PULL);
+  const cueMult = cue === 'break' ? BREAK_SPEED_MULT : cue === 'draw' ? DRAW_POWER : 1;
+  const speed = power * MAX_LAUNCH_SPEED * BALL_TYPES[s.stats.ballType].speedMult * cueMult;
   b.vx = (pull.x / len) * speed;
   b.vy = (pull.y / len) * speed;
   b.resting = false;
   b.banked = false;
+  b.jumpOver = undefined;
+  b.jumpLanded = false;
+  s.launch = { x: b.x, y: b.y, speed };
+  s.shotBounces = 0;
+  s.firstHitDone = false;
   s.shots++;
   s.combo = emptyCombo();
   s.splitUsed = false;
@@ -162,7 +191,7 @@ function substep(s: RunState, h: number, fx: FxEvent[]): void {
 function resolveStep(s: RunState, h: number, fx: FxEvent[]): void {
   s.resolveTime += h;
   const main = mainBall(s);
-  if (s.stats.spitInterval > 0 && s.stats.spitLife > 0 && !main.resting) {
+  if (s.stats.spitInterval > 0 && s.stats.spitLife > 0 && !main.resting && has(s, 'spitter')) {
     s.spitTimer -= h;
     if (s.spitTimer <= 0) {
       s.spitTimer += s.stats.spitInterval;
@@ -185,7 +214,14 @@ function resolveStep(s: RunState, h: number, fx: FxEvent[]): void {
 
 function endShot(s: RunState, fx: FxEvent[]): void {
   const main = mainBall(s);
+  // Jump cue: a hero that stopped on top of the enemy it jumped is separated by relaxAll below.
+  main.jumpOver = undefined;
+  main.jumpLanded = false;
   evaluateCombos(s, main.x, main.y, fx);
+  // Momentum relic: a shot with >= MOMENTUM_HITS hits builds it (capped); fewer resets it.
+  if (has(s, 'momentum')) {
+    s.momentum = s.combo.hits >= MOMENTUM_HITS ? Math.min(gearVal(MOMENTUM_MAX, lv(s, 'momentum')), s.momentum + 1) : 0;
+  }
   s.targets = s.targets.filter((t) => !t.dead);
   s.obstacles = s.obstacles.filter((o) => !o.dead);
   relaxAll(s);
@@ -232,25 +268,83 @@ function spotClear(s: RunState, h: Ball, x: number, y: number): boolean {
   return true;
 }
 
-/** Before aim: a hero with no clear corridor is nudged to the nearest open spot (deterministic spiral search). */
-export function jamRule(s: RunState, fx: FxEvent[]): boolean {
+/** Nearest open spot (clear, with a corridor) around (x0,y0): deterministic spiral search. */
+function nearestOpenSpot(s: RunState, x0: number, y0: number): Vec | null {
   const h = mainBall(s);
-  if (hasCorridor(s, h.x, h.y)) return false;
   for (let rho = 2; rho <= 300; rho += 2) {
     const n = Math.max(8, Math.ceil((2 * Math.PI * rho) / 3));
     for (let k = 0; k < n; k++) {
       const a = (k / n) * Math.PI * 2;
-      const x = h.x + Math.cos(a) * rho;
-      const y = h.y + Math.sin(a) * rho;
-      if (!spotClear(s, h, x, y) || !hasCorridor(s, x, y)) continue;
-      fx.push({ t: 'jam', x0: h.x, y0: h.y, x, y });
-      h.x = x;
-      h.y = y;
-      s.jams++;
-      return true;
+      const x = x0 + Math.cos(a) * rho;
+      const y = y0 + Math.sin(a) * rho;
+      if (spotClear(s, h, x, y) && hasCorridor(s, x, y)) return { x, y };
     }
   }
-  return false;
+  return null;
+}
+
+/** Before aim: a hero with no clear corridor is nudged to the nearest open spot (deterministic spiral search). */
+export function jamRule(s: RunState, fx: FxEvent[]): boolean {
+  const h = mainBall(s);
+  if (hasCorridor(s, h.x, h.y)) return false;
+  const p = nearestOpenSpot(s, h.x, h.y);
+  if (!p) return false;
+  fx.push({ t: 'jam', x0: h.x, y0: h.y, x: p.x, y: p.y });
+  h.x = p.x;
+  h.y = p.y;
+  s.jams++;
+  return true;
+}
+
+// ---------- Tricks ----------
+
+/**
+ * Use the equipped trick (aim only, uses left). Recall: hero to the bottom-centre start spot (nudged if occupied).
+ * Time Stop: the next enemy phase is skipped (intents keep). Rack 'Em: every live enemy moves RACK_PULL px toward the
+ * table centre. Shockwave: +1 stagger to every enemy within SHOCKWAVE_R (edge gap) of the hero.
+ */
+export function useTrick(s: RunState): boolean {
+  const id = s.stats.trick;
+  if (s.phase !== 'aim' || !id || s.trickUsesLeft <= 0) return false;
+  const fx = (s.pendingFx ??= []);
+  const h = mainBall(s);
+  switch (id) {
+    case 'recall': {
+      const x = TABLE.x + TABLE.w / 2;
+      const y = TABLE.y + TABLE.h - RECALL_Y_OFFSET;
+      const p = spotClear(s, h, x, y) && hasCorridor(s, x, y) ? { x, y } : nearestOpenSpot(s, x, y);
+      if (p) ((h.x = p.x), (h.y = p.y));
+      break;
+    }
+    case 'timeStop':
+      s.skipNextEnemyPhase = true;
+      break;
+    case 'rackEm': {
+      const cx = TABLE.x + TABLE.w / 2;
+      const cy = TABLE.y + TABLE.h / 2;
+      for (const t of s.targets) {
+        if (t.dead) continue;
+        const d = Math.hypot(cx - t.x, cy - t.y);
+        const k = Math.min(RACK_PULL, d) / (d || 1);
+        t.x += (cx - t.x) * k;
+        t.y += (cy - t.y) * k;
+      }
+      relaxAll(s);
+      jamRule(s, fx);
+      break;
+    }
+    case 'shockwave':
+      for (const t of s.targets.slice()) {
+        if (t.dead) continue;
+        if (Math.hypot(t.x - h.x, t.y - h.y) - t.r - h.r <= SHOCKWAVE_R) addStagger(t, 1, fx, s);
+      }
+      // Static may have killed something during aim: drop the bodies (rewards were paid at the kill).
+      s.targets = s.targets.filter((t) => !t.dead);
+      break;
+  }
+  s.trickUsesLeft--;
+  fx.push({ t: 'trick', id });
+  return true;
 }
 
 /**

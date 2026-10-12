@@ -2,7 +2,7 @@
 import type { BallType, RunStats, UpgradeNode } from '../core/types';
 import { BASE_STATS } from '../core/tuning';
 import { WORLDS, makeStage } from '../core/worlds';
-import { ROOT_ID, worldCleared, buy, buyState, distanceFromOwned, nextCost, nodeLevel, nodesFor, pathToOwned } from '../meta/index';
+import { ROOT_ID, gearOwned, worldCleared, buy, buyState, distanceFromOwned, nextCost, nodeLevel, nodesFor, pathToOwned } from '../meta/index';
 import { PALETTE } from '../render/palette';
 import { getMenuBg } from '../render/renderer';
 import { drawSprite, spriteSize } from '../render/sprite-cache';
@@ -97,6 +97,7 @@ export class TreeScreen implements Screen {
   private drag: { x0: number; y0: number; cx0: number; cy0: number; moved: boolean; prevSel: string | null; picked: boolean } | null = null;
   private toast = '';
   private toastUntil = 0;
+  private gearHintUntil = 0;
   private now = 0;
   private vis: Vis[] = [];
   private bounds = { x0: 0, y0: 0, x1: 640, y1: 640 };
@@ -276,14 +277,10 @@ export class TreeScreen implements Screen {
       }
       if (hint) drawText(ctx, hint, 7, PANEL_Y + 38 + 0, { color: P.p });
       const bt = ballOf(node);
-      const ownedBall = bt !== null && (node.id === ROOT_ID || lvl >= 1);
-      const equipped = bt !== null && save.ballType === bt;
-      if (node.id === ROOT_ID && save.ballType === 'standard') {
+      if (node.id === ROOT_ID) {
         drawText(ctx, 'STANDARD BALL', 7, PANEL_Y + 38, { color: P['3'] });
-      }
-      if (ownedBall && (node.id !== ROOT_ID || save.ballType !== 'standard')) {
-        btns.push({ id: 'equip', x: 100, y: PANEL_Y + 28, w: 74, h: 16, label: equipped ? 'EQUIPPED' : 'EQUIP', scale: equipped ? 1 : 2, style: 'gold', disabled: equipped });
-        if (node.id === ROOT_ID) drawText(ctx, 'STANDARD BALL', 7, PANEL_Y + 38, { color: P['4'] });
+      } else if (bt && lvl >= 1) {
+        drawText(ctx, save.ballType === bt ? 'EQUIPPED' : 'IN LOADOUT', 7, PANEL_Y + 38, { color: P['4'] });
       } else if (!(node.id === ROOT_ID)) {
         const label = st === 'maxed' ? 'MAXED' : st === 'locked' ? 'LOCKED' : st === 'poor' ? 'NEED MORE' : 'BUY';
         btns.push({ id: 'buy', x: 100, y: PANEL_Y + 28, w: 74, h: 16, label, scale: st === 'ok' || st === 'maxed' ? 2 : 1, style: 'gold', disabled: st !== 'ok' });
@@ -292,11 +289,19 @@ export class TreeScreen implements Screen {
       drawText(ctx, 'TAP A NODE TO INSPECT IT', 90, PANEL_Y + 19, { align: 'center', color: P['3'] });
     }
 
-    btns.push({ id: 'menu', x: 4, y: 297, w: 34, h: 20, label: 'MENU', style: 'gray' });
-    btns.push({ id: 'map', x: 40, y: 297, w: 34, h: 20, label: 'MAP', style: 'blue' });
-    btns.push({ id: 'start', x: 76, y: 297, w: 100, h: 20, label: 'START RUN', style: 'green' });
+    btns.push({ id: 'menu', x: 4, y: 297, w: 30, h: 20, label: 'MENU', style: 'gray' });
+    btns.push({ id: 'map', x: 36, y: 297, w: 28, h: 20, label: 'MAP', style: 'blue' });
+    btns.push({ id: 'loadout', x: 66, y: 297, w: 52, h: 20, label: 'LOADOUT', style: 'gold' });
+    btns.push({ id: 'start', x: 120, y: 297, w: 56, h: 20, label: 'START RUN', style: 'green' });
     this.buttons.set(btns);
     this.buttons.draw(ctx);
+    if (now < this.gearHintUntil) {
+      ctx.fillStyle = P['0'];
+      ctx.globalAlpha = 0.85;
+      ctx.fillRect(10, VIEW_BOT - 38, 160, 14);
+      ctx.globalAlpha = 1;
+      drawText(ctx, 'EQUIP IT IN LOADOUT', 90, VIEW_BOT - 34, { align: 'center', color: Math.floor(now * 3) % 2 ? P.Y : P['5'] });
+    }
     if (now < this.toastUntil) drawText(ctx, this.toast, 90, VIEW_BOT - 9, { align: 'center', color: P.Y, shadow: P['0'] });
   }
 
@@ -442,19 +447,16 @@ export class TreeScreen implements Screen {
         app.sfx.buy();
         this.toast = 'PURCHASED!';
         this.toastUntil = this.now + 1;
-      }
-    } else if (id === 'equip') {
-      const node = nodesFor(save).find((n) => n.id === this.sel);
-      const bt = node ? ballOf(node) : null;
-      if (node && bt && (node.id === ROOT_ID || nodeLevel(save, node.id) >= 1)) {
-        save.ballType = bt;
-        app.persist();
-        this.toast = 'EQUIPPED!';
-        this.toastUntil = this.now + 1;
+        if (node.id !== ROOT_ID && gearOwned(save, node.id) && !save.hints.gearTaught) {
+          save.hints.gearTaught = true;
+          app.persist();
+          this.gearHintUntil = this.now + 4;
+        }
       }
     } else if (id === 'start') app.startRun();
     else if (id === 'menu') app.go('title');
     else if (id === 'map') app.go('map');
+    else if (id === 'loadout') app.go('loadout');
     else if (id === 'settings') {
       app.settingsFrom = 'shop';
       app.go('settings');

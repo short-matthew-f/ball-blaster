@@ -7,7 +7,8 @@ import type { Modifier, TargetKind as TK } from '../src/core/types';
 import { Rng } from '../src/core/rng';
 
 const SPAWN_ZONE_Y = TABLE.y + TABLE.h - SPAWN_ZONE;
-import { canFastForward, createRun, heal, intentVisible, previewShot, shoot, step } from '../src/sim/index';
+import { canFastForward, createRun, heal, intentVisible, previewShot, shoot, step, useTrick } from '../src/sim/index';
+import type { RunStats } from '../src/core/types';
 import { makeEnemy, placeFormation } from '../src/sim/spawn';
 import { maxOverlap } from '../src/sim/physics';
 import { rageLevel } from '../src/sim/enemy';
@@ -750,5 +751,355 @@ describe('v0.3 step 2c: ranged guardrail', () => {
     for (const t of s.targets) t.intent = { t: 'shoot', n: 3 };
     enemyPhaseOnly(s);
     expect(s.maxHp - s.hp).toBe(Math.min(12, Math.floor(RANGED_PHASE_CAP * BASE_STATS.maxHp)));
+  });
+});
+
+// ---------- v0.4 gear (DESIGN-v0.4-loadout) ----------
+
+/** Empty table with gear stats; hero at (x,y). */
+function glab(over: Partial<RunStats>, x = 90, y = 240): RunState {
+  const s = createRun('w1s1', { ...BASE_STATS, ...over }, 42);
+  s.targets = [];
+  s.obstacles = [];
+  s.balls[0].x = x;
+  s.balls[0].y = y;
+  return s;
+}
+const speedOf = (s: RunState) => Math.hypot(s.balls[0].vx, s.balls[0].vy);
+function untilFirstHit(s: RunState): FxEvent[] {
+  const fx: FxEvent[] = [];
+  while (!s.firstHitDone && s.phase === 'resolve') fx.push(...step(s, SIM_DT));
+  return fx;
+}
+
+describe('v0.4 cues', () => {
+  it('break: +35 % launch speed and at least 50 % power', () => {
+    const s = glab({ cue: 'break' });
+    shoot(s, { x: 0, y: -13 });
+    expect(speedOf(s)).toBeCloseTo(0.5 * MAX_LAUNCH_SPEED * 1.35, 6);
+    const t = glab({ cue: 'break' });
+    shoot(t, { x: 0, y: -MAX_PULL });
+    expect(speedOf(t)).toBeCloseTo(MAX_LAUNCH_SPEED * 1.35, 6);
+  });
+  it('jump: passes over the first enemy untouched, lands, and its next contact deals -1', () => {
+    const s = glab({ cue: 'jump', damage: 3 }, 90, 260);
+    const g = put(s, 'grunt', 90, 190);
+    const b = put(s, 'brute', 90, 110);
+    g.hp = g.maxHp = 10;
+    b.hp = b.maxHp = 20;
+    shoot(s, { x: 0, y: -MAX_PULL });
+    while (s.combo.hits === 0 && s.phase === 'resolve') step(s, SIM_DT);
+    expect(g.hp).toBe(10);
+    expect(g.resting).toBe(true);
+    expect(b.hp).toBe(20 - 2);
+    while (s.phase === 'resolve') step(s, SIM_DT);
+    expect(maxOverlap(s)).toBeLessThan(0.5);
+  });
+  it('draw: after the first contact the ball heads back to the launch point at 50 % of launch speed (20 % less power)', () => {
+    const s = glab({ cue: 'draw' }, 90, 240);
+    const g = put(s, 'grunt', 90, 170);
+    g.hp = g.maxHp = 10;
+    shoot(s, { x: 0, y: -MAX_PULL });
+    expect(speedOf(s)).toBeCloseTo(0.8 * MAX_LAUNCH_SPEED, 6);
+    untilFirstHit(s);
+    const h = s.balls[0];
+    expect(h.vy).toBeGreaterThan(0);
+    expect(Math.abs(h.vx)).toBeLessThan(1);
+    expect(Math.abs(speedOf(s) - 0.5 * 0.8 * MAX_LAUNCH_SPEED)).toBeLessThan(4);
+  });
+  it('follow: the ball keeps 60 % of its pre-impact velocity; charges deal +1', () => {
+    const s = glab({ cue: 'follow' }, 90, 240);
+    const g = put(s, 'grunt', 90, 170);
+    g.hp = g.maxHp = 10;
+    shoot(s, { x: 0, y: -MAX_PULL });
+    let pre = 0;
+    while (!s.firstHitDone) {
+      pre = speedOf(s);
+      step(s, SIM_DT);
+    }
+    expect(s.balls[0].vy).toBeLessThan(0);
+    expect(Math.abs(speedOf(s) - 0.6 * pre)).toBeLessThan(4);
+    const t = glab({ cue: 'follow' }, 90, 240);
+    put(t, 'grunt', 90, 170).intent = { t: 'attack', n: 2 };
+    enemyPhaseOnly(t);
+    expect(t.hp).toBe(BASE_STATS.maxHp - 3);
+  });
+});
+
+describe('v0.4 relics', () => {
+  it('lightning, split and spitter only work when equipped', () => {
+    const fx = (relics: RunStats['relics']) => {
+      const s = glab({ relics, lightningChance: 1, lightningArcs: 1, lightningRange: 80, lightningDamage: 1, splitCount: 2, spitInterval: 0.05, spitLife: 1, spitDamage: 1 });
+      put(s, 'grunt', 90, 170).hp = 10;
+      put(s, 'grunt', 130, 170).hp = 10;
+      shoot(s, { x: 0, y: -MAX_PULL });
+      const out: FxEvent[] = [];
+      while (s.phase === 'resolve') out.push(...step(s, SIM_DT));
+      return new Set(out.map((f) => f.t));
+    };
+    const off = fx([]);
+    expect(off.has('lightning') || off.has('split') || off.has('spit')).toBe(false);
+    const on = fx(['lightning', 'split', 'spitter']);
+    expect(on.has('lightning') && on.has('split') && on.has('spit')).toBe(true);
+  });
+  it('poison: +1 stack per contact (+level), ticks at the enemy phase start, decays by 1 (no decay at level 2)', () => {
+    for (const [lvl, stacks, after] of [[0, 1, 0], [1, 2, 1], [2, 3, 3]] as const) {
+      const s = glab({ relics: ['poison'], gearLevel: { poison: lvl } });
+      const g = put(s, 'grunt', 90, 170);
+      g.hp = g.maxHp = 20;
+      g.intent = { t: 'rest' };
+      shoot(s, { x: 0, y: -MAX_PULL });
+      untilFirstHit(s);
+      expect(g.poison).toBe(stacks);
+      const hp = g.hp;
+      const fx = untilSettled(s);
+      expect(s.combo.hits).toBe(1);
+      expect(fx.some((f) => f.t === 'poisonTick' && f.dmg === stacks)).toBe(true);
+      expect(g.hp).toBe(hp - stacks);
+      expect(g.poison).toBe(after);
+      expect(g.stagger).toBe(0);
+    }
+  });
+  it('poison ignores 1-hit shields and never staggers; poison kills pay cash but not the chain', () => {
+    const s = glab({ relics: ['poison'] });
+    const g = put(s, 'grunt', 90, 60);
+    g.hp = g.maxHp = 10;
+    g.shield = 1;
+    g.poison = 2;
+    g.intent = { t: 'rest' };
+    const fx: FxEvent[] = [];
+    shoot(s, { x: 0, y: 20 });
+    s.balls[0].vx = s.balls[0].vy = 0;
+    s.balls[0].resting = true;
+    // Watch the tick itself (stagger clears at the end of the phase).
+    while (s.phase !== 'enemy') fx.push(...step(s, SIM_DT));
+    expect(g.hp).toBe(8);
+    expect(g.shield).toBe(1);
+    expect(g.stagger).toBe(0);
+    untilSettled(s);
+    const k = put(s, 'grunt', 30, 60);
+    k.hp = 1;
+    k.poison = 3;
+    const cash = s.cash;
+    enemyPhaseOnly(s);
+    expect(k.dead).toBe(true);
+    expect(s.cash).toBeGreaterThan(cash);
+    expect(s.combo.chainKills).toBe(0);
+  });
+  it('explosive: the first hit blasts ceil(dmg/2) + 1 stagger to enemies near the impact and costs half the speed', () => {
+    const run = (relics: RunStats['relics']) => {
+      const s = glab({ relics, damage: 3 });
+      const a = put(s, 'grunt', 90, 170);
+      const b = put(s, 'brute', 125, 150);
+      a.hp = a.maxHp = 10;
+      b.hp = b.maxHp = 10;
+      shoot(s, { x: 0, y: -MAX_PULL });
+      const fx = untilFirstHit(s);
+      return { s, b, fx };
+    };
+    const on = run(['explosive']);
+    const off = run([]);
+    expect(on.fx.some((f) => f.t === 'blast')).toBe(true);
+    expect(on.b.hp).toBe(10 - 2);
+    expect(on.b.stagger).toBe(1);
+    expect(off.b.hp).toBe(10);
+    expect(speedOf(on.s)).toBeCloseTo(speedOf(off.s) / 2, 0);
+  });
+  it('chill: a hit chills for one phase; chilled charges reach 60 % and Advances roll half as far', () => {
+    const s = glab({ relics: ['chill'] });
+    const g = put(s, 'grunt', 90, 170);
+    g.hp = g.maxHp = 10;
+    shoot(s, { x: 0, y: -MAX_PULL });
+    const fx: FxEvent[] = [];
+    while (s.phase === 'resolve') fx.push(...step(s, SIM_DT));
+    expect(g.chill).toBe(1);
+    expect(fx.some((f) => f.t === 'status' && f.kind === 'chill' && f.on)).toBe(true);
+    const off = untilSettled(s);
+    expect(g.chill).toBe(0);
+    expect(off.some((f) => f.t === 'status' && f.kind === 'chill' && !f.on)).toBe(true);
+    // Gap 80: within a grunt's reach (110) but not a chilled one's (66) -> Advance, no hit.
+    const t = glab({ relics: ['chill'] }, 90, 260);
+    const c = put(t, 'grunt', 90, 260 - 24 - 80);
+    c.intent = { t: 'attack', n: 2 };
+    c.chill = 1;
+    const y0 = c.y;
+    enemyPhaseOnly(t);
+    expect(t.hp).toBe(BASE_STATS.maxHp);
+    expect(c.y - y0).toBeGreaterThan(20);
+    expect(c.y - y0).toBeLessThan(36);
+  });
+  it('shrapnel: a ball kill releases 2 shards (3 at level 1) that deal 1', () => {
+    for (const [lvl, n] of [[0, 2], [1, 3]] as const) {
+      const s = glab({ relics: ['shrapnel'], gearLevel: { shrapnel: lvl } });
+      put(s, 'grunt', 90, 170).hp = 1;
+      shoot(s, { x: 0, y: -MAX_PULL });
+      const fx = untilFirstHit(s);
+      expect(fx.filter((f) => f.t === 'shard').length).toBe(1);
+      expect(s.balls.filter((b) => b.shard).length).toBe(n);
+      expect(s.balls.filter((b) => b.shard).every((b) => b.life <= 0.8)).toBe(true);
+    }
+  });
+  it('static: an enemy crossing its stagger threshold takes 1 (2 at level 1)', () => {
+    for (const [lvl, d] of [[0, 1], [1, 2]] as const) {
+      const s = glab({ relics: ['static'], gearLevel: { static: lvl } });
+      const k = put(s, 'skirmisher', 90, 170); // staggerAt 1
+      k.hp = k.maxHp = 10;
+      shoot(s, { x: 0, y: -MAX_PULL });
+      untilFirstHit(s);
+      expect(k.hp).toBe(10 - 1 - d);
+    }
+  });
+  it('ricochet: +1 damage per rail bounce before the first hit', () => {
+    const run = (relics: RunStats['relics']) => {
+      const s = glab({ relics }, 90, 230);
+      const g = put(s, 'grunt', 90, 120);
+      g.hp = g.maxHp = 10;
+      shoot(s, { x: 0, y: MAX_PULL }); // down into the rail, back up into the grunt
+      untilFirstHit(s);
+      return { g, s };
+    };
+    const on = run(['ricochet']);
+    expect(on.s.shotBounces).toBe(1);
+    expect(on.g.hp).toBe(10 - 2);
+    expect(run([]).g.hp).toBe(10 - 1);
+  });
+  it('lantern: intents are always visible on dark', () => {
+    const s = glab({ relics: ['lantern'] }, 90, 260);
+    expect(s.lanternOn).toBe(true);
+    s.dark = true;
+    expect(intentVisible(s, put(s, 'grunt', 90, 60))).toBe(true);
+  });
+  it('thorns: an enemy whose charge lands takes 2 (3 at level 1)', () => {
+    for (const [lvl, d] of [[0, 2], [1, 3]] as const) {
+      const s = glab({ relics: ['thorns'], gearLevel: { thorns: lvl } });
+      const g = put(s, 'grunt', 90, 170);
+      g.hp = g.maxHp = 10;
+      g.intent = { t: 'attack', n: 2 };
+      enemyPhaseOnly(s);
+      expect(s.hp).toBe(BASE_STATS.maxHp - 2);
+      expect(g.hp).toBe(10 - d);
+    }
+  });
+  it('momentum: a 2-hit shot adds +1 damage; a shot with fewer hits resets it', () => {
+    const s = glab({ relics: ['momentum'] }, 90, 230);
+    const a = put(s, 'grunt', 90, 170);
+    const b = put(s, 'grunt', 90, 140);
+    for (const e of [a, b]) ((e.hp = e.maxHp = 20), (e.intent = { t: 'rest' }));
+    shoot(s, { x: 0, y: -MAX_PULL });
+    untilSettled(s);
+    expect(s.momentum).toBe(1);
+    // Next shot hits: +1 damage on the hero's contacts.
+    s.targets = [];
+    const c = put(s, 'brute', s.balls[0].x, s.balls[0].y - 80);
+    c.hp = c.maxHp = 20;
+    c.intent = { t: 'rest' };
+    shoot(s, { x: 0, y: -MAX_PULL });
+    untilFirstHit(s);
+    expect(c.hp).toBe(20 - 2);
+    untilSettled(s);
+    expect(s.momentum).toBe(0); // one hit: reset
+  });
+  it('mirror: reflects ~30 % of Shoots with a fixed seed (no hero damage, 1 to the shooter)', () => {
+    const s = glab({ relics: ['mirror'], maxHp: 200 }, 90, 260);
+    s.maxHp = s.hp = 200;
+    const ks = [0, 1, 2, 3].map((i) => put(s, 'skirmisher', 30 + i * 40, 60));
+    let mirrors = 0;
+    let shots = 0;
+    for (let p = 0; p < 10; p++) {
+      for (const k of ks) ((k.intent = { t: 'shoot', n: 1 }), (k.hp = k.maxHp = 99));
+      s.waveTurn = 0; // keep enrage out of it
+      const hp = s.hp;
+      const fx = enemyPhaseOnly(s);
+      const m = fx.filter((f) => f.t === 'mirror').length;
+      mirrors += m;
+      shots += 4;
+      expect(hp - s.hp).toBe(4 - m);
+      expect(ks.filter((k) => k.hp === 98).length).toBe(m);
+    }
+    expect(mirrors).toBe(MIRROR_COUNT_SEED42);
+    expect(mirrors / shots).toBeGreaterThan(0.15);
+    expect(mirrors / shots).toBeLessThan(0.45);
+  });
+});
+
+/** Mirror reflections in 40 Shoots, seed 42 (pinned: a change here means the rng stream moved). */
+const MIRROR_COUNT_SEED42 = 11;
+
+describe('v0.4 tricks', () => {
+  it('recall: hero back to the bottom-centre spot; aim only; uses run out', () => {
+    const s = glab({ trick: 'recall', trickUses: 1 }, 40, 100);
+    expect(s.trickUsesLeft).toBe(1);
+    const fx: FxEvent[] = [];
+    expect(useTrick(s)).toBe(true);
+    fx.push(...step(s, SIM_DT));
+    expect(fx.some((f) => f.t === 'trick' && f.id === 'recall')).toBe(true);
+    expect(s.balls[0].x).toBeCloseTo(TABLE.x + TABLE.w / 2, 6);
+    expect(s.balls[0].y).toBeCloseTo(TABLE.y + TABLE.h - 24, 6);
+    expect(useTrick(s)).toBe(false);
+    // Occupied spot: nudged clear.
+    const t = glab({ trick: 'recall', trickUses: 1 }, 40, 100);
+    put(t, 'brute', TABLE.x + TABLE.w / 2, TABLE.y + TABLE.h - 24);
+    useTrick(t);
+    expect(maxOverlap(t)).toBeLessThan(0.01);
+    expect(t.balls[0].y).toBeGreaterThan(200);
+    // Not during resolve.
+    const u = glab({ trick: 'recall', trickUses: 1 });
+    shoot(u, { x: 0, y: -MAX_PULL });
+    expect(useTrick(u)).toBe(false);
+    expect(glab({}).trickUsesLeft).toBe(0);
+    expect(useTrick(glab({}))).toBe(false);
+  });
+  it('time stop: the next enemy phase is skipped and intents keep', () => {
+    const s = glab({ trick: 'timeStop', trickUses: 1 });
+    const g = put(s, 'grunt', 90, 170);
+    g.intent = { t: 'attack', n: 2 };
+    expect(useTrick(s)).toBe(true);
+    enemyPhaseOnly(s);
+    expect(s.hp).toBe(BASE_STATS.maxHp);
+    expect(g.intent).toEqual({ t: 'attack', n: 2 });
+    enemyPhaseOnly(s);
+    expect(s.hp).toBe(BASE_STATS.maxHp - 2);
+  });
+  it("rack 'em: every enemy moves 20 px toward the table centre, overlaps resolved", () => {
+    const s = glab({ trick: 'rackEm', trickUses: 1 }, 90, 270);
+    const cx = TABLE.x + TABLE.w / 2;
+    const cy = TABLE.y + TABLE.h / 2;
+    const es = [put(s, 'grunt', 30, 60), put(s, 'grunt', 150, 60), put(s, 'brute', 40, 200)];
+    const d0 = es.map((e) => Math.hypot(e.x - cx, e.y - cy));
+    useTrick(s);
+    es.forEach((e, i) => expect(d0[i] - Math.hypot(e.x - cx, e.y - cy)).toBeCloseTo(20, 1));
+    expect(maxOverlap(s)).toBeLessThan(0.01);
+  });
+  it('shockwave: +1 stagger within 60 px of the ball, 2 uses; static applies', () => {
+    const s = glab({ trick: 'shockwave', trickUses: 2, relics: ['static'] }, 90, 240);
+    const near = put(s, 'skirmisher', 90, 180);
+    near.hp = near.maxHp = 10;
+    const far = put(s, 'grunt', 90, 60);
+    expect(useTrick(s)).toBe(true);
+    expect(near.stagger).toBe(1);
+    expect(near.hp).toBe(9); // static
+    expect(far.stagger).toBe(0);
+    expect(useTrick(s)).toBe(true);
+    expect(near.stagger).toBe(2);
+    expect(useTrick(s)).toBe(false);
+  });
+});
+
+describe('v0.4 determinism with gear', () => {
+  it('same seed + same shots with a full loadout => identical state', () => {
+    const gear: RunStats = { ...BASE_STATS, damage: 2, cue: 'follow', relics: ['poison', 'explosive', 'shrapnel', 'mirror', 'momentum', 'chill', 'static'], trick: null, trickUses: 0, gearLevel: { poison: 1 } };
+    const go = (dt: number) => {
+      const s = createRun('w1s2', gear, 11);
+      for (const p of SHOTS) {
+        if (s.phase !== 'aim') break;
+        shoot(s, p);
+        untilSettled(s, dt);
+      }
+      return s;
+    };
+    expect(snapshot(go(SIM_DT))).toEqual(snapshot(go(SIM_DT)));
+    const { t: _a, ...ff } = snapshot(go(SIM_DT * FAST_FORWARD_MULT));
+    const { t: _b, ...normal } = snapshot(go(SIM_DT));
+    expect(ff).toEqual(normal);
   });
 });

@@ -195,6 +195,11 @@ export const BASE_STATS: RunStats = {
   shrineHeal: 8,
   bumperBounce: 1.15,
   cashMult: 1,
+  cue: 'standard',
+  relics: [],
+  trick: null,
+  trickUses: 0,
+  gearLevel: {},
 };
 
 /** Hero ball types. The hero is always r 12; types change mass, speed and damage. Sticky = stun shot. */
@@ -243,4 +248,55 @@ export const DARK_REVEAL_R = 80;
 /** Stage definitions are generated (core/worlds.ts); this delegates to the memoised generator. */
 export function stageById(id: StageId): StageDef {
   return makeStage(id);
+}
+
+// ---------- v0.4 gear (DESIGN-v0.4-loadout). Arrays are indexed by gearLevel (clamped to the last entry). ----------
+/** Break cue: launch speed x this; every shot fires at >= BREAK_MIN_POWER. */
+export const BREAK_SPEED_MULT = 1.35;
+export const BREAK_MIN_POWER = 0.5;
+/** Jump cue: damage penalty on the first contact after landing (min 1). */
+export const JUMP_PENALTY = [1, 0];
+/** Draw cue: launch power x DRAW_POWER (doc trade); after the first contact the ball heads back to the launch point at DRAW_RETURN x launch speed. */
+export const DRAW_POWER = 0.8;
+export const DRAW_RETURN = 0.5;
+/** Follow cue: after the first contact the ball keeps FOLLOW_KEEP x its pre-impact velocity; charges deal +FOLLOW_CHARGE_EXTRA. */
+export const FOLLOW_KEEP = 0.6;
+export const FOLLOW_CHARGE_EXTRA = 1;
+/** Poison: stacks per ball contact (+1 per level), cap; level >= POISON_NO_DECAY_LV: stacks never decay. */
+export const POISON_MAX = 5;
+export const POISON_NO_DECAY_LV = 2;
+/** Explosive: blast radius (px, edge gap from the impact point) and ball speed kept, by level. */
+export const EXPLOSIVE_R = [40, 50, 60];
+export const EXPLOSIVE_KEEP = [0.5, 0.5, 1];
+/** Chill: phases, charge speed / reach multiplier, Advance multiplier. */
+export const CHILL_PHASES = [1, 2];
+export const CHILL_CHARGE_MULT = 0.6;
+export const CHILL_ADVANCE_MULT = 0.5;
+/** Shrapnel: shards per ball kill, shard life (s), damage, launch speed (px/s). */
+export const SHRAPNEL_COUNT = [2, 3];
+export const SHARD_LIFE = 0.8;
+export const SHARD_DMG = 1;
+export const SHARD_SPEED = 220;
+/** Static: damage when an enemy crosses its stagger threshold. */
+export const STATIC_DMG = [1, 2];
+/** Ricochet: +1 damage per main-ball rail bounce before the first hit, capped. */
+export const RICOCHET_MAX = [3, 5];
+/** Thorns relic: damage to an enemy whose charge lands on the hero. */
+export const THORNS_RELIC_DMG = [2, 3];
+/** Momentum: cap; a shot with >= MOMENTUM_HITS hits adds +1, fewer resets. */
+export const MOMENTUM_MAX = [3, 5];
+export const MOMENTUM_HITS = 2;
+/** Mirror: chance a Shoot is reflected (no damage to the hero, MIRROR_DMG to the shooter). */
+export const MIRROR_CHANCE = [0.3, 0.5];
+export const MIRROR_DMG = 1;
+/** Tricks: base uses per run (level node: +1, applied by meta into RunStats.trickUses). */
+export const TRICK_USES: Record<'recall' | 'timeStop' | 'rackEm' | 'shockwave', number> = { recall: 1, timeStop: 1, rackEm: 1, shockwave: 2 };
+export const RACK_PULL = 20;
+export const SHOCKWAVE_R = 60;
+/** Recall spot (bottom centre, same as the run start). */
+export const RECALL_Y_OFFSET = 24;
+
+/** Value for gear level `lv` from a per-level table (clamped). */
+export function gearVal(table: readonly number[], lv: number): number {
+  return table[Math.max(0, Math.min(table.length - 1, lv))];
 }

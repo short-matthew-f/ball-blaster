@@ -11,6 +11,7 @@ import { TitleScreen } from './ui/title';
 import { SummaryScreen } from './ui/summary';
 import { TreeScreen } from './ui/tree';
 import { MapScreen } from './ui/map';
+import { LoadoutScreen } from './ui/loadout';
 import { SettingsScreen } from './ui/settings';
 import { applyUpdate, registerServiceWorker, updateReady } from './update';
 import { drawText } from './render/text';
@@ -74,6 +75,7 @@ const screens: Record<ScreenId, Screen> = {
   shop: new TreeScreen(app),
   map: new MapScreen(app),
   settings: new SettingsScreen(app),
+  loadout: new LoadoutScreen(app),
 };
 
 // ---- scaling ----

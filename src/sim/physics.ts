@@ -28,9 +28,20 @@ import {
   MAX_RESTITUTION,
   SPIT_LIFE_CAP,
   TARGET_DEFS,
+  CHILL_PHASES,
+  DRAW_RETURN,
+  EXPLOSIVE_KEEP,
+  EXPLOSIVE_R,
+  FOLLOW_KEEP,
+  JUMP_PENALTY,
+  RICOCHET_MAX,
+  SHARD_DMG,
+  THORNS_RELIC_DMG,
+  gearVal,
   stageById,
 } from '../core/tuning';
-import { addStagger, chainLightning, heal, heroDamage, hitEnemy, scaleAtk, scaleCash } from './damage';
+import { addPoison, addStagger, applyDamage, chainLightning, heal, heroDamage, hitEnemy, scaleAtk, scaleCash } from './damage';
+import { has, lv } from './gear';
 
 export const MAX_BALL_SPEED = MAX_LAUNCH_SPEED * 1.5;
 const OBSTACLE_RESTITUTION = 0.8;
@@ -122,13 +133,15 @@ function markHit(s: RunState, key: string): void {
   s.touching[key] = true;
 }
 
-/** A ball (hero/split/spat) struck an enemy with approach speed `speed`. */
-function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEvent[]): void {
+/** A ball (hero/split/spat) struck an enemy with approach speed `speed`; (pvx,pvy) = the ball's pre-impact velocity. */
+function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEvent[], pvx = b.vx, pvy = b.vy): void {
   if (s.phase === 'enemy') {
     // Enemy phase: a charging enemy deals its attack on first hero contact.
     if (b.kind === 'main' && (t.chargeDmg ?? 0) > 0) {
       heroDamage(s, t.chargeDmg ?? 0, t.kind, b.x, b.y, fx, 'charge');
       t.chargeDmg = 0;
+      // Thorns relic: the charger pays for landing its blow.
+      if (has(s, 'thorns')) applyDamage(s, t, gearVal(THORNS_RELIC_DMG, lv(s, 'thorns')), 'thorns', fx);
       // The blow lands: the charger stops on contact (the hero keeps the full knock). Without this, heavy
       // chargers (brute, boss) plough on and pin the hero into rails and corners.
       if (CHARGE_STOPS_ON_HIT) {
@@ -143,13 +156,29 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
     return;
   }
   let dmg: number;
-  if (b.kind === 'main') dmg = mainDamage(s, speed);
+  const first = b.kind === 'main' && !s.firstHitDone;
+  if (b.kind === 'main') {
+    dmg = mainDamage(s, speed) + s.momentum;
+    // Ricochet: +1 per rail bounce before the first hit of the shot (that hit only).
+    if (first && has(s, 'ricochet')) dmg += Math.min(s.shotBounces, gearVal(RICOCHET_MAX, lv(s, 'ricochet')));
+    // Jump: the first contact after landing is softer.
+    if (b.jumpLanded) {
+      b.jumpLanded = false;
+      dmg = Math.max(1, dmg - gearVal(JUMP_PENALTY, lv(s, 'jump')));
+    }
+  } else if (b.shard) dmg = SHARD_DMG;
   else if (b.kind === 'spat') dmg = s.stats.spitDamage > 0 ? s.stats.spitDamage : s.stats.damage;
   else dmg = s.stats.damage;
   const sticky = b.kind === 'main' && s.stats.ballType === 'sticky' && !s.stickyUsed;
   const heavy = b.kind === 'main' && s.stats.heavyHits > 0 && speed >= HEAVY_HIT_SPEED;
   const thorns = thornsOf(s, t);
   hitEnemy(s, t, dmg, b.kind, fx, b, (heavy ? 2 : 1) + (sticky ? 1 : 0), speed);
+  addPoison(s, t, fx);
+  if (!t.dead && has(s, 'chill')) {
+    const was = t.chill ?? 0;
+    t.chill = Math.max(was, gearVal(CHILL_PHASES, lv(s, 'chill')));
+    if (was <= 0) fx.push({ t: 'status', id: t.id, kind: 'chill', on: true });
+  }
   if (b.kind === 'main') {
     if (thorns > 0) heroDamage(s, thorns, t.kind, b.x, b.y, fx, 'thorns');
     if (sticky) {
@@ -158,12 +187,53 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
       b.vx = 0;
       b.vy = 0;
     }
-    if (s.stats.splitCount > 0 && !s.splitUsed) {
+    if (first) {
+      s.firstHitDone = true;
+      if (!sticky) cueAfterContact(s, b, pvx, pvy);
+      if (has(s, 'explosive')) explode(s, b, t, dmg, fx);
+    }
+    if (s.stats.splitCount > 0 && !s.splitUsed && has(s, 'split')) {
       s.splitUsed = true;
       spawnSplit(s, b, fx);
     }
   }
   chainLightning(s, t, fx);
+}
+
+/** Draw / Follow: replace the hero's post-impact velocity after the first contact of the shot. */
+function cueAfterContact(s: RunState, b: Ball, pvx: number, pvy: number): void {
+  if (s.stats.cue === 'draw' && s.launch) {
+    const dx = s.launch.x - b.x;
+    const dy = s.launch.y - b.y;
+    const d = Math.hypot(dx, dy);
+    const sp = s.launch.speed * DRAW_RETURN;
+    // Already on the launch point: just reverse the pre-impact direction.
+    const ux = d > 1 ? dx / d : -pvx / (Math.hypot(pvx, pvy) || 1);
+    const uy = d > 1 ? dy / d : -pvy / (Math.hypot(pvx, pvy) || 1);
+    b.vx = ux * sp;
+    b.vy = uy * sp;
+  } else if (s.stats.cue === 'follow') {
+    b.vx = pvx * FOLLOW_KEEP;
+    b.vy = pvy * FOLLOW_KEEP;
+  }
+}
+
+/** Explosive relic: the first hit of the shot blasts ceil(dmg/2) to other enemies near the impact; the ball loses speed. */
+function explode(s: RunState, b: Ball, t: Target, dmg: number, fx: FxEvent[]): void {
+  const L = lv(s, 'explosive');
+  const R = gearVal(EXPLOSIVE_R, L);
+  const k = b.r / (b.r + t.r);
+  const ix = b.x + (t.x - b.x) * k;
+  const iy = b.y + (t.y - b.y) * k;
+  fx.push({ t: 'blast', x: ix, y: iy, r: R });
+  const n = Math.ceil(dmg / 2);
+  for (const o of s.targets.slice()) {
+    if (o.dead || o === t) continue;
+    if (Math.hypot(o.x - ix, o.y - iy) - o.r <= R) hitEnemy(s, o, n, 'explosion', fx);
+  }
+  const keep = gearVal(EXPLOSIVE_KEEP, L);
+  b.vx *= keep;
+  b.vy *= keep;
 }
 
 function thornsOf(s: RunState, t: Target): number {
@@ -189,8 +259,16 @@ function enemyBump(s: RunState, a: Target, b: Target, rel: number, spA: number, 
   hitEnemy(s, bumped, 1, 'bump', fx, undefined, 1, rel);
 }
 
+/** Jump cue: the hero passes over this enemy (no collision, no relaxation) until they stop overlapping. */
+function jumping(A: Body, B: Body): boolean {
+  const ball = A.ball ?? B.ball;
+  const en = A.en ?? B.en;
+  return !!ball && !!en && ball.kind === 'main' && (ball.jumpOver ?? 0) > 0 && ball.jumpOver === en.id;
+}
+
 function collidePair(s: RunState, A: Body, B: Body, fx: FxEvent[]): void {
   if (A.resting && B.resting) return;
+  if (jumping(A, B)) return;
   const dx = B.x - A.x;
   const dy = B.y - A.y;
   const min = A.r + B.r;
@@ -198,6 +276,16 @@ function collidePair(s: RunState, A: Body, B: Body, fx: FxEvent[]): void {
   if (d2 >= min * min) return;
   const sum = A.im + B.im;
   if (sum <= 0) return;
+  // Jump cue: the hero's first enemy contact of the shot starts a jump over it instead of a collision.
+  {
+    const ball = A.ball ?? B.ball;
+    const en = A.en ?? B.en;
+    if (ball && en && ball.kind === 'main' && s.phase === 'resolve' && s.stats.cue === 'jump' && ball.jumpOver === undefined && !s.firstHitDone) {
+      ball.jumpOver = en.id;
+      return;
+    }
+  }
+  const pre = { avx: A.vx, avy: A.vy, bvx: B.vx, bvy: B.vy };
   const d = Math.sqrt(d2);
   const nx = d > 1e-9 ? dx / d : 1;
   const ny = d > 1e-9 ? dy / d : 0;
@@ -238,7 +326,8 @@ function collidePair(s: RunState, A: Body, B: Body, fx: FxEvent[]): void {
     const en = (A.en ?? B.en)!;
     if (impact > HIT_MIN_SPEED && eligible(s, key)) {
       markHit(s, key);
-      ballHitsEnemy(s, ball, en, ball === A.ball ? spA : spB, fx);
+      const isA = ball === A.ball;
+      ballHitsEnemy(s, ball, en, isA ? spA : spB, fx, isA ? pre.avx : pre.bvx, isA ? pre.avy : pre.bvy);
       // Sticky stop / landed charges change velocities; refresh the views.
       for (const v of [A, B]) {
         const o = (v.ball ?? v.en)!;
@@ -307,7 +396,7 @@ function hitObstacle(s: RunState, o: Obstacle, fx: FxEvent[]): void {
     s.combo.bumperHits++;
     fx.push({ t: 'bumper', x: o.x, y: o.y });
     for (const t of s.targets) {
-      if (!t.dead && Math.hypot(t.x - o.x, t.y - o.y) <= BUMPER_STAGGER_R + t.r) addStagger(t, 1, fx);
+      if (!t.dead && Math.hypot(t.x - o.x, t.y - o.y) <= BUMPER_STAGGER_R + t.r) addStagger(t, 1, fx, s);
     }
     return;
   }
@@ -393,7 +482,7 @@ function relaxList(s: RunState, list: Body[], iters: number): void {
         const A = list[i];
         const B = list[j];
         const sum = A.im + B.im;
-        if (sum <= 0) continue;
+        if (sum <= 0 || jumping(A, B)) continue;
         const dx = B.x - A.x;
         const dy = B.y - A.y;
         const min = A.r + B.r;
@@ -466,6 +555,7 @@ export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
     const sp = wallCollide(b, wallBounceOf(s, b));
     if (sp > 0 && b.ball) {
       b.ball.banked = true;
+      if (b.ball.kind === 'main' && s.phase === 'resolve' && !s.firstHitDone) s.shotBounces++;
       fx.push({ t: 'wall', x: b.x, y: b.y, speed: sp });
     }
     for (const o of s.obstacles) {
@@ -482,6 +572,17 @@ export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
     }
   }
   writeBack(list);
+
+  // Jump cue: the hero lands once it no longer overlaps the enemy it jumped (or that enemy died).
+  for (const b of list) {
+    const jb = b.ball;
+    if (!jb || jb.kind !== 'main' || !((jb.jumpOver ?? 0) > 0)) continue;
+    const e = s.targets.find((t) => t.id === jb.jumpOver);
+    if (!e || e.dead || Math.hypot(e.x - jb.x, e.y - jb.y) >= e.r + jb.r) {
+      jb.jumpOver = 0;
+      jb.jumpLanded = true;
+    }
+  }
 
   // Touching bookkeeping: a pair "separates" once it is more than TOUCH_SLOP apart.
   for (let i = 0; i < list.length; i++) {

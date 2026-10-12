@@ -182,6 +182,30 @@ export class Sfx {
           this.noise(0.025, 0.12, 'highpass', 3000);
           this.tone(1800, 0.025, 'square', 0.06);
           break;
+        case 'blast':
+          if (!this.gate('explode')) break;
+          this.noise(0.3, 0.35, 'lowpass', 1600);
+          this.tone(110, 0.28, 'sine', 0.3, 40);
+          break;
+        case 'poisonTick':
+          if (!this.gate('poison')) break;
+          this.noise(0.12, 0.07, 'bandpass', 2600);
+          this.tone(520, 0.08, 'sine', 0.05, 340);
+          break;
+        case 'mirror':
+          if (!this.gate('mirror')) break;
+          this.tone(1568, 0.14, 'sine', 0.14);
+          this.tone(2093, 0.18, 'sine', 0.08, 0, 0.04);
+          break;
+        case 'trick':
+          if (!this.gate('trick')) break;
+          [523, 784, 1047].forEach((f, i) => this.tone(f, 0.16, 'triangle', 0.14, 0, i * 0.06));
+          this.tone(1568, 0.3, 'sine', 0.07, 0, 0.18);
+          break;
+        case 'shard':
+          if (!this.gate('shard')) break;
+          this.tone(2400, 0.04, 'square', 0.04, 1800);
+          break;
         case 'explode':
           if (!this.gate('explode')) break;
           this.noise(0.4, 0.4, 'lowpass', 1400);

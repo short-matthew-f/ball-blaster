@@ -86,6 +86,30 @@ The v0.1 energy-era decisions (release/hit costs, drains, respawns, boss meter, 
 | Ranged guardrail | Shoot damage (after resist and armor) per enemy phase is capped at `RANGED_PHASE_CAP` (0.5) x max HP; the excess is dropped. Charges are uncapped. | Ranged is unblockable: four Shoot-16 skirmishers killed a 51-HP hero in two phases on w2s2 (owner playtest). |
 | Enrage backstop | An enraged Attack beyond reach charges anyway (banking round cover); from rage 5 an attacker whose line is covered strikes instantly (tracer + hit). | A brute caged behind three bumpers out of reach made a 600-shot run (never-ending) at w4. |
 
+## Gear (v0.4, sim side)
+
+Resolves DESIGN-v0.4-loadout gaps. Numbers live in `core/tuning.ts` (per-level arrays indexed by `RunStats.gearLevel`).
+
+| Gap | Decision | Why |
+|---|---|---|
+| Legacy relics | Lightning / Split / Spitter stats apply only when the id is in `RunStats.relics` (sim gates too, not just meta). | Doc: they become relics. |
+| "First hit" | The hero (main ball)'s first enemy contact of the shot (`RunState.firstHitDone`). Split, spat and shards never trigger Explosive, Ricochet, Draw or Follow. | One shot, one first hit. |
+| Break | Launch x1.35, every release >= 50 % power; meta zeroes aimPreview. | Doc. |
+| Jump | The hero's first enemy contact starts a jump: no collision or relaxation with that enemy until they stop overlapping, then the next contact deals -1 (min 1; Jump II: 0). A hero that stops on top of it is separated at shot end. | Doc; relaxation would otherwise push the ball off. |
+| Draw | Doc trade kept: launch power x0.8. After the first contact: 50 % of launch speed toward the launch point. | Task left the trade unstated; doc numbers apply. |
+| Follow | After the first contact the hero keeps 60 % of its pre-impact velocity (the enemy still takes the normal impulse; heavy enemies can rebound it again). Charges (including deep-enrage strikes) deal +1. | Doc. |
+| Poison | Any ball contact (hero, split, spat, shard) adds 1 + level stacks, max 5. Ticks at the start of the enemy phase, before the wave check (a lethal tick brings the next wave); ignores 1-hit shields but not the boss cadre shield; no stagger. Poison kills pay cash, never chain or Sweep. Time Stop does not stop the tick. | Doc; the cadre is the Golem's identity. |
+| Explosive | Blast centred on the contact point; hits other enemies within R px (edge gap), not the struck one; ceil(dmg/2) as an explosion (+1 stagger, counts as hits, shatters frozen). Ball speed x0.5 (level 2: x1). | Doc. |
+| Chill | Any ball contact sets chill = max(chill, 1 / level 1: 2). Charge speed and reach x0.6, Advance x0.5. Ticks down at the end of the enemy phase (freezes tick at the start). `effectiveReach(t)` exported for the HUD. | A chill set in the shot must cover the next phase. |
+| Shrapnel | A kill by a non-shard ball during the shot releases 2 / 3 shards (`kind: 'spat'`, `shard: true`, 0.8 s, 1 damage, 220 px/s, evenly spread from an rng angle). Shard kills do not release shards. | Bounded chains. |
+| Static | Crossing the stagger threshold from any source (hits, bumps, bumpers, cascade, Shockwave) deals 1 / 2 through applyDamage: no re-stagger, respects 1-hit shields. | Doc. |
+| Ricochet | +1 per hero rail bounce before the first hit, on that first hit only, max +3 / +5. | "Bank shots". |
+| Momentum | Counts `combo.hits` (all hits, bumps included). >= 2 builds +1 (max 3 / 5), fewer resets; bonus on hero contacts. | Task number; doc says "enemies". |
+| Mirror / Thorns | Mirror: rng drawn only when equipped (other seeds keep their streams); 1 damage to the shooter, no stagger. Thorns relic: on a charge that lands by contact (not the deep-enrage instant strike). | Determinism. |
+| Tricks | Aim only, `trickUsesLeft` from `RunStats.trickUses`. Recall: start spot, else nearest open spot (no jam count). Time Stop: next phase's queue is empty (like Reflex); waves, poison, freezes and the enrage clock still advance; intents keep. Rack 'Em: 20 px toward the table centre, relax, jam rule. Shockwave: +1 stagger within 60 px edge gap; Static kills during aim are removed at once. | |
+| Gate v0.4 (measured, not re-tuned) | Gear on, noisy medians 6 5 6 5 / 3 3 5 9 / 1 6 15 1 (w3s3 worst 20), perfect 5 4 6 3 / 4 2 8 7 / 2 4 14 1; cash by run 60 97k (gear off 41k). Gear off (empty loadout, legacy relics gated): 6 6 6 7 / 15 9 8 6 / 4 13 5 8. w3s1 and w3s4 are 1-run clears with gear: open. | Gear is additive power; per-loadout ablation pending. |
+| Bot loadouts | proto bot: best of the four fixed loadouts by owned count (ties: damage, chain, control, counter), empty slots back-filled with owned relics, Break when owned and no Thin Rails, tricks greedy. `PROG_GEAR=0` runs an empty loadout. | DESIGN-v0.4 balance notes. |
+
 ## Scope
 
 - Felt and Ice stages; Clockwork and Bog deferred.

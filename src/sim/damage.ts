@@ -15,12 +15,21 @@ import {
   OVERTIME_CASH_WAVES,
   SHATTER_MULT,
   BLAST_DEATH_HERO_DMG,
+  FOLLOW_CHARGE_EXTRA,
+  POISON_MAX,
+  SHARD_LIFE,
+  SHARD_SPEED,
+  SHRAPNEL_COUNT,
+  STATIC_DMG,
   TARGET_DEFS,
+  gearVal,
   stageById,
 } from '../core/tuning';
 import { makeEnemy } from './spawn';
+import { has, lv } from './gear';
 
-export type DamageSource = BallKind | 'lightning' | 'explosion' | 'bump';
+/** poison/static/mirror/thorns: relic damage that never staggers and never counts as a hit. */
+export type DamageSource = BallKind | 'lightning' | 'explosion' | 'bump' | 'poison' | 'static' | 'mirror' | 'thorns';
 
 function isBallSource(src: DamageSource): src is BallKind {
   return src === 'main' || src === 'split' || src === 'spat';
@@ -66,7 +75,7 @@ export function hitEnemy(s: RunState, t: Target, dmg: number, src: DamageSource,
   if (t.dead) return;
   if ((t.frozen ?? 0) > 0) {
     if (src === 'explosion' || speed >= SHATTER_SPEED) {
-      addStagger(t, stagger, fx);
+      addStagger(t, stagger, fx, s);
       countHit(s, src);
       shatter(s, t, dmg, src, fx, killer);
     } else if (src === 'lightning') {
@@ -79,17 +88,56 @@ export function hitEnemy(s: RunState, t: Target, dmg: number, src: DamageSource,
     }
     return;
   }
-  addStagger(t, stagger, fx);
+  addStagger(t, stagger, fx, s);
   countHit(s, src);
   applyDamage(s, t, dmg, src, fx, killer);
 }
 
-/** Add stagger; emits { t: 'stagger' } when the enemy crosses its threshold. */
-export function addStagger(t: Target, n: number, fx: FxEvent[]): void {
+/**
+ * Add stagger; emits { t: 'stagger' } when the enemy crosses its threshold. With `s` and the Static relic equipped,
+ * crossing the threshold also deals STATIC_DMG (via applyDamage: no further stagger, respects 1-hit shields).
+ */
+export function addStagger(t: Target, n: number, fx: FxEvent[], s?: RunState): void {
   const at = TARGET_DEFS[t.kind].staggerAt;
   const before = t.stagger;
   t.stagger += n;
-  if (before < at && t.stagger >= at) fx.push({ t: 'stagger', x: t.x, y: t.y });
+  if (before < at && t.stagger >= at) {
+    fx.push({ t: 'stagger', x: t.x, y: t.y });
+    if (s && !t.dead && has(s, 'static')) applyDamage(s, t, gearVal(STATIC_DMG, lv(s, 'static')), 'static', fx);
+  }
+}
+
+/** Poison relic: a ball contact adds 1 + level stacks (max POISON_MAX). */
+export function addPoison(s: RunState, t: Target, fx: FxEvent[]): void {
+  if (t.dead || !has(s, 'poison')) return;
+  const before = t.poison ?? 0;
+  t.poison = Math.min(POISON_MAX, before + 1 + lv(s, 'poison'));
+  if (before <= 0 && t.poison > 0) fx.push({ t: 'status', id: t.id, kind: 'poison', on: true });
+}
+
+/** Shrapnel relic: a kill by a ball releases shards (spat-like balls, SHARD_LIFE s, 1 damage). */
+function spawnShards(s: RunState, t: Target, fx: FxEvent[]): void {
+  const n = gearVal(SHRAPNEL_COUNT, lv(s, 'shrapnel'));
+  const r = 2;
+  const a0 = s.rng.range(0, Math.PI * 2);
+  for (let i = 0; i < n; i++) {
+    const a = a0 + (i / n) * Math.PI * 2;
+    s.balls.push({
+      id: s.nextId++,
+      kind: 'spat',
+      shard: true,
+      x: clampX(t.x + Math.cos(a) * t.r * 0.5, r),
+      y: clampY(t.y + Math.sin(a) * t.r * 0.5, r),
+      vx: Math.cos(a) * SHARD_SPEED,
+      vy: Math.sin(a) * SHARD_SPEED,
+      r,
+      mass: 0.4,
+      life: SHARD_LIFE,
+      resting: false,
+      banked: false,
+    });
+  }
+  fx.push({ t: 'shard', x: t.x, y: t.y });
 }
 
 function countHit(s: RunState, src: DamageSource): void {
@@ -121,7 +169,8 @@ export function updateBossShield(s: RunState): void {
 export function applyDamage(s: RunState, t: Target, dmg: number, src: DamageSource, fx: FxEvent[], killer?: Ball): void {
   if (t.dead) return;
   if (t.kind === 'boss' && t.shielded) dmg = 0;
-  if ((t.shield ?? 0) > 0 && dmg > 0) {
+  // Poison ignores 1-hit shields (the boss cadre shield still holds).
+  if ((t.shield ?? 0) > 0 && dmg > 0 && src !== 'poison') {
     t.shield = 0;
     t.flash = 0.12;
     fx.push({ t: 'shieldBreak', x: t.x, y: t.y });
@@ -172,7 +221,7 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
     if (src === 'bump' && s.stats.comboCascade > 0) {
       const hh = hero(s);
       fx.push({ t: 'combo', name: 'CASCADE', mult: 1, x: hh.x, y: hh.y });
-      for (const o of s.targets) if (!o.dead && o !== t && Math.hypot(o.x - t.x, o.y - t.y) <= CASCADE_R + o.r) addStagger(o, 1, fx);
+      for (const o of s.targets) if (!o.dead && o !== t && Math.hypot(o.x - t.x, o.y - t.y) <= CASCADE_R + o.r) addStagger(o, 1, fx, s);
     }
     if (t.kind === 'boss') {
       s.bossKilled = true;
@@ -191,7 +240,9 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
       fx.push({ t: 'emerald', x: t.x, y: t.y, amount: 1 });
     }
   }
-  if (!t.summon && t.kind !== 'boss' && (s.waveKillShot ?? -1) < 0) s.waveKillShot = s.shots;
+  // Sweep counts kills within a shot; a poison tick at the start of the enemy phase is not part of the shot.
+  if (!t.summon && t.kind !== 'boss' && (s.waveKillShot ?? -1) < 0 && src !== 'poison') s.waveKillShot = s.shots;
+  if (!quiet && isBallSource(src) && s.phase === 'resolve' && !killer?.shard && has(s, 'shrapnel')) spawnShards(s, t, fx);
   if (t.kind === 'cadre') updateBossShield(s);
   if (def.splitsInto) {
     const { kind, count } = def.splitsInto;
@@ -223,6 +274,8 @@ export function blast(s: RunState, x: number, y: number, src: TargetKind, fx: Fx
 /** Damage to the hero: attack - armor, minimum 1. Death is checked after the enemy phase. */
 export function heroDamage(s: RunState, n: number, src: TargetKind, x: number, y: number, fx: FxEvent[], how: 'charge' | 'shot' | 'blast' | 'thorns'): number {
   if (n <= 0) return 0;
+  // Follow cue trade: charges hit harder.
+  if (how === 'charge' && s.stats.cue === 'follow') n += FOLLOW_CHARGE_EXTRA;
   const dmg = Math.max(1, Math.round(n) - s.stats.armor);
   s.hp = Math.max(0, s.hp - dmg);
   fx.push({ t: 'heroHit', x, y, dmg, src, how });
@@ -249,7 +302,7 @@ export function heal(s: RunState, base: number, x = 0, y = 0, fx?: FxEvent[]): n
 /** Chain lightning from a struck enemy to the nearest other live enemies. */
 export function chainLightning(s: RunState, from: Target, fx: FxEvent[]): void {
   const { lightningChance, lightningArcs, lightningRange, lightningDamage } = s.stats;
-  if (lightningChance <= 0 || lightningArcs <= 0 || lightningRange <= 0) return;
+  if (lightningChance <= 0 || lightningArcs <= 0 || lightningRange <= 0 || !has(s, 'lightning')) return;
   if (!s.rng.chance(lightningChance)) return;
   const cands = s.targets
     .filter((o) => !o.dead && o !== from)

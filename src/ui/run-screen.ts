@@ -6,13 +6,15 @@ import { drawHud, drawWorld, modifierLine, ringDots } from '../render/renderer';
 import { stageById } from '../core/tuning';
 import { Fx } from '../render/fx';
 import { drawText } from '../render/text';
-import { Buttons, inRect } from './widgets';
+import { drawSprite } from '../render/sprite-cache';
+import { Buttons, drawButton, inRect } from './widgets';
 import { fastEnemiesOn } from './app';
 import type { App, Screen } from './app';
 import type { Button } from './widgets';
 
 const P = PALETTE;
 const FF_RECT = { x: 138, y: 296, w: 32, h: 18 };
+const TRICK_RECT = { x: 4, y: 296, w: 28, h: 18 };
 const OVER_DELAY = 0.8;
 const BAND_Y = 293; // tap anywhere at/below this y toggles fast-forward
 const PULSE_T = 0.7;
@@ -27,6 +29,8 @@ export class RunScreen implements Screen {
   private bestWave = 0;
   private drag: { sx: number; sy: number; cx: number; cy: number } | null = null;
   private ffPressed = false;
+  private trickPressed = false;
+  private prevSkip = false;
   private buttons = new Buttons();
   private prevPhase = '';
   private pulse = 0;
@@ -55,6 +59,8 @@ export class RunScreen implements Screen {
     this.prevPhase = '';
     this.pulse = 0;
     this.phaseHint = 0;
+    this.trickPressed = false;
+    this.prevSkip = false;
   }
 
   enter(): void {
@@ -104,6 +110,8 @@ export class RunScreen implements Screen {
       const h = s.balls.find((b) => b.kind === 'main');
       if (h) this.fx.hits(h.x, h.y, s.combo.hits);
     }
+    if (this.prevSkip && !s.skipNextEnemyPhase) this.fx.timeStopSpent();
+    this.prevSkip = s.skipNextEnemyPhase;
     this.prevPhase = s.phase;
     const mb = s.balls.find((b) => b.kind === 'main');
     this.fx.ballPos = mb ? { x: mb.x, y: mb.y } : null;
@@ -162,7 +170,7 @@ export class RunScreen implements Screen {
     this.drawHint(ctx, s, now);
     this.drawAim(ctx, s);
     this.fx.draw(ctx);
-    drawHud(ctx, s, this.bestWave, now, { flash });
+    drawHud(ctx, s, this.bestWave, now, { flash, trick: this.hasTrick(s) });
     this.drawPips(ctx, s);
     if (s.phase === 'over') {
       ctx.globalAlpha = Math.min(0.55, this.overTimer);
@@ -182,7 +190,37 @@ export class RunScreen implements Screen {
     }
     this.buttons.set(btns);
     this.buttons.draw(ctx);
+    if (this.hasTrick(s)) this.drawTrickButton(ctx, s, now);
+  }
 
+  private hasTrick(s: RunState): boolean {
+    return !!s.stats.trick;
+  }
+
+  private trickReady(s: RunState): boolean {
+    return s.phase === 'aim' && s.trickUsesLeft > 0;
+  }
+
+  private drawTrickButton(ctx: CanvasRenderingContext2D, s: RunState, now: number): void {
+    const r = TRICK_RECT;
+    const ready = this.trickReady(s);
+    drawButton(ctx, { id: 'trick', ...r, style: s.skipNextEnemyPhase ? 'blue' : 'gray', disabled: !ready, active: ready && this.trickPressed }, this.trickPressed && ready);
+    const cy = r.y + r.h / 2 + (this.trickPressed && ready ? 1 : 0);
+    ctx.globalAlpha = ready ? 1 : 0.45;
+    drawSprite(ctx, 'btn_trick', r.x + 9, cy);
+    drawSprite(ctx, `gear_${s.stats.trick}`, r.x + 9, cy);
+    ctx.globalAlpha = 1;
+    drawText(ctx, String(s.trickUsesLeft), r.x + 18, cy - 5, { scale: 2, color: ready ? P['5'] : P['3'], shadow: P['0'] });
+    if (s.skipNextEnemyPhase) drawText(ctx, 'TIME STOP', TABLE.x + TABLE.w - 2, TABLE.y + 3, { align: 'right', color: Math.floor(now * 2) % 2 ? P.c : P['5'], shadow: P['0'] });
+  }
+
+  private useTrick(s: RunState): void {
+    const mb = s.balls.find((b) => b.kind === 'main');
+    this.fx.trickFrom = mb ? { x: mb.x, y: mb.y } : null;
+    if (this.app.sim.useTrick(s)) {
+      this.acc = 0;
+      this.drag = null;
+    } else this.fx.trickFrom = null;
   }
 
   private drawAim(ctx: CanvasRenderingContext2D, s: RunState): void {
@@ -320,6 +358,10 @@ export class RunScreen implements Screen {
   down(x: number, y: number): void {
     const s = this.state;
     if (!s) return;
+    if (this.hasTrick(s) && inRect(x, y, TRICK_RECT.x - 2, TRICK_RECT.y - 2, TRICK_RECT.w + 4, TRICK_RECT.h + 4)) {
+      this.trickPressed = true;
+      return;
+    }
     if (this.ffAvailable() && (y >= BAND_Y || inRect(x, y, FF_RECT.x, FF_RECT.y, FF_RECT.w, FF_RECT.h))) {
       this.ffPressed = true;
       this.buttons.down(x, y);
@@ -337,6 +379,11 @@ export class RunScreen implements Screen {
 
   up(x: number, y: number): void {
     const s = this.state;
+    if (this.trickPressed) {
+      this.trickPressed = false;
+      if (s && this.hasTrick(s) && this.trickReady(s) && inRect(x, y, TRICK_RECT.x - 4, TRICK_RECT.y - 4, TRICK_RECT.w + 8, TRICK_RECT.h + 8)) this.useTrick(s);
+      return;
+    }
     if (this.ffPressed) {
       this.ffPressed = false;
       const hit = this.buttons.up(x, y) === 'ff';
@@ -369,6 +416,7 @@ export class RunScreen implements Screen {
   cancel(): void {
     this.drag = null;
     this.ffPressed = false;
+    this.trickPressed = false;
     this.buttons.pressed = null;
   }
 }

@@ -4,7 +4,7 @@ import { CAPSTONE_NEEDS, MULT_IDS } from '../src/meta/upgrades';
 import type { RunResult, SaveData } from '../src/core/types';
 import {
   NODES, ROOT_ID, bankRun, buildStats, buy, buyState, distanceFromOwned, exportSave, importSave, isReachable, loadSave, newSave, nextCost,
-  nodesFor, pathToOwned,
+  nodesFor, pathToOwned, cueSlotOpen, equip, gearOwned, ownedGear, relicSlots, trickSlotOpen, unequip,
 } from '../src/meta';
 
 const node = (id: string, sv: SaveData = newSave()) => nodesFor(sv).find((n) => n.id === id)!;
@@ -269,5 +269,154 @@ describe('save', () => {
     expect(store.has('ballblaster.save.v2')).toBe(false);
     expect(store.has('ballblaster.save.v3')).toBe(true);
     expect(loadSave().cash).toBe(sv.cash);
+  });
+});
+
+describe('gear', () => {
+  const GEAR: Record<string, [number, number]> = {
+    break: [1, -1], jump: [2, -3], draw: [2, -4], follow: [2, -5],
+    poison: [-1, -1], chill: [-4, -3], static: [-4, -4], ricochet: [-4, -5], lantern: [-4, -6],
+    explosive: [1, 1], shrapnel: [3, 2], momentum: [4, 3], thorns: [4, 4], mirror: [4, 5],
+    recall: [-1, 1], shockwave: [-3, 2], rackEm: [-4, 3], timeStop: [-4, 4],
+  };
+  const price: Record<string, number> = { break: 3, jump: 5, draw: 6, follow: 8, poison: 3, explosive: 3, recall: 10, shockwave: 10, rackEm: 12, timeStop: 15 };
+  const owns = (sv: SaveData, ...ids: string[]) => { for (const i of ids) sv.levels[i] = 1; };
+
+  it('gear nodes: emerald keystones at fixed cells, level nodes behind them', () => {
+    for (const [id, [gx, gy]] of Object.entries(GEAR)) {
+      const n = node(id);
+      expect([id, (n.x - 320) / 40, (n.y - 320) / 40]).toEqual([id, gx, gy]);
+      expect(n.kind).toBe('keystone');
+      expect(n.currency).toBe('emerald');
+      expect(n.maxLevel).toBe(1);
+      if (price[id]) expect(n.cost(0)).toBe(price[id]);
+      const lv = node(`${id}_lv`);
+      expect(lv.links).toEqual([id]);
+      expect(lv.currency).toBe('cash');
+      expect(lv.maxLevel).toBe(['break', 'jump', 'draw', 'follow'].includes(id) ? 1 : 2);
+      const s = { ...BASE_STATS };
+      lv.apply(s, 1);
+      expect(s.gearLevel[id]).toBe(1);
+      expect(BASE_STATS.gearLevel).toEqual({});
+    }
+    for (const id of ['lightning', 'split', 'spitter']) expect(node(id).maxLevel).toBeGreaterThan(1);
+  });
+  it('slots by unlocked', () => {
+    const sv = newSave();
+    const at = (u: number) => { sv.unlocked = u; return [relicSlots(sv), trickSlotOpen(sv)]; };
+    expect(at(0)).toEqual([1, false]);
+    expect(at(3)).toEqual([1, false]);
+    expect(at(4)).toEqual([2, true]);
+    expect(at(11)).toEqual([2, true]);
+    expect(at(12)).toEqual([3, true]);
+    expect(cueSlotOpen(sv)).toBe(false);
+    owns(sv, 'jump');
+    expect(cueSlotOpen(sv)).toBe(true);
+  });
+  it('equip / unequip validate ownership and slots', () => {
+    const sv = newSave();
+    expect(equip(sv, 'relic', 'poison')).toBe(false);
+    expect(equip(sv, 'cue', 'break')).toBe(false);
+    expect(equip(sv, 'cue', 'standard')).toBe(true);
+    owns(sv, 'poison', 'chill', 'static', 'break', 'recall', 'bogus');
+    expect(gearOwned(sv, 'poison')).toBe(true);
+    expect(gearOwned(sv, 'bogus')).toBe(false);
+    expect(ownedGear(sv)).toEqual({ cues: ['break'], relics: ['poison', 'chill', 'static'], tricks: ['recall'] });
+    expect(equip(sv, 'relic', 'poison')).toBe(true);
+    expect(equip(sv, 'relic', 'chill')).toBe(false); // one slot
+    expect(equip(sv, 'relic', 'chill', 1)).toBe(false);
+    expect(equip(sv, 'trick', 'recall')).toBe(false); // trick slot closed
+    sv.unlocked = 4;
+    expect(equip(sv, 'trick', 'recall')).toBe(true);
+    expect(equip(sv, 'relic', 'poison')).toBe(false); // duplicate
+    expect(equip(sv, 'relic', 'chill')).toBe(true);
+    expect(equip(sv, 'relic', 'static')).toBe(false);
+    expect(equip(sv, 'relic', 'static', 0)).toBe(true); // replace slot 0
+    expect(sv.loadout.relics).toEqual(['static', 'chill']);
+    expect(equip(sv, 'cue', 'break')).toBe(true);
+    expect(unequip(sv, 'relic', 0)).toBe(true);
+    expect(sv.loadout.relics).toEqual(['chill']);
+    expect(unequip(sv, 'relic', 5)).toBe(false);
+    expect(unequip(sv, 'cue')).toBe(true);
+    expect(unequip(sv, 'cue')).toBe(false);
+    expect(sv.loadout.cue).toBe('standard');
+    expect(unequip(sv, 'trick')).toBe(true);
+    expect(sv.loadout.trick).toBeNull();
+  });
+  it('buildStats gates lightning / split / spitter on equipped', () => {
+    const sv = newSave();
+    sv.unlocked = 4;
+    owns(sv, 'lightning', 'split', 'spitter');
+    const off = buildStats(sv);
+    expect([off.lightningChance, off.splitCount, off.spitInterval]).toEqual([0, 0, 0]);
+    expect(off.relics).toEqual([]);
+    expect(equip(sv, 'relic', 'lightning')).toBe(true);
+    expect(equip(sv, 'relic', 'spitter')).toBe(true);
+    const on = buildStats(sv);
+    expect(on.lightningChance).toBeGreaterThan(0);
+    expect(on.spitInterval).toBeGreaterThan(0);
+    expect(on.splitCount).toBe(0);
+    expect(on.relics).toEqual(['lightning', 'spitter']);
+    sv.unlocked = 0; // slots shrink -> truncated
+    expect(buildStats(sv).relics).toEqual(['lightning']);
+  });
+  it('buildStats: cue, trick, uses, gearLevel, break kills aim preview', () => {
+    const sv = newSave();
+    sv.unlocked = 4;
+    sv.levels.aim = 3;
+    owns(sv, 'break', 'shockwave', 'poison');
+    sv.levels.shockwave_lv = 1;
+    sv.levels.poison_lv = 2;
+    sv.loadout = { cue: 'break', relics: ['poison'], trick: 'shockwave' };
+    const s = buildStats(sv);
+    expect(s.cue).toBe('break');
+    expect(s.aimPreview).toBe(0);
+    expect(s.trick).toBe('shockwave');
+    expect(s.trickUses).toBe(3);
+    expect(s.gearLevel).toEqual({ poison: 2, shockwave: 1, break: 0 });
+    sv.loadout.trick = 'recall'; // unowned
+    expect(buildStats(sv).trick).toBeNull();
+    expect(buildStats(sv).trickUses).toBe(0);
+    sv.loadout.cue = 'standard';
+    expect(buildStats(sv).aimPreview).toBe(3);
+  });
+  it('first load auto-equips owned lightning / split / spitter, once', () => {
+    const sv = newSave();
+    sv.unlocked = 12;
+    owns(sv, 'lightning', 'split', 'spitter');
+    delete (sv as Partial<SaveData>).loadout;
+    const a = importSave(exportSave(sv))!;
+    expect(a.loadout).toEqual({ cue: 'standard', relics: ['lightning', 'split', 'spitter'], trick: null });
+    a.loadout.relics = [];
+    expect(importSave(exportSave(a))!.loadout.relics).toEqual([]); // deliberate unequip sticks
+    sv.unlocked = 0;
+    expect(importSave(exportSave(sv))!.loadout.relics).toEqual(['lightning']); // truncated to slots
+  });
+  it('sanitize drops unowned gear and truncates', () => {
+    const sv = { ...newSave(), unlocked: 4, levels: { poison: 1, chill: 1, static: 1, break: 1 } } as SaveData;
+    (sv as unknown as { loadout: unknown }).loadout = { cue: 'jump', relics: ['poison', 'poison', 'lantern', 'chill', 'static', 'nope'], trick: 'recall' };
+    const r = importSave(exportSave(sv))!;
+    expect(r.loadout).toEqual({ cue: 'standard', relics: ['poison', 'chill'], trick: null });
+    (sv as unknown as { loadout: unknown }).loadout = 7;
+    expect(importSave(exportSave(sv))!.loadout).toEqual({ cue: 'standard', relics: [], trick: null });
+    expect(newSave().loadout).toEqual({ cue: 'standard', relics: [], trick: null });
+  });
+  it('chain entries are buyable with first emeralds, no Bumpers/Split needed', () => {
+    const sv = newSave();
+    sv.emeralds = 0;
+    owns(sv, 'damage', 'maxHp', 'aim', 'speed', 'heavyHits', 'comboChain', 'armor', 'mass');
+    for (const id of ['break', 'poison', 'explosive', 'recall']) expect(buyState(sv, node(id)), id).toBe('poor');
+    sv.emeralds = 3;
+    for (const id of ['break', 'poison', 'explosive']) expect(buyState(sv, node(id)), id).toBe('ok');
+  });
+  it('gear unlock reachable by buying along the tree', () => {
+    const sv = newSave();
+    sv.emeralds = 100;
+    sv.cash = 1e9;
+        buy(sv, node('damage'));
+    expect(buyState(sv, node('break'))).toBe('ok');
+    expect(buy(sv, node('break'))).toBe(true);
+    expect(buy(sv, node('break_lv'))).toBe(true);
+    expect(buyState(sv, node('jump'))).toBe('ok');
   });
 });

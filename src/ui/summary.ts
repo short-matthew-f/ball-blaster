@@ -86,10 +86,16 @@ export class SummaryScreen implements Screen {
       drawText(ctx, makeStage(sum.unlocked).name.toUpperCase(), 90, 212, { align: 'center', color: P.E });
     }
 
-    drawSprite(ctx, 'coin', 70, 236);
-    drawText(ctx, `${Math.floor(this.app.save.cash)}`, 78, 233, { color: P.Y, shadow: P['0'] });
-    drawSprite(ctx, 'emerald', 114, 236);
-    drawText(ctx, `${this.app.save.emeralds}`, 122, 233, { color: P.E, shadow: P['0'] });
+    const lo = this.app.save.loadout;
+    const gear: string[] = [...(lo.cue !== 'standard' ? [lo.cue] : []), ...lo.relics, ...(lo.trick ? [lo.trick] : [])];
+    if (gear.length) {
+      const x0 = 90 - ((gear.length - 1) * 13) / 2;
+      gear.forEach((g, i) => drawSprite(ctx, `gear_${g}`, x0 + i * 13, 231));
+    }
+    drawSprite(ctx, 'coin', 70, 243);
+    drawText(ctx, `${Math.floor(this.app.save.cash)}`, 78, 240, { color: P.Y, shadow: P['0'] });
+    drawSprite(ctx, 'emerald', 114, 243);
+    drawText(ctx, `${this.app.save.emeralds}`, 122, 240, { color: P.E, shadow: P['0'] });
 
     this.buttons.set([
       { id: 'upgrade', x: 30, y: 252, w: 120, h: 22, label: 'UPGRADE', scale: 2, style: 'blue' },

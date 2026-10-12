@@ -1,5 +1,5 @@
 // Stage map: worlds as rows, four stage tiles each; tap an open tile to make it the current stage.
-import { WORLDS, globalIndex, parseStageId, stageId } from '../core/worlds';
+import { MODIFIER_NAMES, WORLDS, globalIndex, makeStage, parseStageId, stageId } from '../core/worlds';
 import { PALETTE } from '../render/palette';
 import { getMenuBg } from '../render/renderer';
 import { drawSprite } from '../render/sprite-cache';
@@ -111,6 +111,9 @@ export class MapScreen implements Screen {
       }
       if (killed) drawSprite(ctx, 'elite_crown', cx, t.y + 7);
       else drawText(ctx, String(t.slot), cx, t.y + 4, { align: 'center', scale: 1, color: isCur ? P.Y : P['4'] });
+      const mods = (() => { try { return makeStage(t.id).modifiers; } catch { return []; } })();
+      if (mods[0]) drawSprite(ctx, `mod_${mods[0]}`, t.x + 6.5, t.y + 6.5);
+      if (mods[1]) drawSprite(ctx, `mod_${mods[1]}`, t.x + TILE_W - 6.5, t.y + 6.5);
       // 3 wave pips + boss pip
       for (let i = 0; i < 4; i++) {
         const px = cx - 9 + i * 5;
@@ -131,14 +134,18 @@ export class MapScreen implements Screen {
     drawText(ctx, info, 90, 262, { align: 'center', color: infoColor, shadow: P['0'] });
     const b = save.bestWave[cur] ?? 0;
     drawText(ctx, b >= 4 ? 'BOSS KILLED' : `BEST WAVE ${b}`, 90, 272, { align: 'center', color: P['3'] });
+    let mods: string[] = [];
+    try { mods = makeStage(cur).modifiers.map((m) => MODIFIER_NAMES[m]); } catch { /* ignore */ }
+    drawText(ctx, mods.length ? mods.join(' \u00b7 ') : 'NO MODIFIERS', 90, 283, { align: 'center', color: mods.length ? P.o : P['2'] });
 
     const btns: Button[] = [];
     if (save.unlocked >= 24) {
       btns.push({ id: 'loopPrev', x: 4, y: 3, w: 16, h: 13, label: '<', style: 'gray', disabled: this.loop <= 0 });
       btns.push({ id: 'loopNext', x: 22, y: 3, w: 16, h: 13, label: '>', style: 'gray', disabled: this.loop >= this.maxLoop() });
     }
-    btns.push({ id: 'tree', x: 4, y: 297, w: 50, h: 20, label: 'TREE', style: 'blue' });
-    btns.push({ id: 'start', x: 58, y: 297, w: 118, h: 20, label: 'START RUN', scale: 1, style: 'green' });
+    btns.push({ id: 'tree', x: 4, y: 297, w: 34, h: 20, label: 'TREE', style: 'blue' });
+    btns.push({ id: 'loadout', x: 40, y: 297, w: 52, h: 20, label: 'LOADOUT', style: 'gold' });
+    btns.push({ id: 'start', x: 94, y: 297, w: 82, h: 20, label: 'START RUN', scale: 1, style: 'green' });
     this.buttons.set(btns);
     this.buttons.draw(ctx);
   }
@@ -169,6 +176,7 @@ export class MapScreen implements Screen {
     if (!id) return;
     app.sfx.ui();
     if (id === 'tree') app.go('shop');
+    else if (id === 'loadout') app.go('loadout');
     else if (id === 'start') app.startRun();
     else if (id === 'loopPrev') this.loop = Math.max(0, this.loop - 1);
     else if (id === 'loopNext') this.loop = Math.min(this.maxLoop(), this.loop + 1);

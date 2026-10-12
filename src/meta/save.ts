@@ -1,4 +1,5 @@
 import type { BallType, SaveData } from '../core/types';
+import { autoEquipLegacy, fixLoadout } from './gear';
 import { LEGACY_STAGES, v2Refund } from './legacy';
 
 export const SAVE_KEY = 'ballblaster.save.v3';
@@ -15,6 +16,7 @@ export function newSave(): SaveData {
     bestWave: {},
     bossKills: {},
     ballType: 'standard',
+    loadout: { cue: 'standard', relics: [], trick: null },
     settings: { sound: true, shake: true, flash: !prefersReducedMotion() },
     hints: {},
     stats: { runs: 0, kills: 0, shots: 0 },
@@ -49,7 +51,7 @@ export function sanitize(raw: unknown): SaveData | null {
   const st = (r.stats && typeof r.stats === 'object' ? r.stats : {}) as Record<string, unknown>;
   const unlocked = Math.floor(num(r.unlocked, 0));
   const current = typeof r.current === 'string' && STAGE_RE.test(r.current) ? r.current : d.current;
-  return {
+  const out: SaveData = {
     version: 1,
     cash: num(r.cash, 0),
     emeralds: num(r.emeralds, 0),
@@ -66,7 +68,11 @@ export function sanitize(raw: unknown): SaveData | null {
     },
     stats: { runs: num(st.runs, 0), kills: num(st.kills, 0), shots: num(st.shots, 0) },
     hints: boolMap(r.hints),
+    loadout: d.loadout,
   };
+  fixLoadout(out, r.loadout);
+  autoEquipLegacy(out);
+  return out;
 }
 
 function stageMap(v: unknown): Record<string, number> {

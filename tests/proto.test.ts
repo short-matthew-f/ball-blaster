@@ -1,11 +1,11 @@
 // v0.2 build step 1: physics + sizes + formations + enemy charges, bot-measured.
 // Two bots (nearest enemy / largest cluster, always full power) x two stat lines (run 1 base, mid-game) x 30 seeds.
 import { describe, expect, it } from 'vitest';
-import { MAX_PULL, SIM_DT, TABLE, type RunResult, type RunState, type RunStats, type SaveData, type Target } from '../src/core/types';
-import { bankRun, buildStats, buy, buyState, newSave, nextCost, nodesFor } from '../src/meta/index';
-import { BASE_STATS, stageById } from '../src/core/tuning';
+import { MAX_PULL, SIM_DT, TABLE, type RelicId, type RunResult, type RunState, type RunStats, type SaveData, type Target, type TrickId } from '../src/core/types';
+import { bankRun, buildStats, buy, buyState, equip, newSave, nextCost, nodesFor, ownedGear, relicSlots, trickSlotOpen } from '../src/meta/index';
+import { BASE_STATS, TARGET_DEFS, stageById } from '../src/core/tuning';
 import { globalIndex, idFromIndex, nextStageId, stageId } from '../src/core/worlds';
-import { createRun, shoot, step } from '../src/sim/index';
+import { createRun, shoot, step, useTrick } from '../src/sim/index';
 import { maxOverlap } from '../src/sim/physics';
 import { Rng } from '../src/core/rng';
 // Env lookup without @types/node (CI typechecks tests without node types).
@@ -253,10 +253,56 @@ const NOISE_DEG = 6;
 const NOISE_POWER: [number, number] = [0.7, 1];
 const NOISE_SECOND = 0.15;
 
+// ---------- v0.4 bot loadout policy (DESIGN-v0.4-loadout "Balance notes") ----------
+// Four fixed loadouts; the best = most of its relics owned (ties: listed order). Empty slots are back-filled with any
+// owned relic (so owned Lightning/Split/Spitter keep working). Cue: Break if owned and the stage has no Thin Rails.
+// Trick: the first owned of shockwave / timeStop / recall, used greedily (see useTricks). PROG_GEAR=0: empty loadout.
+const PROG_GEAR = ENV.PROG_GEAR !== '0';
+const BACKFILL: RelicId[] = ['lightning', 'split', 'spitter', 'explosive', 'momentum', 'shrapnel', 'poison', 'thorns', 'chill', 'static', 'ricochet', 'mirror', 'lantern'];
+const TRICK_PREF: TrickId[] = ['shockwave', 'timeStop', 'recall'];
+
+function chooseLoadout(save: SaveData): void {
+  save.loadout = { cue: 'standard', relics: [], trick: null };
+  if (!PROG_GEAR) return;
+  const st = stageById(save.current);
+  const own = ownedGear(save);
+  const counter: RelicId[] = st.modifiers.includes('dark') ? ['lantern'] : st.modifiers.includes('ranged') ? ['mirror'] : ['thorns', 'poison'];
+  const sets: RelicId[][] = [['explosive', 'momentum'], ['lightning', 'shrapnel'], ['chill', 'static'], counter];
+  const n = relicSlots(save);
+  const score = (set: RelicId[]) => set.filter((id) => own.relics.includes(id)).slice(0, n).length;
+  const best = sets.reduce((a, b) => (score(b) > score(a) ? b : a));
+  for (const id of [...best, ...BACKFILL]) if (own.relics.includes(id) && save.loadout.relics.length < n) equip(save, 'relic', id);
+  if (own.cues.includes('break') && !st.modifiers.includes('thinRails')) equip(save, 'cue', 'break');
+  if (trickSlotOpen(save)) {
+    const t = TRICK_PREF.find((id) => own.tricks.includes(id));
+    if (t) equip(save, 'trick', t);
+  }
+}
+
+/** Greedy trick use at aim: shockwave with >= 3 enemies within 60 px, time stop below 30 % HP, recall with 2+ melee in reach. */
+function useTricks(s: RunState): void {
+  const h = s.balls[0];
+  const live = s.targets.filter((t) => !t.dead);
+  const gap = (t: Target) => Math.hypot(t.x - h.x, t.y - h.y) - t.r - h.r;
+  const want =
+    s.stats.trick === 'shockwave' ? live.filter((t) => gap(t) <= 60).length >= 3
+    : s.stats.trick === 'timeStop' ? s.hp < 0.3 * s.maxHp
+    : s.stats.trick === 'recall' ? live.filter((t) => t.intent.t === 'attack' && gap(t) <= TARGET_DEFS[t.kind].reach).length >= 2
+    : false;
+  if (want) useTrick(s);
+}
+
 function playForResult(stage: string, seed: number, stats: RunStats, bot: ProgBot = 'perfect'): RunResult {
   const s = createRun(stage, stats, seed);
   const noise = new Rng(seed * 7919 + 17);
   while (s.phase === 'aim' && s.shots < 600) {
+    if (s.trickUsesLeft > 0) useTricks(s);
+    if (!s.targets.some((t) => !t.dead)) {
+      // A trick (shockwave + static) cleared the board during aim: fire a nudge to bring the next wave.
+      shoot(s, { x: 0, y: -MAX_PULL * 0.3 });
+      while ((s.phase as string) === 'resolve' || (s.phase as string) === 'enemy') step(s, SIM_DT * 8);
+      continue;
+    }
     const h = s.balls[0];
     let tg: Target;
     let ang: number;
@@ -325,6 +371,7 @@ function progression(seed: number, bot: ProgBot): ProgLog {
   let arrivalBuys = 0;
   for (let r = 1; r <= PROG_RUNS; r++) {
     const n = globalIndex(save.current);
+    chooseLoadout(save);
     if (!cur) {
       const st = buildStats(save);
       cur = { runs: 0, cleared: false, dmg: st.damage, hp: st.maxHp, open: openNodes(save), secs: [], earlyBuys: arrivalBuys };
@@ -385,7 +432,7 @@ function runBot(bot: ProgBot): BotReport {
       'dead seeds': rep.dead[n],
     };
   }
-  console.log(`Multi-stage progression, ${bot} bot (${PROG_SEEDS} seeds x up to ${PROG_RUNS} runs; rtc = runs to clear; stages 12+ smoke only)`);
+  console.log(`Multi-stage progression, ${bot} bot, gear ${PROG_GEAR ? 'on' : 'off'} (${PROG_SEEDS} seeds x up to ${PROG_RUNS} runs; rtc = runs to clear; stages 12+ smoke only)`);
   console.table(rep.table);
   console.log(`Cash by run 60 (${bot}, mean over seeds): earned ${Math.round(rep.earned)}, spent on the tree ${Math.round(rep.spent)} (${Math.round((100 * rep.spent) / Math.max(1, rep.earned))} %)`);
   return rep;

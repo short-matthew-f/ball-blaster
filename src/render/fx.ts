@@ -10,7 +10,7 @@ interface Floater { x: number; y: number; text: string; color: string; life: num
 interface Banner { text: string; color: string; life: number; max: number; scale: number; keep?: boolean }
 interface Bolt { pts: Vec[]; life: number }
 interface Tracer { x0: number; y0: number; x1: number; y1: number; life: number }
-interface Ring { x: number; y: number; r: number; life: number; max: number; color?: string; color2?: string }
+interface Ring { x: number; y: number; r: number; life: number; max: number; color?: string; color2?: string; inward?: boolean }
 
 const P = PALETTE;
 /** First Overtime wave number (stage waves + boss wave + 1). */
@@ -31,6 +31,7 @@ const KIND_COLORS: Record<TargetKind, string[]> = {
   boss: [P['0'], P['3'], P['5'], P.Y],
 };
 
+const TRICK_NAMES: Record<string, string> = { recall: 'RECALL', timeStop: 'TIME STOP', rackEm: "RACK 'EM", shockwave: 'SHOCKWAVE' };
 const rnd = (a: number, b: number): number => a + Math.random() * (b - a);
 
 export class Fx {
@@ -57,6 +58,8 @@ export class Fx {
   /** Regular waves before the boss (stage.waves.length); Overtime starts two waves later. */
   waves = 3;
   private clock = 0;
+  /** Where the ball was just before a trick fired (set by the run screen) for the Recall trail. */
+  trickFrom: Vec | null = null;
 
   clear(): void {
     this.particles.length = 0;
@@ -115,6 +118,39 @@ export class Fx {
       const i = this.banners.findIndex((b) => !b.keep);
       this.banners.splice(i >= 0 ? i : 0, 1);
     }
+  }
+
+  /** Banner + effect for a trick use. The ball is already at its destination; trickFrom is where it was. */
+  trick(id: string): void {
+    const name = TRICK_NAMES[id] ?? id.toUpperCase();
+    const b = this.ballPos;
+    this.banner(id === 'timeStop' ? 'TIME STOP' : name, P.c, 2, 1.1);
+    if (!b) return;
+    if (id === 'recall') {
+      const f = this.trickFrom;
+      if (f) {
+        const n = Math.max(6, Math.round(Math.hypot(b.x - f.x, b.y - f.y) / 5));
+        for (let i = 0; i <= n; i++) {
+          const k = i / n;
+          this.particles.push({ x: f.x + (b.x - f.x) * k, y: f.y + (b.y - f.y) * k, vx: rnd(-6, 6), vy: rnd(-6, 6), life: 0.25 + 0.3 * k, max: 0.55, color: i % 2 ? P.c : P['5'], size: 1, g: 0 });
+        }
+        this.burst(f.x, f.y, [P.c, P['5']], 8, 50, 0.3, 0);
+      }
+      this.rings.push({ x: b.x, y: b.y, r: 14, life: 0.3, max: 0.3, color: P.c, color2: P['5'] });
+    } else if (id === 'rackEm') {
+      this.rings.push({ x: TABLE.x + TABLE.w / 2, y: TABLE.y + TABLE.h / 2 - 20, r: 90, life: 0.5, max: 0.5, color: P.M, color2: P.c, inward: true });
+    } else if (id === 'shockwave') {
+      this.rings.push({ x: b.x, y: b.y, r: 60, life: 0.4, max: 0.4, color: P.c, color2: P['5'] });
+      this.addShake(1);
+    } else if (id === 'timeStop') {
+      this.rings.push({ x: b.x, y: b.y, r: 50, life: 0.5, max: 0.5, color: P.B, color2: P['5'] });
+    }
+    this.trickFrom = null;
+  }
+
+  /** The skipped enemy phase just passed. */
+  timeStopSpent(): void {
+    this.banner('TIME STOPPED', P.c, 2, 1.0);
   }
 
   private addShake(v: number): void {
@@ -273,6 +309,33 @@ export class Fx {
         case 'shoot':
           if (this.ballPos) this.burst(this.ballPos.x, this.ballPos.y, [P['5'], P['4']], 4, 28, 0.25, 0);
           break;
+        case 'poisonTick':
+          this.floater(e.x, e.y - 6, `-${fmt(e.dmg)}`, P.E);
+          this.burst(e.x, e.y, [P.E, P.e, P.h], 7, 22, 0.55, -40, 2);
+          break;
+        case 'status':
+          break;
+        case 'mirror': {
+          const h = this.ballPos;
+          if (h) {
+            this.tracers.push({ x0: h.x, y0: h.y, x1: e.x, y1: e.y, life: 0.2 });
+            this.rings.push({ x: h.x, y: h.y, r: 12, life: 0.2, max: 0.2, color: P.c, color2: P['5'] });
+            this.burst(h.x, h.y, [P.c, P['5'], P.B], 6, 40, 0.25, 0, 1);
+          }
+          this.burst(e.x, e.y, [P.c, P['5']], 4, 30, 0.2, 0);
+          break;
+        }
+        case 'blast':
+          this.rings.push({ x: e.x, y: e.y, r: e.r, life: 0.35, max: 0.35, color: P.o, color2: P.Y });
+          this.burst(e.x, e.y, [P.o, P.Y, P.R, P['5']], 12, 80, 0.45, 40, 2);
+          this.addShake(1.4);
+          break;
+        case 'shard':
+          this.burst(e.x, e.y, [P['5'], P.c, P.Y], 3, 50, 0.2, 0);
+          break;
+        case 'trick':
+          this.trick(e.id);
+          break;
         case 'shimmer':
         case 'ballClack':
         case 'launch':
@@ -319,7 +382,7 @@ export class Fx {
   draw(ctx: CanvasRenderingContext2D): void {
     for (const r of this.rings) {
       const k = 1 - r.life / r.max;
-      const rad = r.r * (0.3 + 0.7 * k);
+      const rad = r.inward ? r.r * (1 - 0.7 * k) : r.r * (0.3 + 0.7 * k);
       ctx.fillStyle = k < 0.5 ? (r.color2 ?? P.Y) : (r.color ?? P.o);
       const steps = Math.max(24, Math.round(rad * 3));
       ctx.globalAlpha = 1 - k * 0.7;

@@ -1,12 +1,13 @@
 import { EMERALD_REPEAT_DECAY } from '../core/tuning';
 import type { RunResult, SaveData, StageId, UpgradeNode } from '../core/types';
 import { globalIndex, nextStageId } from '../core/worlds';
+import { cueSlotOpen, equip, gearOwned, ownedGear, relicSlots, trickSlotOpen, unequip } from './gear';
 import { exportSave, importSave, loadSave, newSave, writeSave } from './save';
 import { buildStats, nodeLevel, worldOf } from './stats';
 import { NODES, currentLoop, distanceFromOwned, isReachable, nodesFor, pathToOwned } from './tree';
 import { CAPSTONE_NEEDS, ROOT_ID } from './upgrades';
 
-export { NODES, ROOT_ID, nodesFor, isReachable, distanceFromOwned, pathToOwned, newSave, loadSave, writeSave, exportSave, importSave, buildStats, nodeLevel };
+export { NODES, ROOT_ID, nodesFor, isReachable, distanceFromOwned, pathToOwned, newSave, loadSave, writeSave, exportSave, importSave, buildStats, nodeLevel, relicSlots, trickSlotOpen, cueSlotOpen, gearOwned, ownedGear, equip, unequip };
 
 export function nextCost(save: SaveData, node: UpgradeNode): number | null {
   const l = nodeLevel(save, node.id);

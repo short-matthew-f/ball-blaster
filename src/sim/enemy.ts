@@ -23,8 +23,15 @@ import {
   WAVE_CASH,
   WAVE_CASH_CAP_WAVE,
   WAVES_PER_STAGE,
+  CHILL_ADVANCE_MULT,
+  CHILL_CHARGE_MULT,
+  MIRROR_CHANCE,
+  MIRROR_DMG,
+  POISON_NO_DECAY_LV,
+  gearVal,
 } from '../core/tuning';
-import { heal, hero, heroDamage, kill, scaleCash, stageWaves } from './damage';
+import { applyDamage, heal, hero, heroDamage, kill, scaleCash, stageWaves } from './damage';
+import { has, lv } from './gear';
 import { rollIntent } from './intents';
 import { relaxAll } from './physics';
 import { liveRegulars, spawnWave, summonNear } from './spawn';
@@ -61,14 +68,41 @@ export function startEnemyPhase(s: RunState, fx: FxEvent[]): void {
     t.frozen = (t.frozen ?? 0) - 1;
     if (t.frozen <= 0) fx.push({ t: 'thaw', x: t.x, y: t.y });
   }
+  // Poison ticks before the wave check, so a tick that kills the last regular brings the next wave.
+  poisonTick(s, fx);
 
   const fresh = advanceWave(s, fx);
   const rage = rageLevel(s);
   if (rage > 0) fx.push({ t: 'enrage', level: rage });
-  // Reflex: the first enemy phase of each wave is skipped.
+  // Reflex: the first enemy phase of each wave is skipped. Time Stop (trick): this whole phase is skipped.
   const reflex = s.stats.reflex > 0 && s.waveTurn === 0 && fresh.size === 0;
-  s.enemyQueue = reflex ? [] : s.targets.filter((t) => !t.dead && !fresh.has(t.id)).map((t) => t.id);
+  const stopped = s.skipNextEnemyPhase;
+  s.skipNextEnemyPhase = false;
+  s.enemyQueue = reflex || stopped ? [] : s.targets.filter((t) => !t.dead && !fresh.has(t.id)).map((t) => t.id);
   s.enemyNext = s.t;
+}
+
+/**
+ * Poison relic: each poisoned enemy takes damage equal to its stacks (no stagger, ignores 1-hit shields, kills pay but
+ * never count for the chain), then loses a stack (no decay from level POISON_NO_DECAY_LV).
+ */
+function poisonTick(s: RunState, fx: FxEvent[]): void {
+  const decay = lv(s, 'poison') < POISON_NO_DECAY_LV;
+  for (const t of s.targets.slice()) {
+    const n = t.poison ?? 0;
+    if (t.dead || n <= 0) continue;
+    fx.push({ t: 'poisonTick', x: t.x, y: t.y, dmg: n });
+    applyDamage(s, t, n, 'poison', fx);
+    if (t.dead) continue;
+    if (decay) t.poison = n - 1;
+    if ((t.poison ?? 0) <= 0) fx.push({ t: 'status', id: t.id, kind: 'poison', on: false });
+  }
+}
+
+/** Charge reach (edge gap, px) of `t` this enemy phase: the kind's reach, x CHILL_CHARGE_MULT while chilled. */
+export function effectiveReach(t: Target): number {
+  const r = TARGET_DEFS[t.kind].reach;
+  return (t.chill ?? 0) > 0 ? r * CHILL_CHARGE_MULT : r;
 }
 
 /** Wave clear: no live regular (non-summon) enemy left, or the boss died (Overtime begins). Returns new ids. */
@@ -130,17 +164,22 @@ export function enemyStep(s: RunState, h: number, fx: FxEvent[], physics: (s: Ru
   }
   // Hold the phase until every arrival (wave, boss, summons, splits) is solid: aim never sees a shimmering enemy.
   if (s.targets.some((t) => !t.dead && t.shimmer > 0)) return false;
-  endEnemyPhase(s);
+  endEnemyPhase(s, fx);
   return true;
 }
 
-/** Reroll intents for enemies that acted, clear stagger, tick freezes, advance the enrage clock. */
-function endEnemyPhase(s: RunState): void {
+/** Reroll intents for enemies that acted, clear stagger, tick chill, advance the enrage clock. */
+function endEnemyPhase(s: RunState, fx: FxEvent[]): void {
   s.targets = s.targets.filter((t) => !t.dead);
   const acted = new Set(s.acted);
   for (const t of s.targets) {
     if (acted.has(t.id)) rollIntent(s, t);
     t.stagger = 0;
+    // Chill wears off at the end of a phase, so a chill set during the shot covers the phase that follows it.
+    if ((t.chill ?? 0) > 0) {
+      t.chill = (t.chill ?? 0) - 1;
+      if (t.chill <= 0) fx.push({ t: 'status', id: t.id, kind: 'chill', on: false });
+    }
   }
   s.waveTurn++;
   relaxAll(s);
@@ -239,6 +278,7 @@ function advance(s: RunState, e: Target, h: Ball, fx: FxEvent[], sideways = e.ki
   let dx = h.x - e.x;
   let dy = h.y - e.y;
   let dist = (e.elite === 'swift' ? SWIFT_ADVANCE_DIST : ADVANCE_DIST) * stageById(s.stage).advanceMult;
+  if ((e.chill ?? 0) > 0) dist *= CHILL_ADVANCE_MULT;
   if (sideways) {
     const px = -dy;
     const py = dx;
@@ -281,7 +321,7 @@ function freezeAlly(s: RunState, e: Target, fx: FxEvent[]): void {
  * max(reach, DARK_REVEAL_R) px (edge gap) of the hero. Render-only (the sim never reads it).
  */
 export function intentVisible(s: RunState, t: Target): boolean {
-  if (!s.dark) return true;
+  if (!s.dark || s.lanternOn) return true;
   const h = s.balls.find((b) => b.kind === 'main');
   if (!h) return true;
   const gap = Math.hypot(h.x - t.x, h.y - t.y) - h.r - t.r;
@@ -310,7 +350,7 @@ function executeIntent(s: RunState, e: Target, fx: FxEvent[]): boolean {
       const gap = Math.hypot(h.x - e.x, h.y - e.y) - e.r - h.r;
       // Reach-aware: Attack beyond reach = Advance. Enraged, it charges from anywhere (banking round cover): an attacker
       // parked behind a bumper otherwise never connects and the run never ends.
-      const far = gap > def.reach;
+      const far = gap > effectiveReach(e);
       if (!slam && far && rage === 0) return advance(s, e, h, fx);
       // Deep enrage with the line covered (e.g. caged behind bumpers): the blow lands anyway, as an instant strike.
       if (rage >= ENRAGE_STRIKE_LEVEL && blocked(s, e, e.x, e.y, h.x, h.y)) {
@@ -319,7 +359,7 @@ function executeIntent(s: RunState, e: Target, fx: FxEvent[]): boolean {
         e.charged = false;
         return false;
       }
-      const speed = e.charged ? (def.chargedSpeed ?? def.chargeSpeed * 1.25) : def.chargeSpeed;
+      const speed = (e.charged ? (def.chargedSpeed ?? def.chargeSpeed * 1.25) : def.chargeSpeed) * ((e.chill ?? 0) > 0 ? CHILL_CHARGE_MULT : 1);
       const d = chargeDir(s, e, h, e.kind === 'bouncer' || slam || far);
       launch(e, d.x, d.y, speed, fx, 'attack');
       e.chargeDmg = (it.n ?? 0) + rage;
@@ -330,6 +370,12 @@ function executeIntent(s: RunState, e: Target, fx: FxEvent[]): boolean {
       return advance(s, e, h, fx);
     case 'shoot': {
       fx.push({ t: 'tracer', x0: e.x, y0: e.y, x1: h.x, y1: h.y });
+      // Mirror relic: the shot is reflected (rng drawn only when equipped, so other runs keep their streams).
+      if (has(s, 'mirror') && s.rng.chance(gearVal(MIRROR_CHANCE, lv(s, 'mirror')))) {
+        fx.push({ t: 'mirror', x: e.x, y: e.y });
+        applyDamage(s, e, MIRROR_DMG, 'mirror', fx);
+        return false;
+      }
       // Thick Skin: flat reduction on ranged damage (min 1), then armor. Unblockable, so capped per enemy phase at
       // RANGED_PHASE_CAP x max HP (the excess is dropped); charges stay uncapped (they can be dodged or blocked).
       const dmg = Math.max(1, Math.round(Math.max(1, (it.n ?? 1) + rage - s.stats.rangedResist)) - s.stats.armor);

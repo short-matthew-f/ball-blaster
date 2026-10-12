@@ -150,6 +150,27 @@ export interface BossDef {
 export type BallKind = 'main' | 'split' | 'spat';
 export type BallType = 'standard' | 'heavy' | 'light' | 'sticky';
 
+// ---------- Gear (DESIGN-v0.4-loadout) ----------
+/** Cue: how the shot behaves. */
+export type CueId = 'standard' | 'break' | 'jump' | 'draw' | 'follow';
+/** Relic: a rule-changing passive. lightning/split/spitter stats are honoured only when equipped. */
+export type RelicId =
+  | 'lightning'
+  | 'split'
+  | 'spitter'
+  | 'poison'
+  | 'explosive'
+  | 'chill'
+  | 'shrapnel'
+  | 'static'
+  | 'ricochet'
+  | 'lantern'
+  | 'thorns'
+  | 'momentum'
+  | 'mirror';
+/** Trick: one active, no targeting, limited uses per run, usable only during aim. */
+export type TrickId = 'recall' | 'timeStop' | 'rackEm' | 'shockwave';
+
 export interface Ball {
   id: number;
   kind: BallKind;
@@ -171,6 +192,12 @@ export interface Ball {
   stuckVy?: number;
   stuckTarget?: number;
   stuckDmg?: number;
+  /** Shrapnel shard (a spat-like ball released by a kill). */
+  shard?: boolean;
+  /** Jump cue: id of the enemy being jumped (no collision until past its far edge). */
+  jumpOver?: number;
+  /** Jump cue: landed; the next enemy contact deals -1 (min 1). */
+  jumpLanded?: boolean;
 }
 
 export type TargetKind =
@@ -251,6 +278,10 @@ export interface Target {
    * enemies (cascades survive kills). Invisible (dead); never touches balls; removed at shot end.
    */
   ghost?: number;
+  /** Poison relic: stacks (damage at the start of each enemy phase). */
+  poison?: number;
+  /** Chill relic: enemy phases left chilled (charge speed/reach x0.6, Advance x0.5). */
+  chill?: number;
 }
 
 export type ObstacleKind = 'bumper' | 'crate' | 'chest' | 'shrine';
@@ -376,6 +407,20 @@ export interface RunState {
   result?: RunResult;
   /** Fx queued outside step() (e.g. by shoot()); drained at the start of the next step. */
   pendingFx?: FxEvent[];
+  /** Trick uses left this run. */
+  trickUsesLeft: number;
+  /** Time Stop: the next enemy phase is skipped entirely (intents keep). */
+  skipNextEnemyPhase: boolean;
+  /** Momentum relic: current bonus damage. */
+  momentum: number;
+  /** Rail bounces of the main ball before its first enemy hit this shot (Ricochet). */
+  shotBounces: number;
+  /** The first enemy hit of this shot has happened (Explosive, Ricochet, Draw/Follow). */
+  firstHitDone: boolean;
+  /** Lantern relic: intents always visible (overrides dark). */
+  lanternOn: boolean;
+  /** Hero launch point and speed of the current shot (Draw cue). */
+  launch?: { x: number; y: number; speed: number };
 }
 
 /** Public sim API implemented by sim/index.ts. */
@@ -389,6 +434,8 @@ export interface SimApi {
   previewShot(s: RunState, pull: Vec): Vec[];
   /** True when only extra (split/spat) balls are still moving. */
   canFastForward(s: RunState): boolean;
+  /** Uses the equipped trick (only in 'aim' with uses left). False otherwise. */
+  useTrick(s: RunState): boolean;
 }
 
 export interface RunResult {
@@ -452,7 +499,19 @@ export type FxEvent =
   /** An enemy just reached its stagger threshold (it will skip its intent). */
   | { t: 'stagger'; x: number; y: number }
   /** Jam rule nudged the hero from (x0,y0) to (x,y) before aim. */
-  | { t: 'jam'; x0: number; y0: number; x: number; y: number };
+  | { t: 'jam'; x0: number; y0: number; x: number; y: number }
+  /** Poison damage at the start of the enemy phase. */
+  | { t: 'poisonTick'; x: number; y: number; dmg: number }
+  /** A status (poison/chill) went on or off an enemy. */
+  | { t: 'status'; id: number; kind: 'poison' | 'chill'; on: boolean }
+  /** A trick was used. */
+  | { t: 'trick'; id: TrickId }
+  /** Mirror reflected a Shoot at (x,y) (the shooter). */
+  | { t: 'mirror'; x: number; y: number }
+  /** Explosive relic blast ring. */
+  | { t: 'blast'; x: number; y: number; r: number }
+  /** Shrapnel shard released. */
+  | { t: 'shard'; x: number; y: number };
 
 // ---------- Derived per-run stats (meta -> sim contract) ----------
 
@@ -507,6 +566,16 @@ export interface RunStats {
   bumperBounce: number; // speed multiplier on bumper hit
 
   cashMult: number;
+
+  // Gear (DESIGN-v0.4-loadout). meta enforces slots and ownership.
+  cue: CueId; // default 'standard'
+  /** Equipped relics. lightning/split/spitter stats above apply only when the id is in here. */
+  relics: RelicId[];
+  trick: TrickId | null;
+  /** Trick uses per run (0 if no trick). */
+  trickUses: number;
+  /** Upgrade level per equipped gear id (0 = base), e.g. gearLevel.poison = 1. */
+  gearLevel: Record<string, number>;
 }
 
 // ---------- Save ----------
@@ -525,6 +594,8 @@ export interface SaveData {
   bossKills: Record<StageId, number>;
   /** Equipped ball type (must be unlocked in emerald tree). */
   ballType: BallType;
+  /** Equipped gear (owned on the tree, equipped pre-run). Slot counts: see meta relicSlots / trickSlotOpen / cueSlotOpen. */
+  loadout: { cue: CueId; relics: RelicId[]; trick: TrickId | null };
   /** flash: false = reduced flashing (alpha fades, solid bolts, slow shimmer). Default from prefers-reduced-motion. */
   settings: { sound: boolean; shake: boolean; flash: boolean; fastEnemies?: boolean };
   /** One-shot onboarding / disclosure flags, e.g. 'shotTaught', 'tab:combo', 'tab:emerald', 'tab:stage'. */
@@ -587,6 +658,18 @@ export interface MetaApi {
   /** Validates + migrates; null if invalid. */
   importSave(text: string): SaveData | null;
   buildStats(save: SaveData): RunStats;
+  /** 1 + (unlocked >= 4) + (unlocked >= 12). */
+  relicSlots(save: SaveData): number;
+  trickSlotOpen(save: SaveData): boolean;
+  /** True once any cue is owned. */
+  cueSlotOpen(save: SaveData): boolean;
+  /** 'standard' cue is always owned. */
+  gearOwned(save: SaveData, id: string): boolean;
+  ownedGear(save: SaveData): { cues: CueId[]; relics: RelicId[]; tricks: TrickId[] };
+  /** Validates ownership + slot; mutates save.loadout; false if rejected. `index` is the relic slot (default: append if free; duplicates rejected). */
+  equip(save: SaveData, slot: 'cue' | 'relic' | 'trick', id: string, index?: number): boolean;
+  /** Clears a slot (cue -> 'standard'); relic `index` defaults to the last one. false if nothing to clear. */
+  unequip(save: SaveData, slot: 'cue' | 'relic' | 'trick', index?: number): boolean;
   nodeLevel(save: SaveData, id: string): number;
   /** Cost of next level, or null if maxed. */
   nextCost(save: SaveData, node: UpgradeNode): number | null;

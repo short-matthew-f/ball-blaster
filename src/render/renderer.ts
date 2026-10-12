@@ -6,7 +6,7 @@ import { overtimeCashMult, rageLevel, rageStart } from '../sim/index';
 import type { Hazard } from '../core/types';
 import { PALETTE } from './palette';
 import { drawSprite, spriteSize, WHITE } from './sprite-cache';
-import { drawText } from './text';
+import { drawText, textWidth } from './text';
 import { drawBar } from '../ui/widgets';
 import { MODIFIER_NAMES, WORLDS, makeStage, parseStageId } from '../core/worlds';
 import { intentVisible } from '../sim/index';
@@ -154,6 +154,13 @@ export function modifierLine(stage: string): string {
   return makeStage(stage).modifiers.map((m) => MODIFIER_NAMES[m]).join(' \u00b7 ');
 }
 
+/** Draw a stage's modifier icons (up to `max`) left-to-right from (x, y) = top-left of the first icon. */
+export function drawModIcons(ctx: CanvasRenderingContext2D, stage: string, x: number, y: number, max = 2, gap = 8, alpha = 1): void {
+  let mods: string[] = [];
+  try { mods = makeStage(stage).modifiers.slice(0, max); } catch { /* ignore */ }
+  mods.forEach((m, i) => drawSprite(ctx, `mod_${m}`, x + 3.5 + i * gap, y + 3.5, { alpha }));
+}
+
 /** Board hazards under the enemies: ice = pale cyan dithered disc with a lighter rim; stub kinds = dim grey. */
 function drawHazard(ctx: CanvasRenderingContext2D, h: Hazard): void {
   const ice = h.kind === 'ice';
@@ -255,6 +262,9 @@ function drawEnemyBody(ctx: CanvasRenderingContext2D, t: Target, stage: string, 
     ctx.fill();
   }
   const frozen = !!t.frozen && t.frozen > 0;
+  if (t.chill && t.chill > 0) {
+    for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) drawSprite(ctx, name, t.x + ox, t.y + oy, { tint: P.c, alpha: 0.9 });
+  }
   drawSprite(ctx, name, t.x, t.y, t.flash > 0 ? { tint: WHITE } : {});
   const bt = t.kind === 'boss' && !(t.flash > 0) ? bossTint(stage) : null;
   if (bt && P[bt]) drawSprite(ctx, name, t.x, t.y, { tint: P[bt], alpha: 0.4 });
@@ -324,6 +334,7 @@ function drawEnemyOverlay(ctx: CanvasRenderingContext2D, s: RunState, t: Target,
     drawSprite(ctx, `intent_${it.t}`, gx0 + 5.5, gy + 0.5);
     if (num) drawText(ctx, num, gx0 + 13, gy - 2, { color: ncol, shadow: P['0'] });
     ctx.globalAlpha = 1;
+    if (t.chill && t.chill > 0) drawSprite(ctx, 'status_chill', gx0 + 10, gy - 4);
   }
 
   if (staggered && !frozen) {
@@ -338,6 +349,29 @@ function drawEnemyOverlay(ctx: CanvasRenderingContext2D, s: RunState, t: Target,
       ctx.fillRect(sx - 1, sy, 3, 1);
       ctx.fillRect(sx, sy - 1, 1, 3);
     }
+  }
+
+  // poison: rising green bubbles + stack digit beside the HP pips
+  if (t.poison && t.poison > 0) {
+    for (let k = 0; k < 3; k++) {
+      const ph = (flash ? now * 0.9 : 0) + k * 0.37;
+      const f = ph - Math.floor(ph);
+      ctx.fillStyle = k % 2 ? P.e : P.E;
+      ctx.globalAlpha = 1 - f;
+      ctx.fillRect(Math.round(t.x - t.r * 0.5 + k * t.r * 0.5), Math.round(t.y + t.r * 0.4 - f * t.r * 1.2), 2, 2);
+    }
+    ctx.globalAlpha = 1;
+    const dmgd = t.kind !== 'boss' && t.maxHp > 1 && t.hp > 0 && t.hp < t.maxHp;
+    const n = Math.min(8, Math.ceil(t.maxHp));
+    const pw = dmgd ? n * 4 - 1 : 0;
+    const dx = Math.round(t.x + pw / 2) + 3;
+    const dy = Math.round(t.y + t.r + 2);
+    const w = textWidth(String(t.poison)) + 8;
+    const x0 = pw ? dx : Math.round(t.x - w / 2);
+    ctx.fillStyle = P['0'];
+    ctx.fillRect(x0 - 1, dy - 2, w + 1, 9);
+    drawSprite(ctx, 'status_poison', x0 + 3, dy + 2);
+    drawText(ctx, String(t.poison), x0 + 8, dy - 1, { color: P.E });
   }
 
   // damage pips below, only once damaged (the boss uses the bottom bar)
@@ -379,6 +413,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, s: RunState, now: numbe
 
 export interface HudOpts {
   flash?: boolean;
+  /** A trick button occupies the left of the meter band: the wave track / boss bar shift right. */
+  trick?: boolean;
 }
 
 export function drawHud(ctx: CanvasRenderingContext2D, s: RunState, bestWave: number, now: number, opts: HudOpts = {}): void {
@@ -410,7 +446,7 @@ export function drawHud(ctx: CanvasRenderingContext2D, s: RunState, bestWave: nu
   }
 
   // Bottom band: wave track / boss bar / overtime
-  const bx = TABLE.x, bw = 120, ly = 294;
+  const bx = opts.trick ? 36 : TABLE.x, bw = opts.trick ? 96 : 120, ly = 294;
   const boss = s.targets.find((t) => t.kind === 'boss' && !t.dead);
   if (overtime) {
     drawText(ctx, `OVERTIME +${s.wave - (nw + 1)}`, bx, ly, { scale: 2, color: P.Y, shadow: P['0'] });
