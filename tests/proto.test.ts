@@ -281,6 +281,8 @@ const PROG_RUNS = Number(ENV.PROG_RUNS ?? 160);
 const GATE_STAGES = 12; // w1s1 .. w3s4: asserted
 const SMOKE_STAGES = Number(ENV.PROG_STAGES ?? 16); // + w4s1 .. w4s4: reported only
 const GATE: [number, number] = [4, 9];
+/** Per-stage lower-bound waivers (DECISIONS.md "Gate v0.6 M1"): w3s4 at 2 until M2's cards/shopping rewrite re-gates it. */
+const GATE_WAIVER: Record<number, number> = { 11: 2 };
 const LAST_STAGE_MAX = 20; // stage 11: worst seed
 const BUY_WINDOW = 3;
 const PERFECT_MIN = 2; // perfect bot: no stage may be a 1-run clear (median) // runs after arrival within which at least one node must be affordable
@@ -630,7 +632,7 @@ describe('multi-stage progression bot (greedy cheapest-node shopper)', () => {
       const m = noisy.med[n];
       // World openers (slot 1 of world >= 2) are breathers after a slot-4 grind: lower bound 2 (DECISIONS: Balance).
       const opener = n >= 4 && n % 4 === 0;
-      const lo = opener ? 2 : GATE[0];
+      const lo = GATE_WAIVER[n] ?? (opener ? 2 : GATE[0]);
       if (!(m >= lo && m <= GATE[1])) fails.push(`noisy ${id}: median ${m}`);
       if (n === GATE_STAGES - 1 && !(noisy.worst[n] <= LAST_STAGE_MAX)) fails.push(`noisy ${id}: worst ${noisy.worst[n]}`);
       if ((noisy.dead[n] ?? 0) > 0) fails.push(`noisy ${id}: ${noisy.dead[n]} seeds could not buy anything in ${BUY_WINDOW} runs`);
