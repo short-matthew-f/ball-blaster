@@ -1,31 +1,32 @@
-# Ball Blaster — v0.6 Proposal: Islands, Tokens, the Gear Gallery and the Payout
+# Ball Blaster — v0.6 Proposal: Islands, Tokens, the Gear Gallery and the Loot Goblin
 
-Oct 12, 2026 · **Proposal, owner-directed.** Decisions so far: obvious roadblocks; boss-locked currency; cash stays pooled; gear moves to a gallery where every item has its own tree (base → fork → base → terminal fork); forks exclusive but switchable; two choices per fork by default, three only where a third idea is real; a world's power-up is tied to the world you've beaten and world 1 has none; Overtime is replaced by the Payout. Replaces the v0.3 one-tree layout and the v0.4 loadout screen. Combat rules are unchanged except where a fork says otherwise.
+Oct 12, 2026 · **Proposal, owner-directed.** Decisions so far: obvious roadblocks; boss-locked currency; cash stays pooled; gear moves to a gallery where every item has its own tree (base → fork → base → terminal fork); forks exclusive but switchable; two choices per fork by default, three only where a third idea is real; a world's power-up is tied to the world you've beaten and world 1 has none; Overtime is replaced by the Loot Goblin (three pulls; the phase ends when the third shot ends). Replaces the v0.3 one-tree layout and the v0.4 loadout screen. Combat rules are unchanged except where a fork says otherwise.
 
 ## The idea in one line
 
-**Stats live on world islands, gear lives in a gallery, every wall is a boss's face, and every boss kill ends with one shot at a table full of coins.**
+**Stats live on world islands, gear lives in a gallery, every wall is a boss's face, and every boss kill ends with three pulls at a goblin full of loot.**
 
 ## Currencies
 
 | Coin | Earned | Spends on |
 |---|---|---|
-| **Cash** (pooled, as now) | kills, waves, chests, the Payout; ×1.22 per stage | levels: island stat nodes, card base nodes |
-| **Boss tokens** (one kind per boss: Stripe chip, Frost shard, Brass cog, Bog pearl, Ember, House chip) | first kill of that boss **3**, every repeat kill **1**, the **gold coin** in that stage's Payout **+1** | the portal to the next world, island capstones, gallery cards, forks, capstones |
+| **Cash** (pooled, as now) | kills, waves, chests, the Loot Goblin; ×1.22 per stage | levels: island stat nodes, card base nodes |
+| **Boss tokens** (one kind per boss: Stripe chip, Frost shard, Brass cog, Bog pearl, Ember, House chip) | first kill of that boss **3**, every repeat kill **1**, the Loot Goblin's **golden tooth** (third hit in the three pulls) **+1** | the portal to the next world, island capstones, gallery cards, forks, capstones |
 | ~~Emeralds~~ | retired | migrate 1:1 into Stripe chips |
 
-Tokens never cross worlds. A full boss run (kill + gold coin) pays 2, so "I need five more chips" is three runs.
+Tokens never cross worlds. A full boss run (kill + golden tooth) pays 2, so "I need five more chips" is three runs.
 
-## The Payout (replaces Overtime)
+## The Loot Goblin (replaces Overtime)
 
-The boss dies, the table clears, coins scatter, and you get **one shot**. Whatever your balls touch, you keep. Then the summary. Nothing is trying to kill you; that is the point.
+The boss dies, the table clears, and a **golden goblin ball** waddles in with a sack. You get **three pulls**: three shots, and the phase ends when the third shot's balls stop. Every hit shakes loot out of it. It never dies and never attacks; it just runs.
 
-- **The layout is a puzzle.** The generator picks a secret ideal shot from where the hero rests (angle + power), traces it with the preview code through 2–3 rails, and lays a line of coins along that path. Then it scatters a handful more. There is always a great shot on the table; reading rails is how you find it (Aim nodes matter twice).
-- **The gold coin** sits at the far end of the ideal line. Taking it is +1 boss token. Only the hero ball can take it.
-- **Cash coins** are taken by any player ball: hero, split children, spat balls. Draw comes back through the line; Break fires blind.
-- **Numbers to start:** 12–16 cash coins worth about half a boss kill's cash in total, 1 gold coin, full power allowed, tricks disabled, layout seeded per run (the bot plays it; the gate stays deterministic).
-- **Feedback:** coin counter on the HUD, a chime per coin that rises in pitch, CLEAN SWEEP banner for all of them, the stage pip remembers your best sweep.
-- **Removed:** Overtime waves, the Overtime enrage clock, `atkBonus`, the loop rule about Overtime cash. Summary line "Waves cleared" becomes "Boss · Payout n/m".
+- **Hits are ball contacts.** Hero, split children, spat balls and shards each count once per contact. A rail bounce back into it is a second hit. Arcs, poison ticks and blasts do not count.
+- **Loot is random, the token isn't.** Each hit pays a seeded draw from three tiers, small / big / jackpot, weighted about 60 / 32 / 8, averaging about a sixth of a boss kill's cash per hit. The goblin's **golden tooth** drops on the third hit of the phase, whatever pull it lands on: the token is skill, luck only moves the cash.
+- **Scurry.** When your balls stop, it rolls directly away from the hero at a fixed speed until it reaches a rail, then settles; if it is already on that rail it slides along it, away from you. It ignores obstacles and hazards (it's a goblin). It ends up on cushions and in corners, which is where bank shots live, and your leave after each hit decides the next geometry (Draw pulls you away from it, Follow chases it).
+- **Unkillable.** Its "HP" is a coin sack that shrinks with each hit; the third hit reads as emptied. No stagger, no intent beyond running.
+- **Tricks off, full power allowed, seeded per run** (the bot plays it; the gate stays deterministic). A miss is on you.
+- **Feedback:** coins burst from it on every hit and fly to the HUD, a rising chime per hit, JACKPOT banner on the top tier, "3 PULLS" counter, and the stage pip remembers your best pull total.
+- **Removed:** Overtime waves, the Overtime enrage clock, `atkBonus`, the loop rule about Overtime cash. Summary line "Waves cleared" becomes "Boss · Loot n".
 
 ## The island tree (stats)
 
@@ -136,7 +137,7 @@ Format: base → **fork** → base → **capstone**. Numbers are starting points
 
 ## Build order
 
-1. Tokens: drop, HUD, summary line, save field. Emerald retirement. The Payout (sim phase, generator, coins, gold coin, HUD, summary) and Overtime removal; gate re-run.
+1. Tokens: drop, HUD, summary line, save field. Emerald retirement. The Loot Goblin (goblin kind with a flee intent, loot table, golden tooth, HUD pulls counter, summary) and Overtime removal; gate re-run.
 2. Island tree: node tables per island, spiral layout, portals/capstones, tree screen (mostly the v0.3 screen with new data).
 3. Gallery: card model (base/fork/capstone, active choice), gallery screen replacing loadout, card page, `RunStats` gains per-card fork/capstone ids.
 4. Forks in the sim: world 1–3 cards first (18 cards), bot fork policy, gate; then worlds 4–6 cards.
@@ -152,4 +153,4 @@ Format: base → **fork** → base → **capstone**. Numbers are starting points
 | Forks exclusive but switchable, free, pre-run | behaviour modifiers are the point; the switch is the only respec |
 | Two fork choices by default | a third only when it is a real idea |
 | A world's power-up belongs to the world you beat; world 1 has none | Chill at Ice, Lightning at Clockwork, Poison at Bog, Fire at Ember |
-| The Payout replaces Overtime | Overtime could only end in a death; a coin sweep ends in a number you earned, and the gold coin is the token |
+| The Loot Goblin replaces Overtime | Overtime could only end in a death ("I don't really feel any achievement with overtime"); three pulls at a fleeing goblin end in loot you earned, multi-hits reward builds and bank shots, and the golden tooth (third hit) is the token: skill, not luck |
