@@ -1,5 +1,5 @@
-import { BASE_STATS } from '../core/tuning';
-import type { RelicId, RunStats, SaveData, TrickId } from '../core/types';
+import { BASE_STATS, TRICK_USES } from '../core/tuning';
+import type { RelicId, RunStats, SaveData } from '../core/types';
 import { nodesFor } from './tree';
 import { cueSlotOpen, gearOwned, relicSlots, trickSlotOpen } from './gear';
 import { MULT_IDS, WORLD_ONLY } from './upgrades';
@@ -19,7 +19,7 @@ export function worldOf(stage: string): number {
 
 /** Effect nodes that are relics: their stat fields apply only while the relic is equipped. */
 const GATED_RELICS = new Set<string>(['lightning', 'split', 'spitter']);
-const TRICK_USES: Record<TrickId, number> = { recall: 1, timeStop: 1, rackEm: 1, shockwave: 2 };
+
 
 export function buildStats(save: SaveData): RunStats {
   const s: RunStats = { ...BASE_STATS };
