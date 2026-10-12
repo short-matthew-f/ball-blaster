@@ -32,7 +32,6 @@ import {
   DRAW_RETURN,
   EXPLOSIVE_KEEP,
   EXPLOSIVE_R,
-  FOLLOW_KEEP,
   JUMP_PENALTY,
   RICOCHET_MAX,
   SHARD_DMG,
@@ -45,6 +44,8 @@ import {
   GOBLIN_HIT_SPEED,
   gearVal,
   stageById,
+  FOLLOW_KEEP_LV,
+  STICKY_STAGGER,
 } from '../core/tuning';
 import { addPoison, addStagger, applyDamage, chainLightning, heal, heroDamage, hitEnemy, scaleAtk, scaleCash } from './damage';
 import { has, lv } from './gear';
@@ -179,7 +180,7 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
   const sticky = b.kind === 'main' && s.stats.ballType === 'sticky' && !s.stickyUsed;
   const heavy = b.kind === 'main' && s.stats.heavyHits > 0 && speed >= HEAVY_HIT_SPEED;
   const thorns = thornsOf(s, t);
-  hitEnemy(s, t, dmg, b.kind, fx, b, (heavy ? 2 : 1) + (sticky ? 1 : 0), speed);
+  hitEnemy(s, t, dmg, b.kind, fx, b, (heavy ? 2 : 1) + (sticky ? gearVal(STICKY_STAGGER, lv(s, 'sticky')) : 0), speed);
   addPoison(s, t, fx);
   if (!t.dead && has(s, 'chill')) {
     const was = t.chill ?? 0;
@@ -238,8 +239,9 @@ function cueAfterContact(s: RunState, b: Ball, pvx: number, pvy: number): void {
     b.vx = ux * sp;
     b.vy = uy * sp;
   } else if (s.stats.cue === 'follow') {
-    b.vx = pvx * FOLLOW_KEEP;
-    b.vy = pvy * FOLLOW_KEEP;
+    const keep = gearVal(FOLLOW_KEEP_LV, lv(s, 'follow'));
+    b.vx = pvx * keep;
+    b.vy = pvy * keep;
   }
 }
 

@@ -20,9 +20,6 @@ import {
 } from '../core/types';
 import {
   ballSpec,
-  BREAK_MIN_POWER,
-  BREAK_SPEED_MULT,
-  DRAW_POWER,
   JAM_CLEAR,
   MOMENTUM_HITS,
   MOMENTUM_MAX,
@@ -32,6 +29,9 @@ import {
   WAVES_PER_STAGE,
   gearVal,
   stageById,
+  BREAK_MIN_POWER_LV,
+  BREAK_SPEED_MULT_LV,
+  DRAW_POWER_LV,
 } from '../core/tuning';
 import { addStagger } from './damage';
 import { has, lv } from './gear';
@@ -136,8 +136,9 @@ export function shoot(s: RunState, pull: Vec): boolean {
   const b = mainBall(s);
   // Minimum shot power: every release is a leave; no free micro-taps.
   const cue = s.stats.cue;
-  const power = Math.max(cue === 'break' ? BREAK_MIN_POWER : MIN_POWER, Math.min(len, MAX_PULL) / MAX_PULL);
-  const cueMult = cue === 'break' ? BREAK_SPEED_MULT : cue === 'draw' ? DRAW_POWER : 1;
+  // Cue cards: base levels move the cue's numbers (level 0 = today's constants).
+  const power = Math.max(cue === 'break' ? gearVal(BREAK_MIN_POWER_LV, lv(s, 'break')) : MIN_POWER, Math.min(len, MAX_PULL) / MAX_PULL);
+  const cueMult = cue === 'break' ? gearVal(BREAK_SPEED_MULT_LV, lv(s, 'break')) : cue === 'draw' ? gearVal(DRAW_POWER_LV, lv(s, 'draw')) : 1;
   const speed = power * MAX_LAUNCH_SPEED * ballSpec(s.stats.ballType, s.stats.gearLevel[s.stats.ballType] ?? 0).speedMult * cueMult;
   b.vx = (pull.x / len) * speed;
   b.vy = (pull.y / len) * speed;

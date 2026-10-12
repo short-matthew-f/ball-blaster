@@ -336,6 +336,8 @@ export const MOMENTUM_HITS = 2;
 export const MIRROR_CHANCE = [0.3, 0.5, 0.6, 0.7];
 /** Lantern reach by card level (data only until the sim reads it; the sim's Lantern is on/off). */
 export const LANTERN_REACH = [0, 1, 2, 3];
+/** Lantern card base levels: kill cash x(1 + LANTERN_DARK_CASH x level) on dark stages (the relic itself keeps intents visible). */
+export const LANTERN_DARK_CASH = 0.1;
 export const MIRROR_DMG = 1;
 /** Tricks: base uses per run (+1 per card base level, applied by meta into RunStats.trickUses). */
 export const TRICK_USES: Record<'recall' | 'timeStop' | 'rackEm' | 'shockwave', number> = { recall: 1, timeStop: 1, rackEm: 1, shockwave: 2 };

@@ -25,6 +25,7 @@ import {
   TOKENS_KILL,
   gearVal,
   stageById,
+  LANTERN_DARK_CASH,
 } from '../core/tuning';
 import { makeEnemy } from './spawn';
 import { has, lv } from './gear';
@@ -218,7 +219,8 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
   const def = TARGET_DEFS[t.kind];
   if (!quiet) {
     const st = stageById(s.stage);
-    const mult = t.elite ? ELITE_CASH_MULT : 1;
+    const lantern = s.dark && s.lanternOn ? 1 + LANTERN_DARK_CASH * lv(s, 'lantern') : 1;
+    const mult = (t.elite ? ELITE_CASH_MULT : 1) * lantern;
     const cash = Math.round((t.cashBase ?? def.cash) * st.cashScale * s.stats.cashMult * mult);
     s.cash += cash;
     s.combo.cash = (s.combo.cash ?? 0) + cash;
