@@ -36,6 +36,8 @@ export interface BossArchetype {
   signature: BossTrait[];
   /** Cadre size when the boss has the cadre trait. */
   cadre: number;
+  /** Intent kit (sim rollIntent/checkBossPhase dispatch). Default 'stripe'. */
+  kit?: 'stripe' | 'golem' | 'mainspring';
 }
 
 export interface WorldDef {
@@ -95,7 +97,7 @@ export const WORLDS: WorldDef[] = [
   {
     index: 3, id: 'clock', name: 'Clockwork Works', tint: 'y', physics: { friction: 0.6, rollDecel: 70, wallBounce: 0.8 }, hpMult: 2.2, atkMult: 1.4, hazard: 'conveyor',
     roster: FELT_ROSTER,
-    boss: { name: 'The Mainspring', hp: 60, r: 23, signature: ['moves'], cadre: 2 }, waves: FELT_WAVES, bossWave: FELT_BOSS_WAVE,
+    boss: { name: 'The Mainspring', hp: 60, r: 23, signature: ['moves'], cadre: 2, kit: 'mainspring' }, waves: FELT_WAVES, bossWave: FELT_BOSS_WAVE,
   },
   {
     index: 4, id: 'bog', name: 'Bog', tint: 'w', physics: { friction: 0.9, rollDecel: 110, wallBounce: 0.6 }, hpMult: 2.2, atkMult: 1.4, hazard: 'mud',

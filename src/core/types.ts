@@ -69,13 +69,20 @@ export type Modifier =
 export type BossTrait = 'phases' | 'cadre' | 'moves';
 
 /** Board hazards. Only 'ice' has behaviour yet (zero friction inside); the rest are data-only stubs. */
-export type HazardKind = 'ice' | 'conveyor' | 'mud' | 'lava' | 'slot';
+export type HazardKind = 'ice' | 'conveyor' | 'gear' | 'mud' | 'lava' | 'slot';
 
 export interface Hazard {
   kind: HazardKind;
   x: number;
   y: number;
+  /** Radius (circular hazards: ice, gear). Conveyors use r 0 with w/h. */
   r: number;
+  /** Conveyor rect size (centre at x,y). */
+  w?: number;
+  h?: number;
+  /** Conveyor unit direction (one of the four axes). The Mainspring's phase 2 negates these on RunState.hazards. */
+  dx?: number;
+  dy?: number;
 }
 
 export type Formation = 'rack' | 'wall' | 'pincer' | 'ring' | 'scatter';
@@ -213,12 +220,14 @@ export type TargetKind =
   | 'hive'
   | 'frost' // freezes an ally (Ice)
   | 'cadre' // boss shield minion (Rime Golem)
+  | 'cog' // Clockwork: rolling gear; banked charge that ricochets and bumps its own side
+  | 'tinker' // Clockwork: repairs (heals) the most damaged ally in range
   | 'boss';
 
 /** Alias: v0.2 enemies are physics bodies. `Target` is kept so render/ui keep compiling. */
 export type EnemyKind = TargetKind;
 
-export type IntentType = 'attack' | 'shoot' | 'advance' | 'charge' | 'guard' | 'detonate' | 'summon' | 'rest';
+export type IntentType = 'attack' | 'shoot' | 'advance' | 'charge' | 'guard' | 'detonate' | 'summon' | 'rest' | 'repair' | 'wind';
 
 export interface Intent {
   t: IntentType;
@@ -282,9 +291,13 @@ export interface Target {
   poison?: number;
   /** Chill relic: enemy phases left chilled (charge speed/reach x0.6, Advance x0.5). */
   chill?: number;
+  /** Cog: rail contacts during the current charge (reset at launch; the second stops the charge). */
+  railHits?: number;
+  /** Per-body cash override (boss-summoned cogs pay 1). kill() reads it instead of the kind's cash. */
+  cashBase?: number;
 }
 
-export type ObstacleKind = 'bumper' | 'crate' | 'chest' | 'shrine';
+export type ObstacleKind = 'bumper' | 'crate' | 'chest' | 'shrine' | 'gear';
 
 export interface Obstacle {
   id: number;
@@ -356,6 +369,10 @@ export interface RunState {
   rangedTaken?: number;
   /** 'dark' modifier: the renderer shows an enemy's intent only when sim intentVisible(s, t) is true. */
   dark: boolean;
+  /** Clockwork: sim time at which the conveyor sweep fires this enemy phase (undefined = no sweep pending). */
+  beltAt?: number;
+  /** Clockwork: the Mainspring's Wind intent: the next sweep runs twice. */
+  beltWound?: boolean;
   seed: number;
   rng: Rng;
   stats: RunStats;
@@ -513,7 +530,15 @@ export type FxEvent =
   /** Explosive relic blast ring. */
   | { t: 'blast'; x: number; y: number; r: number }
   /** Shrapnel shard released. */
-  | { t: 'shard'; x: number; y: number };
+  | { t: 'shard'; x: number; y: number }
+  /** Clockwork: a body was carried by a conveyor from (x-dx, y-dy) to (x, y). */
+  | { t: 'belt'; x: number; y: number; dx: number; dy: number }
+  /** Clockwork: the gear deflected a body at (x,y). */
+  | { t: 'gearSpin'; x: number; y: number }
+  /** Clockwork: a tinker repaired an ally at (x,y). */
+  | { t: 'repair'; x: number; y: number; amount: number }
+  /** Clockwork: the Mainspring reversed every conveyor (phase 2 entry). */
+  | { t: 'beltReverse' };
 
 // ---------- Derived per-run stats (meta -> sim contract) ----------
 
@@ -527,6 +552,8 @@ export interface RunStats {
   /** Extra damage per (impact speed / SPEED_DMG_REF), floored. 0 = locked. */
   speedDamage: number;
   aimPreview: number; // 0 = off, else number of wall bounces to preview
+  /** Clockwork counter (CLEATS): 0 = belts carry the hero 24 px, 1 = 12 px, 2 = 0. */
+  beltGrip: number;
 
   // Vitality (every heal goes through the shared diminishing curve)
   healOnKill: number; // HP per kill, 0 = off

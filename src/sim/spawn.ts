@@ -24,8 +24,8 @@ const HERO_CLEARANCE = 8;
 const RACK_PITCH = 27;
 const WALL_GAP = 30;
 
-export const OBSTACLE_R: Record<ObstacleKind, number> = { bumper: 6, crate: 5, chest: 6, shrine: 6 };
-const OBSTACLE_HP: Record<ObstacleKind, number> = { bumper: Infinity, crate: 1, chest: 2, shrine: 1 };
+export const OBSTACLE_R: Record<ObstacleKind, number> = { bumper: 6, crate: 5, chest: 6, shrine: 6, gear: 14 };
+const OBSTACLE_HP: Record<ObstacleKind, number> = { bumper: Infinity, crate: 1, chest: 2, shrine: 1, gear: Infinity };
 
 /** Summons (grubs) never count for wave clear or the area cap. */
 export function isRegular(t: Target): boolean {

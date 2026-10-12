@@ -56,6 +56,15 @@ export const TARGET_DEFS: Record<TargetKind, TargetDef> = {
     hp: 4, r: 11, mass: 1.2, cash: 4, bounce: 1, staggerAt: 1, chargeSpeed: 240, reach: 90,
     intents: [{ t: 'attack', n: 1, weight: 50 }, { t: 'rest', weight: 50 }], // boss shield minion (Rime Golem)
   },
+  // Clockwork (spec values; sim owner may retune within the gate)
+  cog: {
+    hp: 4, r: 13, mass: 1.5, cash: 9, bounce: 1.2, staggerAt: 2, chargeSpeed: 280, reach: 140,
+    intents: [{ t: 'attack', n: 3, weight: 55 }, { t: 'advance', weight: 30 }, { t: 'rest', weight: 15 }], // banked charge, ricochets, friendly fire
+  },
+  tinker: {
+    hp: 3, r: 12, mass: 1.2, cash: 8, bounce: 1, staggerAt: 1, chargeSpeed: 0, reach: 0,
+    intents: [{ t: 'repair', weight: 60 }, { t: 'shoot', n: 1, weight: 40 }], // repair = heal most damaged ally within 70 px
+  },
   boss: {
     hp: 40, r: 23, mass: 8, cash: 60, bounce: 0.9, staggerAt: 4, chargeSpeed: 240, chargedSpeed: 400, reach: 90,
     intents: [], // scripted per phase (sim/enemy.ts)
@@ -164,6 +173,7 @@ export const BASE_STATS: RunStats = {
   damage: 1,
   speedDamage: 0,
   aimPreview: 0,
+  beltGrip: 0,
   healOnKill: 0,
   waveHeal: 3,
   bossHeal: 0,

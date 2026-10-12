@@ -431,6 +431,8 @@ function executeIntent(s: RunState, e: Target, fx: FxEvent[]): boolean {
       if (grubs < cap) summonNear(s, e, 'grub', fx);
       return false;
     }
+    case 'repair': // Clockwork tinker (sim owner implements)
+    case 'wind': // Clockwork Mainspring (sim owner implements)
     case 'rest':
       return false;
   }
