@@ -114,8 +114,9 @@ describe('islands', () => {
     expect(node('cashBonus').name).toBe('POCKET CHG');
     expect(node('g1_grit').name).toBe('GRIT');
     expect(node('bumpers').currency).toBe('cash');
-    expect([0, 1, 2].map((l) => node('bumpers').cost(l))).toEqual([60, 120, 240]);
-    expect([0, 1, 2].map((l) => node('crates').cost(l))).toEqual([60, 120, 240]);
+    const m1 = ISLAND_PRICE_MULT[1];
+    expect([0, 1, 2].map((l) => node('bumpers').cost(l))).toEqual([60, 120, 240].map((v) => Math.round(v * m1)));
+    expect([0, 1, 2].map((l) => node('crates').cost(l))).toEqual([60, 120, 240].map((v) => Math.round(v * m1)));
     expect(node('cap_w1').currency).toBe('stripe');
     expect(node('cap_w1').cost(0)).toBe(2);
     expect(node('cap_w1').icon).toBe('icon_cap');
@@ -170,24 +171,25 @@ describe('islands', () => {
     }
   });
   it('themed prices: base x f_k, step as today', () => {
-    const f = (k: number) => CASH_GROWTH ** (4 * (k - 1));
+    const f = (k: number) => CASH_GROWTH ** (4 * (k - 1)) * ISLAND_PRICE_MULT[k];
     expect(node('secondWind').cost(1)).toBe(Math.round(25 * f(2) * 1.6));
     expect(node('heavyHits').cost(0)).toBe(Math.round(120 * f(3)));
     expect(node('bossHeal').cost(2)).toBe(Math.round(120 * f(5)));
     expect(node('chests').cost(0)).toBe(Math.round(120 * f(2)));
     expect(node('shrine').cost(3)).toBe(Math.round(800 * f(3)));
-    expect(node('g4_dmg').cost(0)).toBe(Math.round(300 * CASH_GROWTH ** 12));
+    expect(node('g4_dmg').cost(0)).toBe(Math.round(300 * f(4)));
     expect(node('g2_counter').cost(0)).toBe(Math.round(100 * f(2)));
   });
   it('ISLAND_PRICE_MULT reprices an island at call time', () => {
     const before = node('g2_dmg').cost(0);
+    const saved = ISLAND_PRICE_MULT[2];
     ISLAND_PRICE_MULT[2] = 1.5;
     try {
       expect(node('g2_dmg').cost(0)).toBe(Math.round(300 * CASH_GROWTH ** 4 * 1.5));
-      expect(node('damage').cost(0)).toBe(5);
+      expect(node('damage').cost(0)).toBe(Math.round(5 * ISLAND_PRICE_MULT[1]));
       expect(node('portal_w2').cost(0)).toBe(3);
     } finally {
-      ISLAND_PRICE_MULT[2] = 1;
+      ISLAND_PRICE_MULT[2] = saved;
     }
     expect(node('g2_dmg').cost(0)).toBe(before);
   });
