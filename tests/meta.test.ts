@@ -132,12 +132,12 @@ describe('grafts', () => {
   it('capstone needs siblings maxed', () => {
     const sv = newSave();
     sv.cash = 1e9;
-    sv.levels = { thickSkin: 1, g1_counter: 3, g1_cash: 5, g1_dmg: 5, g1_hp: 4 };
+    sv.levels = { thickSkin: 1, g1_counter: 3, g1_cash: 5, g1_dmg: 8, g1_hp: 7 };
     expect(buyState(sv, node('g1_cap'))).toBe('locked');
-    sv.levels.g1_hp = 5;
+    sv.levels.g1_hp = 8;
     expect(buyState(sv, node('g1_cap'))).toBe('ok');
     expect(buy(sv, node('g1_cap'))).toBe(true);
-    expect(buildStats(sv).maxHp).toBe(Math.round((BASE_STATS.maxHp + 6 + 5) * 1.6));
+    expect(buildStats(sv).maxHp).toBe(Math.round((BASE_STATS.maxHp + 6 + 5) * 1.96));
   });
   it('counter/cash nodes apply only on their world; graft cost scales', () => {
     const sv = newSave();
@@ -153,15 +153,15 @@ describe('grafts', () => {
 });
 
 describe('graft shape', () => {
-  it('five nodes per graft with fixed ids, all reachable, capstone gated by four siblings', () => {
+  it('six nodes per graft with fixed ids, all reachable, capstone gated by four siblings', () => {
     for (let w = 1; w <= 6; w++) {
-      const ids = ['counter', 'cash', 'dmg', 'hp', 'cap'].map((k) => `g${w}_${k}`);
+      const ids = ['counter', 'cash', 'dmg', 'hp', 'grit', 'cap'].map((k) => `g${w}_${k}`);
       const own = NODES.filter((n) => n.graft === w).map((n) => n.id);
       expect(own.sort()).toEqual([...ids].sort());
-      expect(CAPSTONE_NEEDS.get(`g${w}_cap`)).toEqual(ids.slice(0, 4));
+      expect(CAPSTONE_NEEDS.get(`g${w}_cap`)).toEqual(ids.filter((i) => !/grit|cap/.test(i)));
       expect(MULT_IDS.has(`g${w}_dmg`) && MULT_IDS.has(`g${w}_hp`)).toBe(true);
       const sv = newSave();
-      for (const id of ids.slice(0, 4)) sv.levels[id] = 1;
+      for (const id of ids.filter((i) => !/grit|cap/.test(i))) sv.levels[id] = 1;
       for (const id of ids) {
         const reach = new Set<string>(['hero']);
         let grew = true;
@@ -173,14 +173,26 @@ describe('graft shape', () => {
       }
     }
   });
+  it('levels and grit', () => {
+    expect(node('g3_dmg').maxLevel).toBe(8);
+    expect(node('g3_hp').maxLevel).toBe(8);
+    expect(node('g3_grit').maxLevel).toBe(4);
+    expect(node('g3_grit').name).toBe('GRIT IV');
+    expect(node('g3_grit').links).toEqual(['g3_hp']);
+    const sv = newSave();
+    sv.levels = { g1_grit: 1 };
+    expect(buildStats(sv).armor).toBe(BASE_STATS.armor + 1);
+    sv.levels = { g1_grit: 3 };
+    expect(buildStats(sv).maxHp).toBe(Math.round(BASE_STATS.maxHp * 1.08));
+  });
   it('prices use CASH_GROWTH; dmg/hp tiers apply after flat nodes', () => {
     expect(node('g4_dmg').cost(0)).toBe(Math.round(300 * CASH_GROWTH ** 12));
     expect(node('g1_dmg').name).toBe('DAMAGE II');
     expect(node('g2_hp').name).toBe('MAX HP III');
     expect(node('l1_power_a').cost(0)).toBe(Math.round(300 * CASH_GROWTH ** 28));
     const sv = newSave();
-    sv.levels = { g1_hp: 5, g1_counter: 3 };
-    expect(buildStats(sv).maxHp).toBe(Math.round((BASE_STATS.maxHp + 6) * 1.6));
+    sv.levels = { g1_hp: 8, g1_counter: 3 };
+    expect(buildStats(sv).maxHp).toBe(Math.round((BASE_STATS.maxHp + 6) * 1.96));
   });
 });
 
@@ -198,10 +210,10 @@ describe('loops and multipliers', () => {
   });
   it('percent nodes multiply after flat nodes', () => {
     const sv = newSave();
-    sv.levels = { damage: 5, g5_dmg: 5 };
-    expect(buildStats(sv).damage).toBe(Math.round((BASE_STATS.damage + 5) * 1.6));
+    sv.levels = { damage: 5, g5_dmg: 8 };
+    expect(buildStats(sv).damage).toBe(Math.round((BASE_STATS.damage + 5) * 1.96));
     sv.levels.g5_cap = 1; // +2 flat damage, still before the percent
-    expect(buildStats(sv).damage).toBe(Math.round((BASE_STATS.damage + 7) * 1.6));
+    expect(buildStats(sv).damage).toBe(Math.round((BASE_STATS.damage + 7) * 1.96));
   });
 });
 

@@ -190,7 +190,7 @@ const gridOf = (id: string): [number, number] => {
 
 const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
 
-/** The five nodes of a world's graft; priced for that world's stages. */
+/** The six nodes of a world's graft; priced for that world's stages. */
 export function makeGraft(world: number): UpgradeNode[] {
   const g = GRAFTS[world];
   const f = CASH_GROWTH ** (4 * (world - 1));
@@ -205,18 +205,21 @@ export function makeGraft(world: number): UpgradeNode[] {
     cost: price(100, 1.5), icon: 'icon_hp', apply: (s, l) => { s.maxHp += 2 * l; } });
   const cash = mk({ ...common, id: id('cash'), name: g.cash[0], desc: g.cash[1], kind: 'stat', g: at(1, 1), links: [id('counter')], max: 5,
     cost: price(80, 1.5), icon: 'icon_cash', apply: (s, l) => { s.cashMult += 0.05 * l; } });
-  const dmg = mk({ ...common, id: id('dmg'), name: `DAMAGE ${tierName}`, desc: '+12% damage', kind: 'stat', g: at(2, 0), links: [id('counter')], max: 5,
+  const dmg = mk({ ...common, id: id('dmg'), name: `DAMAGE ${tierName}`, desc: '+12% damage', kind: 'stat', g: at(2, 0), links: [id('counter')], max: 8,
     cost: price(300, 1.5), icon: 'icon_damage', apply: (s, l) => { s.damage *= 1 + 0.12 * l; } });
-  const hp = mk({ ...common, id: id('hp'), name: `MAX HP ${tierName}`, desc: '+12% max HP', kind: 'stat', g: at(2, 1), links: [id('cash')], max: 5,
+  const hp = mk({ ...common, id: id('hp'), name: `MAX HP ${tierName}`, desc: '+12% max HP', kind: 'stat', g: at(2, 1), links: [id('cash')], max: 8,
     cost: price(300, 1.5), icon: 'icon_hp', apply: (s, l) => { s.maxHp *= 1 + 0.12 * l; } });
+  const grit = mk({ ...common, id: id('grit'), name: `GRIT ${tierName}`, desc: '+1 armor, +4% HP', kind: 'stat', g: at(2, 2), links: [id('hp')], max: 4,
+    cost: price(250, 1.5), icon: 'icon_armor', apply: (s, l) => { s.armor += 1; s.maxHp *= 1 + 0.04 * (l - 1); } });
   const cap = mk({ ...common, id: id('cap'), name: g.cap[0], desc: g.cap[1], kind: 'capstone', g: at(3, 1), links: [id('dmg'), id('hp')], max: 1,
     cost: price(400, 1), icon: 'icon_lock', apply: (s) => g.cap[2](s) });
   WORLD_ONLY.set(counter.id, world);
   WORLD_ONLY.set(cash.id, world);
   MULT_IDS.add(dmg.id);
   MULT_IDS.add(hp.id);
+  MULT_IDS.add(grit.id);
   CAPSTONE_NEEDS.set(cap.id, [counter.id, cash.id, dmg.id, hp.id]);
-  return [counter, cash, dmg, hp, cap];
+  return [counter, cash, dmg, hp, grit, cap];
 }
 
 // --------------------------------------------------------------- loop rings
