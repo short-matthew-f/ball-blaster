@@ -113,9 +113,22 @@ Resolves DESIGN-v0.4-loadout gaps. Numbers live in `core/tuning.ts` (per-level a
 
 ## Scope
 
-- Felt and Ice stages; Clockwork and Bog deferred.
+- Felt, Ice and Clockwork worlds; Bog, Ember Pit and Neon Casino are stubs (Felt roster, tinted felt).
 - All art and sound are original and generated in code.
 
 | World openers may be breathers | The gate's lower bound is 2 (not 4) for slot 1 of worlds >= 2: a player arrives over-levelled after grinding the previous world's slot 4, and the plain opener is meant to feel like relief. Per-slot HP multipliers only moved which stage was easy. (v0.4 gear pass: w3s1 noisy median 2, perfect 3.) |
 
 | Time Stop untested at scale | The progression bot never owns a trick through world 3 (10–15 emeralds; it buys the cheapest node first), so Time Stop is covered only by unit tests and the per-trick diagnostic (PROG_TRICK). Watch it in human play. |
+
+## World 3 — Clockwork Works (v0.5)
+
+| Gap | Decision | Why |
+|---|---|---|
+| Conveyors | Rects (100x20 / 20x80, 1/2/2/3 per slot, seeded, placed above the spawn zone). At the start of each enemy phase every *resting* body whose centre is on a belt is carried 24 px (`BELT_SHIFT`) along it, front-most first (id tiebreak), sliding to the first contact; frozen enemies block; a 0.3 s hold shows it. Rolling bodies are never pushed. | A continuous belt force is dt-dependent and would break fast-forward determinism; a phase-start sweep is a readable leave tax. |
+| Cleats (counter) | `g3_counter` = CLEATS, 2 levels: the hero is carried 24 / 12 / 0 px (`stats.beltGrip`). Enemies always 24. No +2 HP. | Ice already has ICE GRIP; the world's counter should answer the world's hazard. |
+| Gear | A hazard converted to an `Obstacle {kind:'gear', hp: Infinity}` at run start. Contact turns the exit velocity +35 deg clockwise, capped at 75 deg from the outward normal; enemies take +1 stagger once per phase and lose their charge; the hero takes no damage; not a Ricochet rail. | Uncapped turns pointed glancing exits back into the gear (orbits, ~1,000 contacts/run). As an obstacle it gets cover, formation avoidance and jam searches for free. |
+| Cog | hp 4, r 13, mass 1.5, cash 9, bounce 1.2; Attack 3 (55) banked off a rail, Advance (30), Rest (15). A charging cog is never the bumped body: allies it crosses take the flat bump (1 + stagger). The second rail contact stops the charge. Rail restitution 0.6 x 1.2, never Thin Rails. Max 2 per regular wave (extras become grunts). | Friendly fire is the cog's hook; the stagger is the real payoff at w3 HP. |
+| Tinker | hp 3, r 12, cash 8, staggerAt 1; Repair (60) heals the most damaged non-boss, non-cadre ally within 70 px by min(missing, ceil(2 x hpScale)); else Shoot 1 (40). Never heals itself. | A flat 2 is ~1 % of a w3 grunt. |
+| The Mainspring | Boss `kit: 'mainspring'`, HP 70 (Big Stripe 60), signature `moves` (soft-rolls 40 px at the hero after Wind / Charge / Summon). Phase 1: Attack 4 / Advance / Wind (the next sweep runs twice). Phase 2 (<= 50 %): every belt reverses once (`beltReverse` fx with `bossPhase`); Slam 8 when charged; Summon cog (cap 2 live, `summon`, cash 1 via `Target.cashBase`). | HP 70 was the only lever that fixed w3s4 (runs ended at the boss at every world multiplier). |
+| Gate v0.5 | World 3 hpMult 2.2 -> 1.8, atkMult 1.4 -> 1.3, Mainspring HP 70: noisy medians 4 6 9 4 (w3s3 at the edge), perfect 3 6 8 4; stages 0-7 unchanged (6 5 5 6 / 4 5 9 6). Not belt-aware: every seed owns CLEATS 2 by w3s2, so hero drift is only covered by unit tests and human play. Loop stages can place fewer belts than asked (200-try rule). | |
+| Modifiers | Thin Rails never touches cog ricochets. Dark: belts and the drift ghost always drawn. Frost World: frozen enemies block belts. Time Stop and Reflex: belts still run. | The board is not an intent. |
