@@ -574,9 +574,8 @@ function playForResult(stage: string, seed: number, stats: RunStats, bot: ProgBo
 
 // ---------- v0.6 shopping (M2 spec §6) ----------
 // Cash: island nodes 'ok' + buyable card bases, cheapest first (tie: id), until none. Tokens (v0.6 M3 spec §4): per world
-// ascending while that world's token count is > 0: (1) the next island's portal, (2) the safe fork (SAFE_FORK) of an owned
-// level-2+ card of the world without one, CARD_PRIORITY order (forks before unlocks, or the base-III gate stalls every card
-// at II), (3) the world's cards in CARD_PRIORITY order, (4) the world's island capstone, (5) the safe cap (SAFE_CAP) of a
+// ascending while that world's token count is > 0: (1) the next island's portal, (2) the world's cards in CARD_PRIORITY order, (3) the safe fork (SAFE_FORK) of an owned
+// level-2+ card of the world without one (unlocks first: see the note in the loop), (4) the world's island capstone, (5) the safe cap (SAFE_CAP) of a
 // level-3 card without one; stop the world when none is buyable. Empty forks/caps (pre-M3 catalogue) skip (2) and (5). An empty CARDS catalogue means "no cards" (pre-M2 tree:
 // the token phase then falls back to that world's token nodes, cheapest first, so M1 trees still shop).
 
@@ -715,14 +714,17 @@ function greedyBuy(save: SaveData, shop?: Shop): { bought: number; cash: number 
         note(tok, 'portal', portal.id, t0);
         continue;
       }
-      const fork = PROG_CARDS ? safeChoice(save, w, 'fork') : undefined;
-      if (fork && setFork(save, fork.card, fork.choice) && save.tokens[tok] < t0) {
-        note(tok, 'fork', fork.choice, t0);
-        continue;
-      }
+      // Unlocks before forks (DECISIONS "Gate v0.6 M3"): a fork bought before the 4th world-1 unlock cost the bot Ricochet
+      // and flipped its kit to Split+Lightning, which the M2 prices were not calibrated against. Forks are exercised by
+      // the PROG_FORK sweep, not by the default gate.
       const card = PROG_CARDS ? CARD_PRIORITY[w - 1].find((id) => !PROG_SKIP_CARD.has(id) && cardById(id)?.world === w && cardBuyState(save, id) === 'open') : undefined;
       if (card && buyCard(save, card)) {
         note(tok, 'card', card, t0);
+        continue;
+      }
+      const fork = PROG_CARDS ? safeChoice(save, w, 'fork') : undefined;
+      if (fork && setFork(save, fork.card, fork.choice) && save.tokens[tok] < t0) {
+        note(tok, 'fork', fork.choice, t0);
         continue;
       }
       const cap = nodeById(save, `cap_w${w}`);

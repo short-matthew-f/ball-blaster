@@ -98,7 +98,7 @@ export const WORLDS: WorldDef[] = [
     boss: { name: 'Big Stripe', hp: 60, r: 23, signature: [], cadre: 2 }, waves: FELT_WAVES, bossWave: FELT_BOSS_WAVE,
   },
   {
-    index: 2, id: 'ice', name: 'Ice Cavern', tint: 'b', physics: { friction: 0.4, rollDecel: 45, wallBounce: 0.92 }, hpMult: 2.2, atkMult: 2, hazard: 'ice',
+    index: 2, id: 'ice', name: 'Ice Cavern', tint: 'b', physics: { friction: 0.4, rollDecel: 45, wallBounce: 0.92 }, hpMult: 1.9, atkMult: 2, hazard: 'ice',
     roster: [...FELT_ROSTER, 'frost'],
     boss: { name: 'Rime Golem', hp: 40, r: 23, signature: ['cadre'], cadre: 3 }, waves: ICE_WAVES, bossWave: ICE_BOSS_WAVE,
   },
