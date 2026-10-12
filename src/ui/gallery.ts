@@ -3,8 +3,8 @@
 import { TOKEN_OF_WORLD } from '../core/types';
 import type { SaveData, TokenId } from '../core/types';
 import { WORLDS, parseStageId } from '../core/worlds';
-import { CARDS, buyBase, buyCard, cardBuyState, cardById, cardOwned } from '../meta/cards';
-import type { CardDef, CardSlot } from '../meta/cards';
+import { CARDS, buyBase, buyCard, capBuyState, cardBuyState, cardById, cardOwned, forkBuyState, setCap, setFork } from '../meta/cards';
+import type { CardDef, CardSlot, ChoiceBuyState } from '../meta/cards';
 import { ROOT_ID, cueSlotOpen, equip, nodesFor, relicSlots, trickSlotOpen, unequip } from '../meta/index';
 import { PALETTE } from '../render/palette';
 import { getMenuBg } from '../render/renderer';
@@ -304,6 +304,49 @@ export class GalleryScreen implements Screen {
     ctx.fillRect(x + 2, y + 2, size - 4, size - 4);
   }
 
+  private rowXs(n: number): number[] {
+    return n >= 3 ? [60, 90, 120] : n === 2 ? [70, 110] : [90];
+  }
+
+  private choiceState(def: CardDef, row: 'f' | 'c', id: string): ChoiceBuyState {
+    return row === 'f' ? forkBuyState(this.app.save, def.id, id) : capBuyState(this.app.save, def.id, id);
+  }
+
+  private drawChoices(ctx: CanvasRenderingContext2D, now: number, def: CardDef, row: 'f' | 'c', cy: number): void {
+    const list = row === 'f' ? def.forks : def.caps;
+    const xs = this.rowXs(list.length);
+    const glyph = row === 'f' ? 'node_fork' : 'node_capstone';
+    drawText(ctx, row === 'f' ? 'FORK' : 'CAP', xs[0] - 14, cy - 6, { align: 'right', color: P['3'] });
+    list.forEach((ch, i) => {
+      const cx = xs[i];
+      const st = this.choiceState(def, row, ch.id);
+      let border: string = P['2'];
+      if (st === 'poor') border = P['3'];
+      else if (st === 'open' || st === 'active') border = P.Y;
+      else if (st === 'owned') border = P.B;
+      if (this.node === `${row}${i}` && Math.floor(now * 4) % 2 === 0) border = P['5'];
+      if (st === 'open') {
+        ctx.globalAlpha = 0.35 + 0.25 * Math.sin(now * 5);
+        ctx.fillStyle = P.Y;
+        ctx.fillRect(Math.round(cx - 11.5), Math.round(cy - 11.5), 23, 23);
+        ctx.globalAlpha = 1;
+      }
+      if (st === 'active') {
+        const x = Math.round(cx - 11.5), y = Math.round(cy - 11.5);
+        ctx.fillStyle = P.Y;
+        ctx.fillRect(x, y, 23, 1); ctx.fillRect(x, y + 22, 23, 1); ctx.fillRect(x, y, 1, 23); ctx.fillRect(x + 22, y, 1, 23);
+      }
+      this.drawNodeSquare(ctx, cx, cy, 19, border, P['1']);
+      drawSprite(ctx, glyph, cx, cy, { scale: 2, alpha: st === 'locked' ? 0.3 : 1 });
+      const tag = ch.name.slice(0, 5);
+      const col = st === 'active' ? P.Y : st === 'locked' ? P['2'] : P['4'];
+      if (list.length >= 3 && i === 1) drawText(ctx, tag, cx, cy + 12, { align: 'center', color: col });
+      else if (i === 0 && cx < 90) drawText(ctx, tag, cx - 12, cy + 1, { align: 'right', color: col });
+      else drawText(ctx, tag, cx + 12, cy - 2, { color: col });
+      this.pageNodes.push({ id: `${row}${i}`, cx, cy, size: 19 });
+    });
+  }
+
   private drawPage(ctx: CanvasRenderingContext2D, now: number, def: CardDef, btns: Button[]): void {
     const save = this.app.save;
     const stub = !!def.stub;
@@ -335,7 +378,7 @@ export class GalleryScreen implements Screen {
     link(90, UY + 18, 90, I_Y - 11, owned, owned && lv >= 0);
     link(90, I_Y + 11, 90, II_Y - 11, lv >= 1, lv >= 1);
     link(90, II_Y + 11, 90, FORK_Y - 9, lv >= 2, false);
-    link(70, FORK_Y, 110, FORK_Y + 1, false, false);
+    if (def.forks.length) { const xs = this.rowXs(def.forks.length); link(xs[0], FORK_Y, xs[xs.length - 1] + 1, FORK_Y + 1, lv >= 2, false); }
     link(90, FORK_Y + 9, 90, III_Y - 11, false, false);
     link(90, III_Y + 11, 90, CAP_Y - 9, lv >= 3, false);
 
@@ -377,21 +420,25 @@ export class GalleryScreen implements Screen {
       this.pageNodes.push({ id: `b${i}`, cx: 90, cy, size: 23 });
     }
 
-    // fork row (M3): greyed
-    ctx.globalAlpha = 0.45;
-    for (const fx of [70, 110]) {
-      this.drawNodeSquare(ctx, fx, FORK_Y, 19, P['2'], P['1']);
-      drawSprite(ctx, 'node_fork', fx, FORK_Y, { scale: 2 });
+    // fork / capstone rows: tappable choices, or a greyed SOON row for cards without any yet
+    if (def.forks.length) this.drawChoices(ctx, now, def, 'f', FORK_Y);
+    else {
+      ctx.globalAlpha = 0.45;
+      for (const fx of [70, 110]) {
+        this.drawNodeSquare(ctx, fx, FORK_Y, 19, P['2'], P['1']);
+        drawSprite(ctx, 'node_fork', fx, FORK_Y, { scale: 2 });
+      }
+      ctx.globalAlpha = 1;
+      drawText(ctx, 'SOON', 90, FORK_Y - 2, { align: 'center', color: P['3'] });
     }
-    ctx.globalAlpha = 1;
-    drawText(ctx, 'SOON', 90, FORK_Y - 2, { align: 'center', color: P['3'] });
-
-    // capstone row (M3): greyed
-    ctx.globalAlpha = 0.45;
-    this.drawNodeSquare(ctx, 90, CAP_Y, 19, P['2'], P['1']);
-    drawSprite(ctx, 'node_capstone', 90, CAP_Y, { scale: 2 });
-    ctx.globalAlpha = 1;
-    drawText(ctx, 'SOON', 105, CAP_Y - 2, { color: P['3'] });
+    if (def.caps.length) this.drawChoices(ctx, now, def, 'c', CAP_Y);
+    else {
+      ctx.globalAlpha = 0.45;
+      this.drawNodeSquare(ctx, 90, CAP_Y, 19, P['2'], P['1']);
+      drawSprite(ctx, 'node_capstone', 90, CAP_Y, { scale: 2 });
+      ctx.globalAlpha = 1;
+      drawText(ctx, 'SOON', 105, CAP_Y - 2, { color: P['3'] });
+    }
 
     this.drawPanel(ctx, def, btns, have);
   }
@@ -437,11 +484,45 @@ export class GalleryScreen implements Screen {
       const label = done ? 'OWNED' : !owned || !next ? 'LOCKED' : gated ? 'PICK FORK' : poor ? 'NEED MORE' : 'BUY';
       btns.push({ id: 'buyBase', x: 100, y: PANEL_Y + 3, w: 74, h: 14, label, scale: label === 'BUY' ? 2 : 1, style: 'gold', disabled: label !== 'BUY' });
     }
+    else if (/^[fc][0-9]$/.test(sel)) this.drawChoicePanel(ctx, def, btns, sel);
     if (owned) {
       const eq = this.equipped(def);
       const open = this.slotOpen(def.slot);
       const label = !open ? 'SLOT LOCKED' : eq ? 'UNEQUIP' : 'EQUIP';
       btns.push({ id: 'equip', x: 100, y: PANEL_Y + 18, w: 74, h: 14, label, scale: label === 'EQUIP' ? 2 : 1, style: eq ? 'red' : 'gold', disabled: !open });
+    }
+  }
+
+  private drawChoicePanel(ctx: CanvasRenderingContext2D, def: CardDef, btns: Button[], sel: string): void {
+    const row = sel[0] as 'f' | 'c';
+    const ch = (row === 'f' ? def.forks : def.caps)[Number(sel[1])];
+    if (!ch) return;
+    const st = this.choiceState(def, row, ch.id);
+    const ty = PANEL_Y + 5;
+    const need = row === 'f' ? 'BASE II' : 'BASE III';
+    drawText(ctx, ch.name, 7, ty, { color: P.Y, shadow: P['0'] });
+    if (st === 'active' || st === 'owned' || st === 'locked') drawText(ctx, st === 'active' ? 'ACTIVE' : st === 'owned' ? 'OWNED' : 'LOCKED', 94, ty, { align: 'right', color: P['4'] });
+    else {
+      const have = (this.app.save.tokens[tokenOf(def)] ?? 0) >= ch.cost;
+      drawText(ctx, String(ch.cost), 94, ty, { align: 'right', color: have ? P.Y : P.R });
+      drawSprite(ctx, `token_${tokenOf(def)}`, 85, ty + 3);
+    }
+    wrapText(ch.desc, 21).slice(0, 2).forEach((l, k) => drawText(ctx, l, 7, ty + 9 + k * 7, { color: P['4'] }));
+    const label = st === 'open' ? 'BUY' : st === 'owned' ? 'SELECT' : st === 'active' ? 'ACTIVE' : st === 'poor' ? 'NEED MORE' : `NEEDS ${need}`;
+    btns.push({ id: 'choice', x: 100, y: PANEL_Y + 3, w: 74, h: 14, label, scale: label === 'BUY' || label === 'SELECT' ? 2 : 1, style: 'gold', disabled: label !== 'BUY' && label !== 'SELECT' });
+  }
+
+  private tapChoice(def: CardDef, sel: string): void {
+    const row = sel[0] as 'f' | 'c';
+    const ch = (row === 'f' ? def.forks : def.caps)[Number(sel[1])];
+    if (!ch) return;
+    const save = this.app.save;
+    const st = this.choiceState(def, row, ch.id);
+    if (st !== 'open' && st !== 'owned') return;
+    if ((row === 'f' ? setFork : setCap)(save, def.id, ch.id)) {
+      this.app.persist();
+      if (st === 'open') { this.app.sfx.buy(); this.say(row === 'f' ? 'FORK TAKEN!' : 'CAPSTONE!'); }
+      else this.say('SWITCHED');
     }
   }
 
@@ -500,7 +581,14 @@ export class GalleryScreen implements Screen {
       const app = this.app;
       if (this.page) {
         const n = this.pageNodeAt(x, y);
-        if (n && n.id === d.card) { this.node = n.id; app.sfx.ui(); }
+        if (n && n.id === d.card) {
+          this.node = n.id;
+          app.sfx.ui();
+          const cdef = cardById(this.page);
+          if (cdef && /^[fc]\d$/.test(n.id) && this.choiceState(cdef, n.id[0] as 'f' | 'c', (n.id[0] === 'f' ? cdef.forks : cdef.caps)[Number(n.id[1])].id) === 'locked') {
+            this.say(!this.app.save.cards[cdef.id] ? 'UNLOCK THE CARD FIRST' : n.id[0] === 'f' ? 'NEEDS BASE II' : 'NEEDS BASE III');
+          }
+        }
       } else if (d.slot >= 0 && this.slotAt(x, y) === d.slot) {
         this.tapSlot(this.slots[d.slot]);
       } else if (d.card && this.tileAt(x, y)?.def.id === d.card) {
@@ -524,7 +612,8 @@ export class GalleryScreen implements Screen {
       if (buyCard(save, def.id)) this.bought(save, 'CARD FOUND!');
     } else if (def && id === 'buyBase') {
       if (buyBase(save, def.id)) this.bought(save, 'UPGRADED!');
-    } else if (def && id === 'equip') this.toggleEquip(save, def);
+    } else if (def && id === 'choice' && this.node) this.tapChoice(def, this.node);
+    else if (def && id === 'equip') this.toggleEquip(save, def);
   }
 
   private bought(save: SaveData, msg: string): void {

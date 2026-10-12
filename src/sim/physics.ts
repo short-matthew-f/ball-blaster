@@ -46,9 +46,18 @@ import {
   stageById,
   FOLLOW_KEEP_LV,
   STICKY_STAGGER,
+  ANCHOR_DMG,
+  ANVIL_MULT,
+  AVALANCHE_BUMP,
+  BANK_MIN_RAILS,
+  BANK_PER_RAIL,
+  BREAKER_SHOVE,
+  POCKET_MULT,
+  POCKET_RAILS,
+  WRECK_SHOVE,
 } from '../core/tuning';
 import { addPoison, addStagger, applyDamage, chainLightning, heal, heroDamage, hitEnemy, scaleAtk, scaleCash } from './damage';
-import { has, lv } from './gear';
+import { has, lv, mod } from './gear';
 import { goblinHit } from './loot';
 
 export const MAX_BALL_SPEED = MAX_LAUNCH_SPEED * 1.5;
@@ -127,7 +136,16 @@ export function pairKey(a: number, b: number): string {
 
 function mainDamage(s: RunState, speed: number): number {
   const bt = BALL_TYPES[s.stats.ballType];
-  return s.stats.damage + bt.dmgBonus + Math.floor(speed / SPEED_DMG_REF) * s.stats.speedDamage;
+  // Wrecking (heavy fork): Heavy's +1 goes; every contact shoves instead.
+  const bonus = mod(s, 'heavy.wrecking') ? 0 : bt.dmgBonus;
+  return s.stats.damage + bonus + Math.floor(speed / SPEED_DMG_REF) * s.stats.speedDamage;
+}
+
+/** Breaker / Wrecking: scale an enemy's (post-impact) velocity by k, speed-capped. */
+function shove(t: Target, k: number): void {
+  t.vx *= k;
+  t.vy *= k;
+  capSpeed(t);
 }
 
 /** True if this pair's contact may count as a new hit (separated since the last one, and the cooldown passed). */
@@ -146,6 +164,15 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
   if (s.phase === 'enemy') {
     // Enemy phase: a charging enemy deals its attack on first hero contact.
     if (b.kind === 'main' && (t.chargeDmg ?? 0) > 0) {
+      // Juggernaut (heavy capstone): the first charge to land each enemy phase is blocked (no blow, no Thorns).
+      if (mod(s, 'heavy.jugger') && !s.juggerUsed) {
+        s.juggerUsed = true;
+        t.chargeDmg = 0;
+        t.vx = 0;
+        t.vy = 0;
+        fx.push({ t: 'blocked', x: (b.x + t.x) / 2, y: (b.y + t.y) / 2 });
+        return;
+      }
       heroDamage(s, t.chargeDmg ?? 0, t.kind, b.x, b.y, fx, 'charge');
       t.chargeDmg = 0;
       // Thorns relic: the charger pays for landing its blow.
@@ -165,22 +192,45 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
   }
   let dmg: number;
   const first = b.kind === 'main' && !s.firstHitDone;
+  const carom = b.kind === 'main' && mod(s, 'ricochet.carom');
+  const anvil = first && mod(s, 'heavy.anvil');
   if (b.kind === 'main') {
     dmg = mainDamage(s, speed) + s.momentum;
-    // Ricochet: +1 per rail bounce before the first hit of the shot (that hit only).
-    if (first && has(s, 'ricochet')) dmg += Math.min(s.shotBounces, gearVal(RICOCHET_MAX, lv(s, 'ricochet')));
+    const cap = gearVal(RICOCHET_MAX, lv(s, 'ricochet'));
+    // Ricochet: +1 per rail bounce before the first hit of the shot (that hit only). Bank: +BANK_PER_RAIL per rail from
+    // BANK_MIN_RAILS rails (else +0). Carom: every hero contact counts as a rail and every contact gets the bonus.
+    if (carom) dmg += Math.min(s.shotBounces, cap);
+    else if (first && mod(s, 'ricochet.bank')) dmg += s.shotBounces >= BANK_MIN_RAILS ? Math.min(BANK_PER_RAIL * s.shotBounces, cap) : 0;
+    else if (first && has(s, 'ricochet')) dmg += Math.min(s.shotBounces, cap);
+    // Pocket: a first hit after POCKET_RAILS rails makes this shot's kills pay double (set before the hit: a killing bank pays).
+    if (first && mod(s, 'ricochet.pocket') && s.shotBounces >= POCKET_RAILS) {
+      s.pocketShot = s.shots;
+      fx.push({ t: 'combo', name: 'POCKET', mult: POCKET_MULT, x: b.x, y: b.y });
+    }
+    // Anchor: the shot after a Recall hits harder on every hero contact.
+    if (mod(s, 'recall.anchor') && s.anchorShot === s.shots) dmg += ANCHOR_DMG;
     // Jump: the first contact after landing is softer.
     if (b.jumpLanded) {
       b.jumpLanded = false;
       dmg = Math.max(1, dmg - gearVal(JUMP_PENALTY, lv(s, 'jump')));
     }
+    // Anvil: the first contact doubles after every additive bonus (and stops the hero, below).
+    if (anvil) dmg *= ANVIL_MULT;
   } else if (b.shard) dmg = SHARD_DMG;
   else if (b.kind === 'spat') dmg = s.stats.spitDamage > 0 ? s.stats.spitDamage : s.stats.damage;
   else dmg = s.stats.damage;
   const sticky = b.kind === 'main' && s.stats.ballType === 'sticky' && !s.stickyUsed;
   const heavy = b.kind === 'main' && s.stats.heavyHits > 0 && speed >= HEAVY_HIT_SPEED;
   const thorns = thornsOf(s, t);
-  hitEnemy(s, t, dmg, b.kind, fx, b, (heavy ? 2 : 1) + (sticky ? gearVal(STICKY_STAGGER, lv(s, 'sticky')) : 0), speed);
+  // Crack (break fork): the first hero contact of the shot staggers +1.
+  const crack = first && mod(s, 'break.crack') ? 1 : 0;
+  hitEnemy(s, t, dmg, b.kind, fx, b, (heavy ? 2 : 1) + (sticky ? gearVal(STICKY_STAGGER, lv(s, 'sticky')) : 0) + crack, speed);
+  // Breaker (first contact) and Wrecking (every contact) shove the struck enemy during the shot.
+  if (b.kind === 'main' && !t.dead) {
+    if (first && mod(s, 'break.breaker')) shove(t, BREAKER_SHOVE);
+    if (mod(s, 'heavy.wrecking')) shove(t, WRECK_SHOVE);
+  }
+  if (carom) s.shotBounces++;
   addPoison(s, t, fx);
   if (!t.dead && has(s, 'chill')) {
     const was = t.chill ?? 0;
@@ -195,9 +245,13 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
       b.vx = 0;
       b.vy = 0;
     }
+    if (anvil) {
+      b.vx = 0;
+      b.vy = 0;
+    }
     if (first) {
       s.firstHitDone = true;
-      if (!sticky) cueAfterContact(s, b, pvx, pvy);
+      if (!sticky && !anvil) cueAfterContact(s, b, pvx, pvy);
       if (has(s, 'explosive')) explode(s, b, t, dmg, fx);
     }
     if (s.stats.splitCount > 0 && !s.splitUsed && has(s, 'split')) {
@@ -298,7 +352,9 @@ function enemyBump(s: RunState, a: Target, b: Target, rel: number, spA: number, 
   }
   if (rel <= BUMP_DMG_SPEED) return;
   const bumped = a.dead ? b : b.dead ? a : spA < spB ? a : spB < spA ? b : a.id < b.id ? a : b;
-  hitEnemy(s, bumped, 1, 'bump', fx, undefined, 1, rel);
+  // Avalanche (heavy capstone): bumps during the shot deal AVALANCHE_BUMP.
+  const n = s.phase === 'resolve' && mod(s, 'heavy.avalanche') ? AVALANCHE_BUMP : 1;
+  hitEnemy(s, bumped, n, 'bump', fx, undefined, 1, rel);
 }
 
 /** Jump cue: the hero passes over this enemy (no collision, no relaxation) until they stop overlapping. */
@@ -385,6 +441,8 @@ function collidePair(s: RunState, A: Body, B: Body, fx: FxEvent[]): void {
 
 function wallBounceOf(s: RunState, b: Body): number {
   if (b.en) return Math.min(1, ENEMY_WALL_BOUNCE * kindBounce(b));
+  // Ghost Rail (ricochet capstone): the hero banks at full speed until its first hit of the shot.
+  if (b.ball?.kind === 'main' && s.phase === 'resolve' && !s.firstHitDone && mod(s, 'ricochet.ghost')) return 1;
   return stageById(s.stage).wallBounce;
 }
 
@@ -632,7 +690,7 @@ export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
     const sp = wallCollide(b, wallBounceOf(s, b));
     if (sp > 0 && b.ball) {
       b.ball.banked = true;
-      if (b.ball.kind === 'main' && s.phase === 'resolve' && !s.firstHitDone) s.shotBounces++;
+      if (b.ball.kind === 'main' && s.phase === 'resolve' && (!s.firstHitDone || mod(s, 'ricochet.carom'))) s.shotBounces++;
       fx.push({ t: 'wall', x: b.x, y: b.y, speed: sp });
     }
     // Cog: a charge ricochets off one rail; the second rail contact of the same charge stops it dead.

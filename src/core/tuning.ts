@@ -376,3 +376,38 @@ export const TOKENS_KILL = 1;
 export const ISLAND_PRICE_MULT: number[] = [1, 0.7, 0.8, 0.8, 1, 1, 1]; // M2 gate: world 1 lost its themed nodes; prices are the lever, not enemy numbers
 /** Card base price (cash) before x CASH_GROWTH^(4(world-1)) x 2^level. */
 export const CARD_BASE_PRICE = { cue: 150, ball: 150, relic: 200, trick: 300 } as const;
+
+// ---------- v0.6 M3: world-1 card forks and capstones (sim keys on RunStats.mods via sim/gear.ts mod()) ----------
+/** One gate knob for launch-speed stacks: cue mult x Slam x Overdrive is capped here (ball speedMult stays outside). */
+export const LAUNCH_MULT_CAP = 1.4;
+/** Break / Slam: launch x this, every shot at >= SLAM_MIN_POWER. */
+export const SLAM_MULT = 1.1;
+export const SLAM_MIN_POWER = 0.6;
+/** Break / Breaker: the first hero contact of a shot shoves the enemy (velocity x this, speed-capped). */
+export const BREAKER_SHOVE = 2;
+/** Heavy / Wrecking: every hero contact shoves (velocity x this); Heavy's +1 damage is dropped. */
+export const WRECK_SHOVE = 1.5;
+/** Heavy / Anvil: the first hero contact deals x this (after every additive bonus) and stops the hero dead. */
+export const ANVIL_MULT = 2;
+/** Heavy / Avalanche: enemy-enemy bumps during the shot deal this. */
+export const AVALANCHE_BUMP = 2;
+/** Ricochet / Bank: the first hit deals +BANK_PER_RAIL per rail (capped at RICOCHET_MAX) from BANK_MIN_RAILS rails, else +0. */
+export const BANK_PER_RAIL = 2;
+export const BANK_MIN_RAILS = 2;
+/** Ricochet / Pocket: a first hit after >= POCKET_RAILS rails makes that shot's kills pay x POCKET_MULT. */
+export const POCKET_RAILS = 2;
+export const POCKET_MULT = 2;
+/** Momentum / Snowball: kill cash x(1 + this x momentum). */
+export const SNOWBALL_CASH = 0.05;
+/** Momentum / Unstoppable: hero contacts at momentum >= this break a 1-hit shield and still deal damage. */
+export const UNSTOPPABLE_AT = 3;
+/** Momentum / Overdrive: launch x this at max momentum. */
+export const OVERDRIVE_MULT = 1.1;
+/** Recall / Anchor: the shot after a recall deals +this on every hero contact. */
+export const ANCHOR_DMG = 2;
+/** Recall / Blink: the blink spot is this far (px) beyond every attacker's reach (edge gap). */
+export const BLINK_MARGIN = 8;
+/** Lantern / Moth: shooters within reach that advance instead of shooting, per enemy phase. */
+export const MOTH_CAP = 2;
+/** Lantern reach (edge gap px from the hero) by card level, for the forks and capstones (Sunrise: whole table). */
+export const LANTERN_R_LV = [80, 100, 120, 140];

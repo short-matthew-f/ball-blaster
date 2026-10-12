@@ -26,9 +26,12 @@ import {
   gearVal,
   stageById,
   LANTERN_DARK_CASH,
+  POCKET_MULT,
+  SNOWBALL_CASH,
+  UNSTOPPABLE_AT,
 } from '../core/tuning';
 import { makeEnemy } from './spawn';
-import { has, lv } from './gear';
+import { has, heroGap, lanternR, lv, mod } from './gear';
 
 /** poison/static/mirror/thorns: relic damage that never staggers and never counts as a hit. */
 export type DamageSource = BallKind | 'lightning' | 'explosion' | 'bump' | 'poison' | 'static' | 'mirror' | 'thorns';
@@ -173,8 +176,12 @@ export function applyDamage(s: RunState, t: Target, dmg: number, src: DamageSour
     t.shield = 0;
     t.flash = 0.12;
     fx.push({ t: 'shieldBreak', x: t.x, y: t.y });
-    if (isBallSource(src)) fx.push({ t: 'hit', x: t.x, y: t.y, targetKind: t.kind, ballKind: src, dmg: 0, killed: false });
-    return;
+    // Unstoppable (momentum capstone): at UNSTOPPABLE_AT the hero breaks the shield and the hit still lands.
+    const through = src === 'main' && mod(s, 'momentum.unstop') && s.momentum >= UNSTOPPABLE_AT;
+    if (!through) {
+      if (isBallSource(src)) fx.push({ t: 'hit', x: t.x, y: t.y, targetKind: t.kind, ballKind: src, dmg: 0, killed: false });
+      return;
+    }
   }
   t.hp -= dmg;
   t.flash = 0.12;
@@ -219,8 +226,13 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
   const def = TARGET_DEFS[t.kind];
   if (!quiet) {
     const st = stageById(s.stage);
-    const lantern = s.dark && s.lanternOn ? 1 + LANTERN_DARK_CASH * lv(s, 'lantern') : 1;
-    const mult = (t.elite ? ELITE_CASH_MULT : 1) * lantern;
+    // Lantern: kill cash +10 %/level on dark stages; Beacon also lights kills within lanternR of the hero (Sunrise: all).
+    const lit = s.dark || (mod(s, 'lantern.beacon') && heroGap(s, t) <= lanternR(s));
+    const lantern = lit && s.lanternOn ? 1 + LANTERN_DARK_CASH * lv(s, 'lantern') : 1;
+    // Snowball: +SNOWBALL_CASH per Momentum step. Pocket: this shot opened with a 2-rail bank.
+    const snowball = mod(s, 'momentum.snowball') ? 1 + SNOWBALL_CASH * s.momentum : 1;
+    const pocket = s.phase === 'resolve' && s.pocketShot === s.shots && mod(s, 'ricochet.pocket') ? POCKET_MULT : 1;
+    const mult = (t.elite ? ELITE_CASH_MULT : 1) * lantern * snowball * pocket;
     const cash = Math.round((t.cashBase ?? def.cash) * st.cashScale * s.stats.cashMult * mult);
     s.cash += cash;
     s.combo.cash = (s.combo.cash ?? 0) + cash;

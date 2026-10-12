@@ -32,13 +32,18 @@ import {
   BREAK_MIN_POWER_LV,
   BREAK_SPEED_MULT_LV,
   DRAW_POWER_LV,
+  LAUNCH_MULT_CAP,
+  OVERDRIVE_MULT,
+  SLAM_MIN_POWER,
+  SLAM_MULT,
+  BLINK_MARGIN,
 } from '../core/tuning';
 import { addStagger } from './damage';
-import { has, lv } from './gear';
+import { has, lv, mod } from './gear';
 import { Rng } from '../core/rng';
 import { physicsStep, relaxAll, spawnSpat } from './physics';
 import { emptyCombo, evaluateCombos } from './combos';
-import { enemyStep, startEnemyPhase } from './enemy';
+import { effectiveReach, enemyStep, startEnemyPhase } from './enemy';
 import { endLootShot, inLoot, lootStep, startLoot } from './loot';
 import { OBSTACLE_R, spawnObstacle, spawnWave } from './spawn';
 import { hero, stageWaves } from './damage';
@@ -57,7 +62,7 @@ export function createRun(stage: StageId, stats: RunStats, seed: number, bestWav
     dark: st.modifiers.includes('dark'),
     seed,
     rng: new Rng(seed),
-    stats: { ...stats, relics: [...(stats.relics ?? [])], gearLevel: { ...(stats.gearLevel ?? {}) } },
+    stats: { ...stats, relics: [...(stats.relics ?? [])], gearLevel: { ...(stats.gearLevel ?? {}) }, mods: [...(stats.mods ?? [])] },
     phase: 'aim',
     t: 0,
     hp: stats.maxHp,
@@ -137,9 +142,15 @@ export function shoot(s: RunState, pull: Vec): boolean {
   // Minimum shot power: every release is a leave; no free micro-taps.
   const cue = s.stats.cue;
   // Cue cards: base levels move the cue's numbers (level 0 = today's constants).
-  const power = Math.max(cue === 'break' ? gearVal(BREAK_MIN_POWER_LV, lv(s, 'break')) : MIN_POWER, Math.min(len, MAX_PULL) / MAX_PULL);
+  const slam = mod(s, 'break.slam');
+  let minPower = cue === 'break' ? gearVal(BREAK_MIN_POWER_LV, lv(s, 'break')) : MIN_POWER;
+  if (slam) minPower = Math.max(SLAM_MIN_POWER, minPower);
+  const power = Math.max(minPower, Math.min(len, MAX_PULL) / MAX_PULL);
   const cueMult = cue === 'break' ? gearVal(BREAK_SPEED_MULT_LV, lv(s, 'break')) : cue === 'draw' ? gearVal(DRAW_POWER_LV, lv(s, 'draw')) : 1;
-  const speed = power * MAX_LAUNCH_SPEED * ballSpec(s.stats.ballType, s.stats.gearLevel[s.stats.ballType] ?? 0).speedMult * cueMult;
+  // v0.6 M3 speed stacks (Slam, Overdrive) share one cap with the cue's own multiplier.
+  const overdrive = mod(s, 'momentum.overdrive') && s.momentum >= gearVal(MOMENTUM_MAX, lv(s, 'momentum'));
+  const launchMult = Math.min(LAUNCH_MULT_CAP, cueMult * (slam ? SLAM_MULT : 1) * (overdrive ? OVERDRIVE_MULT : 1));
+  const speed = power * MAX_LAUNCH_SPEED * ballSpec(s.stats.ballType, s.stats.gearLevel[s.stats.ballType] ?? 0).speedMult * launchMult;
   b.vx = (pull.x / len) * speed;
   b.vy = (pull.y / len) * speed;
   b.resting = false;
@@ -246,7 +257,10 @@ function endShot(s: RunState, fx: FxEvent[]): void {
   evaluateCombos(s, main.x, main.y, fx);
   // Momentum relic: a shot with >= MOMENTUM_HITS hits builds it (capped); fewer resets it.
   if (has(s, 'momentum')) {
-    s.momentum = s.combo.hits >= MOMENTUM_HITS ? Math.min(gearVal(MOMENTUM_MAX, lv(s, 'momentum')), s.momentum + 1) : 0;
+    const max = gearVal(MOMENTUM_MAX, lv(s, 'momentum'));
+    // Streak: a 1-hit shot holds Momentum (no growth); 0 hits still resets.
+    if (s.combo.hits >= MOMENTUM_HITS) s.momentum = Math.min(max, s.momentum + 1);
+    else if (!(mod(s, 'momentum.streak') && s.combo.hits >= 1)) s.momentum = 0;
   }
   s.targets = s.targets.filter((t) => !t.dead);
   s.obstacles = s.obstacles.filter((o) => !o.dead);
@@ -303,8 +317,8 @@ function spotClear(s: RunState, h: Ball, x: number, y: number): boolean {
   return true;
 }
 
-/** Nearest open spot (clear, with a corridor) around (x0,y0): deterministic spiral search. */
-function nearestOpenSpot(s: RunState, x0: number, y0: number): Vec | null {
+/** Nearest open spot (clear, with a corridor, and passing `ok`) around (x0,y0): deterministic spiral search. */
+function nearestOpenSpot(s: RunState, x0: number, y0: number, ok?: (x: number, y: number) => boolean): Vec | null {
   const h = mainBall(s);
   for (let rho = 2; rho <= 300; rho += 2) {
     const n = Math.max(8, Math.ceil((2 * Math.PI * rho) / 3));
@@ -312,7 +326,7 @@ function nearestOpenSpot(s: RunState, x0: number, y0: number): Vec | null {
       const a = (k / n) * Math.PI * 2;
       const x = x0 + Math.cos(a) * rho;
       const y = y0 + Math.sin(a) * rho;
-      if (spotClear(s, h, x, y) && hasCorridor(s, x, y)) return { x, y };
+      if (spotClear(s, h, x, y) && (!ok || ok(x, y)) && hasCorridor(s, x, y)) return { x, y };
     }
   }
   return null;
@@ -341,15 +355,20 @@ export function jamRule(s: RunState, fx: FxEvent[]): boolean {
 export function useTrick(s: RunState): boolean {
   const id = s.stats.trick;
   // No tricks in the loot phase.
-  if (s.phase !== 'aim' || !id || s.trickUsesLeft <= 0 || s.bossKilled) return false;
+  // Encore (recall capstone): one free Recall per wave, spent before the paid uses.
+  const encoreFree = id === 'recall' && mod(s, 'recall.encore') && s.encoreWave !== s.wave;
+  if (s.phase !== 'aim' || !id || (s.trickUsesLeft <= 0 && !encoreFree) || s.bossKilled) return false;
   const fx = (s.pendingFx ??= []);
   const h = mainBall(s);
   switch (id) {
     case 'recall': {
-      const x = TABLE.x + TABLE.w / 2;
-      const y = TABLE.y + TABLE.h - RECALL_Y_OFFSET;
-      const p = spotClear(s, h, x, y) && hasCorridor(s, x, y) ? { x, y } : nearestOpenSpot(s, x, y);
-      if (p) ((h.x = p.x), (h.y = p.y));
+      recallTo(s, h);
+      if (mod(s, 'recall.anchor')) s.anchorShot = s.shots + 1;
+      if (encoreFree) {
+        s.encoreWave = s.wave;
+        fx.push({ t: 'trick', id });
+        return true;
+      }
       break;
     }
     case 'timeStop':
@@ -383,6 +402,23 @@ export function useTrick(s: RunState): boolean {
   // Shockwave + Static killed the boss during aim: the waves are over, the goblin arrives now.
   if (s.bossKilled) startLoot(s, fx);
   return true;
+}
+
+/** Recall's destination: the start spot; Blink: nearest spot out of every attacker's reach; Rewind: the last launch. */
+function recallTo(s: RunState, h: Ball): void {
+  const sx = TABLE.x + TABLE.w / 2;
+  const sy = TABLE.y + TABLE.h - RECALL_Y_OFFSET;
+  const exact = (x: number, y: number): Vec | null => (spotClear(s, h, x, y) && hasCorridor(s, x, y) ? { x, y } : nearestOpenSpot(s, x, y));
+  let p: Vec | null = null;
+  if (mod(s, 'recall.blink')) {
+    const threats = s.targets.filter((t) => !t.dead && (t.intent.t === 'attack' || t.intent.t === 'charge'));
+    const safe = (x: number, y: number) => threats.every((t) => Math.hypot(t.x - x, t.y - y) - t.r - h.r > effectiveReach(t) + BLINK_MARGIN);
+    p = nearestOpenSpot(s, h.x, h.y, safe);
+  } else if (mod(s, 'recall.rewind') && s.launch) {
+    p = exact(s.launch.x, s.launch.y);
+  }
+  p ??= exact(sx, sy);
+  if (p) ((h.x = p.x), (h.y = p.y));
 }
 
 /**

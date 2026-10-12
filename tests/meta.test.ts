@@ -4,7 +4,7 @@ import { CAPSTONE_NEEDS, ISLAND_CENTRES, MULT_IDS, PORTAL_NEEDS, WORLD_ONLY, pie
 import type { CardState, RunResult, SaveData, TokenId, UpgradeNode } from '../src/core/types';
 import { TOKEN_OF_WORLD } from '../src/core/types';
 import {
-  CARDS, anyCardAffordable, baseBuyState, buyBase, buyCard, cardBuyState, cardById, nextBaseCost,
+  CARDS, anyCardAffordable, baseBuyState, buyBase, buyCard, capBuyState, cardBuyState, cardById, forkBuyState, nextBaseCost, setCap, setFork,
 } from '../src/meta/cards';
 import {
   NODES, ROOT_ID, bankRun, buildStats, buy, buyState, distanceFromOwned, exportSave, importSave, isReachable, loadSave, newSave, nextCost,
@@ -376,8 +376,15 @@ describe('cards', () => {
       expect(c.name.length, c.id).toBeLessThanOrEqual(12);
       expect(c.desc.length, c.id).toBeLessThanOrEqual(20);
       expect(c.icon).toBe(`gear_${c.id}`);
-      expect(c.forks).toEqual([]);
-      expect(c.caps).toEqual([]);
+      expect(c.forks.length, c.id).toBe(c.world === 1 ? 2 : 0);
+      expect(c.caps.length, c.id).toBe(c.world === 1 ? 2 : 0);
+      for (const f of [...c.forks, ...c.caps]) {
+        expect(f.id.startsWith(`${c.id}.`)).toBe(true);
+        expect(f.name.length, f.id).toBeLessThanOrEqual(12);
+        expect(f.desc.length, f.id).toBeLessThanOrEqual(20);
+      }
+      for (const f of c.forks) expect(f.cost).toBe(1);
+      for (const f of c.caps) expect(f.cost).toBe(2);
       for (const b of c.base) { expect(b.name.length).toBeLessThanOrEqual(12); expect(b.desc.length, `${c.id} ${b.desc}`).toBeLessThanOrEqual(20); }
     }
     const f = (w: number) => CASH_GROWTH ** (4 * (w - 1));
@@ -401,7 +408,7 @@ describe('cards', () => {
     expect(anyCardAffordable(sv)).toBe(false);
     sv.cash = 1050;
     const paid: number[] = [];
-    for (let i = 0; i < 3; i++) { const c = sv.cash; expect(nextBaseCost(sv, 'break')).toBe(150 * 2 ** i); expect(buyBase(sv, 'break')).toBe(true); paid.push(c - sv.cash); }
+    for (let i = 0; i < 3; i++) { if (i === 2) { sv.tokens.stripe = 1; expect(setFork(sv, 'break', 'break.slam')).toBe(true); sv.tokens.stripe = 0; } const c = sv.cash; expect(nextBaseCost(sv, 'break')).toBe(150 * 2 ** i); expect(buyBase(sv, 'break')).toBe(true); paid.push(c - sv.cash); }
     expect(paid).toEqual([150, 300, 600]);
     expect(sv.cash).toBe(0);
     expect(cardBuyState(sv, 'break')).toBe('maxed');
@@ -434,23 +441,82 @@ describe('cards', () => {
     const off = buildStats(sv);
     expect([off.lightningChance, off.splitCount, off.spitInterval]).toEqual([0, 0, 0]);
   });
-  it('base III gate: only once a card has forks', () => {
+  it('base III gate: a fork choice is required, cards without forks are ungated', () => {
     const sv = newSave();
     sv.cash = 1e6;
     sv.cards.ricochet = card(2);
+    sv.cards.jump = card(2);
+    expect(baseBuyState(sv, 'jump')).toBe('ok'); // world 2: no forks yet
+    expect(baseBuyState(sv, 'ricochet')).toBe('locked');
+    expect(buyBase(sv, 'ricochet')).toBe(false);
+    sv.tokens.stripe = 1;
+    expect(setFork(sv, 'ricochet', 'ricochet.bank')).toBe(true);
     expect(baseBuyState(sv, 'ricochet')).toBe('ok');
-    const def = cardById('ricochet')!;
-    def.forks.push({ id: 'stub', name: 'STUB', desc: 'stub', cost: 1 });
-    try {
-      expect(baseBuyState(sv, 'ricochet')).toBe('locked');
-      expect(buyBase(sv, 'ricochet')).toBe(false);
-      sv.cards.ricochet.forks = ['stub'];
-      sv.cards.ricochet.fork = 'stub';
-      expect(buyBase(sv, 'ricochet')).toBe(true);
-    } finally {
-      def.forks.length = 0;
-    }
+    expect(buyBase(sv, 'ricochet')).toBe(true);
     expect(sv.cards.ricochet.level).toBe(3);
+  });
+  it('setFork / setCap: buy, switch free, one active, level gates', () => {
+    const sv = newSave();
+    sv.cards.break = card(1);
+    sv.cash = 0;
+    sv.tokens.stripe = 6;
+    expect(forkBuyState(sv, 'break', 'break.slam')).toBe('locked');
+    expect(setFork(sv, 'break', 'break.slam')).toBe(false);
+    sv.cards.break.level = 2;
+    expect(forkBuyState(sv, 'break', 'break.slam')).toBe('open');
+    sv.tokens.stripe = 0; // 0 tokens: nothing open
+    expect(anyCardAffordable(sv)).toBe(false);
+    sv.tokens.stripe = 6;
+    for (const id of ['heavy', 'ricochet', 'momentum', 'lantern', 'recall']) sv.cards[id] = card(0);
+    expect(anyCardAffordable(sv)).toBe(true); // an open fork alone lights the dot
+    expect(setFork(sv, 'break', 'break.slam')).toBe(true);
+    expect(sv.tokens.stripe).toBe(5);
+    expect(sv.cards.break).toMatchObject({ forks: ['break.slam'], fork: 'break.slam' });
+    expect(forkBuyState(sv, 'break', 'break.slam')).toBe('active');
+    expect(setFork(sv, 'break', 'break.slam')).toBe(true);
+    expect(sv.tokens.stripe).toBe(5);
+    expect(setFork(sv, 'break', 'break.crack')).toBe(true);
+    expect(sv.tokens.stripe).toBe(4);
+    expect(sv.cards.break.fork).toBe('break.crack');
+    expect(forkBuyState(sv, 'break', 'break.slam')).toBe('owned');
+    expect(setFork(sv, 'break', 'break.slam')).toBe(true); // switch is free
+    expect(sv.tokens.stripe).toBe(4);
+    expect(sv.cards.break).toMatchObject({ forks: ['break.slam', 'break.crack'], fork: 'break.slam' });
+    expect(setFork(sv, 'break', 'break.nope')).toBe(false);
+    expect(setFork(sv, 'break', 'heavy.anvil')).toBe(false);
+    // capstones: base III, cost 2
+    expect(capBuyState(sv, 'break', 'break.breaker')).toBe('locked');
+    expect(setCap(sv, 'break', 'break.breaker')).toBe(false);
+    sv.cards.break.level = 3;
+    sv.tokens.stripe = 1;
+    expect(capBuyState(sv, 'break', 'break.breaker')).toBe('poor');
+    expect(setCap(sv, 'break', 'break.breaker')).toBe(false);
+    sv.tokens.stripe = 5;
+    expect(setCap(sv, 'break', 'break.breaker')).toBe(true);
+    expect(sv.tokens.stripe).toBe(3);
+    expect(setCap(sv, 'break', 'break.steady')).toBe(true);
+    expect(sv.cards.break).toMatchObject({ caps: ['break.breaker', 'break.steady'], cap: 'break.steady' });
+    expect(setCap(sv, 'break', 'break.breaker')).toBe(true);
+    expect(sv.tokens.stripe).toBe(1);
+    expect(sv.cards.break.cap).toBe('break.breaker');
+    // a frost token does not pay for a stripe card
+    sv.tokens = { ...zero, frost: 9 };
+    expect(forkBuyState(sv, 'heavy', 'heavy.anvil')).toBe('locked');
+  });
+  it('buildStats mods: equipped cards only; Steady keeps the aim preview', () => {
+    const sv = newSave();
+    sv.unlocked = 4;
+    sv.cards = { break: { level: 3, forks: ['break.slam'], fork: 'break.slam', caps: ['break.steady'], cap: 'break.steady' }, heavy: { level: 2, forks: ['heavy.anvil'], fork: 'heavy.anvil', caps: [], cap: null } };
+    sv.loadout = { ball: 'heavy', cue: 'break', relics: [], trick: null };
+    const s = buildStats(sv);
+    expect(s.mods).toEqual(['break.slam', 'break.steady', 'heavy.anvil']);
+    expect(s.aimPreview).toBe(BASE_STATS.aimPreview);
+    sv.loadout.ball = 'standard';
+    expect(buildStats(sv).mods).toEqual(['break.slam', 'break.steady']); // owned heavy, unequipped: no mods
+    sv.cards.break.cap = null;
+    const t = buildStats(sv);
+    expect(t.mods).toEqual(['break.slam']);
+    expect(t.aimPreview).toBe(0);
   });
   it('parity: buildStats for owned gear (values captured from v0.6 M1; lightning/split gearLevel now = card level)', () => {
     const sv = newSave();
@@ -767,6 +833,10 @@ describe('save v4 and migration from v3', () => {
     })))!;
     expect(bad.tokens).toEqual({ ...zero, stripe: 2 });
     expect(bad.cards).toEqual({ break: card(3) });
+    const f = importSave(btoa(JSON.stringify({
+      version: 4, cash: 3, loadout: { ball: 'heavy' }, cards: { break: { level: 3, forks: ['break.slam', 'x', 'heavy.anvil', 'break.slam'], fork: 'x', caps: ['break.steady', 'break.crack'], cap: 'break.steady' } },
+    })))!;
+    expect(f.cards.break).toEqual({ level: 3, forks: ['break.slam'], fork: null, caps: ['break.steady'], cap: 'break.steady' });
     expect(bad.loadout.ball).toBe('standard');
   });
   it('buildStats sets tokenId from the stage world (loops reuse it) and empty mods', () => {

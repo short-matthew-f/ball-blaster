@@ -13,9 +13,9 @@ export {
 };
 export {
   CARDS, CARD_IDS, CARD_MAX_LEVEL, CARD_UNLOCK_COST, anyCardAffordable, baseBuyState, basePrice, buyBase, buyCard, cardBuyState, cardById, cardLevel,
-  cardOwned, cardState, cardToken, nextBaseCost, setCap, setFork,
+  cardOwned, cardState, cardToken, capBuyState, forkBuyState, nextBaseCost, setCap, setFork,
 } from './cards';
-export type { BaseBuyState, BaseNode, CardBuyState, CardDef, CardSlot, ForkChoice } from './cards';
+export type { ChoiceBuyState, BaseBuyState, BaseNode, CardBuyState, CardDef, CardSlot, ForkChoice } from './cards';
 
 export function nextCost(save: SaveData, node: UpgradeNode): number | null {
   const l = nodeLevel(save, node.id);

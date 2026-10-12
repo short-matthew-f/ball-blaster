@@ -1829,3 +1829,370 @@ describe('v0.6 determinism across the loot phase', () => {
     }
   });
 });
+
+// ---------- v0.6 M3: world-1 forks and capstones (stats.mods) ----------
+import {
+  ANCHOR_DMG,
+  ANVIL_MULT,
+  AVALANCHE_BUMP,
+  BLINK_MARGIN,
+  BREAK_SPEED_MULT_LV,
+  BREAKER_SHOVE,
+  LANTERN_R_LV,
+  LAUNCH_MULT_CAP,
+  MOMENTUM_MAX,
+  OVERDRIVE_MULT,
+  POCKET_MULT,
+  SLAM_MIN_POWER,
+  SLAM_MULT,
+  SNOWBALL_CASH,
+  WRECK_SHOVE,
+  gearVal,
+} from '../src/core/tuning';
+
+/** glab with `mods` active. */
+function mlab(mods: string[], over: Partial<RunStats> = {}, x = 90, y = 240): RunState {
+  return glab({ ...over, mods }, x, y);
+}
+const enemySpeed = (t: Target) => Math.hypot(t.vx, t.vy);
+/** Enemy speed right after the hero's first contact of a shot with `pull`. */
+function firstHitShove(mods: string[], over: Partial<RunStats>, pull: Vec): { t: Target; s: RunState; v: number } {
+  const s = mlab(mods, over, 90, 240);
+  const t = put(s, 'grunt', 90, 170);
+  t.hp = t.maxHp = 20;
+  t.intent = { t: 'rest' };
+  shoot(s, pull);
+  untilFirstHit(s);
+  return { t, s, v: enemySpeed(t) };
+}
+/** A one-rail shot (down, back up into a grunt) with `extra` rails credited before contact. */
+function bankShot(mods: string[], over: Partial<RunStats>, extra: number, hp = 20): { s: RunState; g: Target; fx: FxEvent[] } {
+  const s = mlab(mods, { relics: ['ricochet'], gearLevel: { ricochet: 3 }, ...over }, 90, 230);
+  const g = put(s, 'grunt', 90, 120);
+  g.hp = g.maxHp = hp;
+  g.cashBase = 10;
+  g.intent = { t: 'rest' };
+  shoot(s, { x: 0, y: MAX_PULL });
+  s.shotBounces += extra;
+  const fx = untilFirstHit(s);
+  return { s, g, fx };
+}
+const thinStage = () => allStageIds(1).map(makeStage).find((st) => st.modifiers.includes('thinRails') && st.world !== 3)!.id;
+
+describe('v0.6 M3: break cue', () => {
+  it('break.slam: launch x1.1 and at least 60 % power', () => {
+    const s = mlab(['break.slam'], { cue: 'break', gearLevel: { break: 2 } });
+    shoot(s, { x: 0, y: -13 });
+    expect(speedOf(s)).toBeCloseTo(SLAM_MIN_POWER * MAX_LAUNCH_SPEED * gearVal(BREAK_SPEED_MULT_LV, 2) * SLAM_MULT, 6);
+    expect(SLAM_MULT).toBe(1.1);
+    expect(SLAM_MIN_POWER).toBe(0.6);
+  });
+  it('break.crack: the first hit staggers 2, later contacts 1; launch speed unchanged', () => {
+    const on = firstHitShove(['break.crack'], { cue: 'break', gearLevel: { break: 2 } }, { x: 0, y: -MAX_PULL / 2 });
+    const off = firstHitShove([], { cue: 'break', gearLevel: { break: 2 } }, { x: 0, y: -MAX_PULL / 2 });
+    expect(on.t.stagger).toBe(2);
+    expect(off.t.stagger).toBe(1);
+    expect(on.s.launch!.speed).toBeCloseTo(off.s.launch!.speed, 9);
+  });
+  it('break.breaker: the first contact shoves the enemy x2', () => {
+    const pull = { x: 0, y: -MAX_PULL / 2 };
+    const on = firstHitShove(['break.breaker'], { cue: 'break', gearLevel: { break: 3 } }, pull);
+    const off = firstHitShove([], { cue: 'break', gearLevel: { break: 3 } }, pull);
+    expect(on.v / off.v).toBeCloseTo(BREAKER_SHOVE, 1);
+    expect(on.t.hp).toBe(off.t.hp);
+  });
+  it('break.steady: the sim leaves the aim preview to meta (Break with Steady previews)', () => {
+    const s = mlab(['break.steady'], { cue: 'break', gearLevel: { break: 3 }, aimPreview: 2 });
+    expect(previewShot(s, { x: 0, y: -MAX_PULL }).length).toBeGreaterThan(1);
+  });
+});
+
+describe('v0.6 M3: heavy ball', () => {
+  it('heavy.anvil: the first hit deals x2 and stops the hero dead', () => {
+    const on = firstHitShove(['heavy.anvil'], { ballType: 'heavy', gearLevel: { heavy: 2 } }, { x: 0, y: -MAX_PULL });
+    expect(on.t.hp).toBe(20 - (1 + 1) * ANVIL_MULT);
+    expect(speedOf(on.s)).toBe(0);
+    const off = firstHitShove([], { ballType: 'heavy', gearLevel: { heavy: 2 } }, { x: 0, y: -MAX_PULL });
+    expect(off.t.hp).toBe(20 - 2);
+  });
+  it('heavy.wrecking: no +1 damage, every contact shoves x1.5', () => {
+    const pull = { x: 0, y: -MAX_PULL / 2 };
+    const on = firstHitShove(['heavy.wrecking'], { ballType: 'heavy', gearLevel: { heavy: 2 } }, pull);
+    const off = firstHitShove([], { ballType: 'heavy', gearLevel: { heavy: 2 } }, pull);
+    expect(on.t.hp).toBe(20 - 1);
+    expect(off.t.hp).toBe(20 - 2);
+    expect(on.v / off.v).toBeCloseTo(WRECK_SHOVE, 1);
+  });
+  it('heavy.jugger: the first charge of the phase is blocked, the second lands', () => {
+    const s = mlab(['heavy.jugger'], { ballType: 'heavy', gearLevel: { heavy: 3 } }, 90, 240);
+    const a = put(s, 'grunt', 90, 170);
+    const b = put(s, 'grunt', 150, 240);
+    a.intent = { t: 'attack', n: 2 };
+    b.intent = { t: 'attack', n: 3 };
+    const fx = enemyPhaseOnly(s);
+    expect(fx.filter((f) => f.t === 'blocked').length).toBe(1);
+    expect(s.hp).toBe(BASE_STATS.maxHp - 3);
+    expect(s.juggerUsed).toBe(true);
+  });
+  it('heavy.avalanche: a bump during the shot deals 2 (1 without)', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, { ballType: 'heavy', gearLevel: { heavy: 3 } }, 90, 270);
+      const a = put(s, 'grunt', 40, 100);
+      const b = put(s, 'grunt', 100, 100);
+      for (const e of [a, b]) ((e.hp = e.maxHp = 20), (e.intent = { t: 'rest' }));
+      shoot(s, { x: 0, y: 20 });
+      s.balls[0].vx = s.balls[0].vy = 0;
+      s.balls[0].resting = true;
+      a.vx = 300;
+      a.resting = false;
+      while (s.phase === 'resolve') step(s, SIM_DT);
+      return b;
+    };
+    expect(run(['heavy.avalanche']).hp).toBe(20 - AVALANCHE_BUMP);
+    expect(run([]).hp).toBe(20 - 1);
+  });
+});
+
+describe('v0.6 M3: ricochet', () => {
+  it('ricochet.bank: one rail +0, two rails +2 each', () => {
+    expect(bankShot(['ricochet.bank'], {}, 0).g.hp).toBe(20 - 1);
+    expect(bankShot([], {}, 0).g.hp).toBe(20 - 2);
+    const two = bankShot(['ricochet.bank'], {}, 1);
+    expect(two.s.shotBounces).toBe(2);
+    expect(two.g.hp).toBe(20 - 1 - 4);
+  });
+  it('ricochet.carom: hero contacts count as rails, rails count after the first hit, every contact gets the bonus (2nd contact +2)', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, { relics: ['ricochet'], gearLevel: { ricochet: 3 } }, 90, 240);
+      const g = put(s, 'grunt', 90, 170);
+      g.hp = g.maxHp = 40;
+      g.intent = { t: 'rest' };
+      shoot(s, { x: 15, y: -MAX_PULL }); // grunt, top rail, grunt again
+      const hits: { dmg: number; bounces: number }[] = [];
+      while (s.phase === 'resolve') {
+        for (const f of step(s, SIM_DT)) if (f.t === 'hit' && f.ballKind === 'main') hits.push({ dmg: f.dmg, bounces: s.shotBounces });
+      }
+      return hits;
+    };
+    const on = run(['ricochet.carom']);
+    expect(on.length).toBe(2);
+    expect(on.map((h) => h.dmg)).toEqual([1, 1 + 2]);
+    expect(on.map((h) => h.bounces)).toEqual([1, 3]);
+    expect(run([]).map((h) => h.dmg)).toEqual([1, 1]);
+  });
+  it('ricochet.pocket: a 2-rail first hit makes the shot\'s kills pay x2', () => {
+    const on = bankShot(['ricochet.pocket'], {}, 1, 1);
+    const off = bankShot(['ricochet.pocket'], {}, 0, 1);
+    expect(on.g.dead && off.g.dead).toBe(true);
+    expect(on.s.cash).toBe(off.s.cash * POCKET_MULT);
+    expect(on.fx.some((f) => f.t === 'combo' && f.name === 'POCKET')).toBe(true);
+    expect(off.fx.some((f) => f.t === 'combo' && f.name === 'POCKET')).toBe(false);
+  });
+  it('ricochet.ghost: the hero banks at full speed on Thin Rails until its first hit', () => {
+    const run = (mods: string[]) => {
+      const s = createRun(thinStage(), { ...BASE_STATS, relics: ['ricochet'], gearLevel: { ricochet: 3 }, mods }, 42);
+      s.targets = [];
+      s.obstacles = [];
+      s.balls[0].x = 90;
+      s.balls[0].y = 230;
+      shoot(s, { x: 0, y: MAX_PULL });
+      let pre = 0;
+      for (;;) {
+        pre = speedOf(s);
+        if (step(s, SIM_DT).some((f) => f.t === 'wall')) break;
+      }
+      return speedOf(s) / pre;
+    };
+    expect(run(['ricochet.ghost'])).toBeGreaterThan(0.97);
+    expect(run([])).toBeLessThan(THIN_RAILS_BOUNCE + 0.02);
+  });
+});
+
+describe('v0.6 M3: momentum', () => {
+  it('momentum.streak: a 1-hit shot holds Momentum, a 0-hit shot resets it', () => {
+    const s = mlab(['momentum.streak'], { relics: ['momentum'], gearLevel: { momentum: 2 } }, 90, 230);
+    s.momentum = 2;
+    const g = put(s, 'brute', 90, 150);
+    g.hp = g.maxHp = 40;
+    g.intent = { t: 'rest' };
+    shoot(s, { x: 0, y: -MAX_PULL });
+    untilSettled(s);
+    expect(s.combo.hits).toBe(1);
+    expect(s.momentum).toBe(2);
+    s.targets.forEach((t) => (t.intent = { t: 'rest' }));
+    shoot(s, { x: 0, y: MAX_PULL / 4 });
+    untilSettled(s);
+    expect(s.combo.hits).toBe(0);
+    expect(s.momentum).toBe(0);
+  });
+  it('momentum.snowball: kill cash x1.1 at Momentum 2', () => {
+    const cashAt = (mods: string[]) => {
+      const s = mlab(mods, { relics: ['momentum'], gearLevel: { momentum: 2 } });
+      s.momentum = 2;
+      const g = put(s, 'grunt', 90, 100);
+      g.cashBase = 20 / stageById('w1s1').cashScale;
+      kill(s, g, 'main', []);
+      return s.cash;
+    };
+    expect(cashAt([])).toBe(20);
+    expect(cashAt(['momentum.snowball'])).toBe(Math.round(20 * (1 + SNOWBALL_CASH * 2)));
+    expect(cashAt(['momentum.snowball'])).toBe(22);
+  });
+  it('momentum.unstop: at 3 a hero hit pops a 1-hit shield and still lands; the cadre shield holds', () => {
+    const s = mlab(['momentum.unstop'], { relics: ['momentum'], gearLevel: { momentum: 3 } });
+    s.momentum = 3;
+    const g = put(s, 'grunt', 90, 100);
+    g.hp = g.maxHp = 10;
+    g.shield = 1;
+    const fx: FxEvent[] = [];
+    applyDamage(s, g, 4, 'main', fx);
+    expect(g.shield).toBe(0);
+    expect(g.hp).toBe(6);
+    expect(fx.some((f) => f.t === 'shieldBreak')).toBe(true);
+    // Below 3 the shield eats the hit.
+    s.momentum = 2;
+    g.shield = 1;
+    applyDamage(s, g, 4, 'main', fx);
+    expect(g.hp).toBe(6);
+    // Split/spat never pierce.
+    s.momentum = 3;
+    g.shield = 1;
+    applyDamage(s, g, 4, 'split', fx);
+    expect(g.hp).toBe(6);
+    // Cadre shield (boss shielded): no damage at any Momentum.
+    const boss = put(s, 'boss', 90, 60);
+    const hp = boss.hp;
+    boss.shielded = true;
+    applyDamage(s, boss, 4, 'main', fx);
+    expect(boss.hp).toBe(hp);
+  });
+  it('momentum.overdrive: x1.1 launch at max Momentum; cue x Slam x Overdrive capped at 1.4', () => {
+    const s = mlab(['momentum.overdrive'], { relics: ['momentum'], gearLevel: { momentum: 3 } });
+    s.momentum = gearVal(MOMENTUM_MAX, 3);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    expect(speedOf(s)).toBeCloseTo(MAX_LAUNCH_SPEED * OVERDRIVE_MULT, 6);
+    const u = mlab(['momentum.overdrive'], { relics: ['momentum'], gearLevel: { momentum: 3 } });
+    u.momentum = gearVal(MOMENTUM_MAX, 3) - 1;
+    shoot(u, { x: 0, y: -MAX_PULL });
+    expect(speedOf(u)).toBeCloseTo(MAX_LAUNCH_SPEED, 6);
+    const c = mlab(['momentum.overdrive', 'break.slam'], { cue: 'break', relics: ['momentum'], gearLevel: { momentum: 3, break: 3 } });
+    c.momentum = gearVal(MOMENTUM_MAX, 3);
+    shoot(c, { x: 0, y: -MAX_PULL });
+    expect(LAUNCH_MULT_CAP).toBe(1.4);
+    expect(speedOf(c)).toBeCloseTo(MAX_LAUNCH_SPEED * LAUNCH_MULT_CAP, 6);
+  });
+});
+
+describe('v0.6 M3: recall', () => {
+  it('recall.blink: the hero lands on the nearest spot outside every attacker\'s reach (shooters ignored)', () => {
+    const s = mlab(['recall.blink'], { trick: 'recall', trickUses: 1 }, 90, 130);
+    const g = put(s, 'grunt', 90, 80);
+    g.intent = { t: 'attack', n: 3 };
+    const k = put(s, 'skirmisher', 60, 230);
+    k.intent = { t: 'shoot', n: 2 };
+    expect(useTrick(s)).toBe(true);
+    const h = s.balls[0];
+    const gap = Math.hypot(h.x - g.x, h.y - g.y) - h.r - g.r;
+    expect(gap).toBeGreaterThan(TARGET_DEFS.grunt.reach + BLINK_MARGIN);
+    expect(gap).toBeLessThan(TARGET_DEFS.grunt.reach + BLINK_MARGIN + 6);
+    expect(Math.hypot(h.x - 90, h.y - 130)).toBeLessThan(120);
+    // Nobody in reach can be escaped within 300 px: the start spot.
+    const t = mlab(['recall.blink'], { trick: 'recall', trickUses: 1 }, 90, 200);
+    put(t, 'grunt', 90, 150).intent = { t: 'attack', n: 3 };
+    useTrick(t);
+    expect(t.balls[0].y).toBeCloseTo(TABLE.y + TABLE.h - 24, 6);
+  });
+  it('recall.rewind: back to the last launch point; no launch yet = the start spot', () => {
+    const s = mlab(['recall.rewind'], { trick: 'recall', trickUses: 2 }, 60, 200);
+    put(s, 'grunt', 30, 50).intent = { t: 'rest' };
+    shoot(s, { x: 20, y: 20 });
+    untilSettled(s);
+    expect(s.balls[0].x !== 60 || s.balls[0].y !== 200).toBe(true);
+    expect(useTrick(s)).toBe(true);
+    expect(s.balls[0].x).toBeCloseTo(60, 6);
+    expect(s.balls[0].y).toBeCloseTo(200, 6);
+    const t = mlab(['recall.rewind'], { trick: 'recall', trickUses: 1 }, 40, 100);
+    useTrick(t);
+    expect(t.balls[0].x).toBeCloseTo(TABLE.x + TABLE.w / 2, 6);
+    expect(t.balls[0].y).toBeCloseTo(TABLE.y + TABLE.h - 24, 6);
+  });
+  it('recall.encore: one free Recall a wave, then the paid uses', () => {
+    const s = mlab(['recall.encore'], { trick: 'recall', trickUses: 1 }, 40, 100);
+    expect(useTrick(s)).toBe(true);
+    expect(s.trickUsesLeft).toBe(1);
+    expect(useTrick(s)).toBe(true);
+    expect(s.trickUsesLeft).toBe(0);
+    expect(useTrick(s)).toBe(false);
+    s.wave = 2;
+    expect(useTrick(s)).toBe(true);
+    expect(useTrick(s)).toBe(false);
+  });
+  it('recall.anchor: the next shot deals +2 on hero contacts; the one after does not', () => {
+    const s = mlab(['recall.anchor'], { trick: 'recall', trickUses: 1 }, 40, 100);
+    expect(useTrick(s)).toBe(true);
+    const h = s.balls[0];
+    const g = put(s, 'brute', h.x, h.y - 80);
+    g.hp = g.maxHp = 40;
+    g.intent = { t: 'rest' };
+    shoot(s, { x: 0, y: -MAX_PULL });
+    untilFirstHit(s);
+    expect(g.hp).toBe(40 - 1 - ANCHOR_DMG);
+    untilSettled(s);
+    s.targets = [];
+    const c = put(s, 'brute', h.x, h.y - 80);
+    c.hp = c.maxHp = 40;
+    c.intent = { t: 'rest' };
+    shoot(s, { x: 0, y: -MAX_PULL });
+    untilFirstHit(s);
+    expect(c.hp).toBe(40 - 1);
+  });
+});
+
+describe('v0.6 M3: lantern', () => {
+  const lit = (mods: string[], gx: number, gy: number, hx = 90, hy = 240) => {
+    const s = mlab(mods, { relics: ['lantern'], gearLevel: { lantern: 2 } }, hx, hy);
+    expect(s.dark).toBe(false);
+    const g = put(s, 'grunt', gx, gy);
+    g.cashBase = 20 / stageById('w1s1').cashScale;
+    kill(s, g, 'main', []);
+    return s.cash;
+  };
+  it('lantern.beacon: off dark, kills within reach pay +10 %/level (+20 % at II); beyond reach plain', () => {
+    expect(gearVal(LANTERN_R_LV, 2)).toBe(120);
+    expect(lit(['lantern.beacon'], 90, 240 - 24 - 100)).toBe(24);
+    expect(lit(['lantern.beacon'], 90, 240 - 24 - 140)).toBe(20);
+    expect(lit([], 90, 240 - 24 - 100)).toBe(20);
+  });
+  it('lantern.glare: the nearest queued shooter in reach rests; the other shoots', () => {
+    const s = mlab(['lantern.glare'], { relics: ['lantern'], gearLevel: { lantern: 2 }, maxHp: 50 }, 90, 240);
+    s.hp = s.maxHp = 50;
+    const near = put(s, 'skirmisher', 40, 200);
+    const far = put(s, 'skirmisher', 140, 160);
+    for (const k of [far, near]) k.intent = { t: 'shoot', n: 2 };
+    const fx = enemyPhaseOnly(s);
+    expect(fx.filter((f) => f.t === 'tracer').length).toBe(1);
+    expect(fx.some((f) => f.t === 'tracer' && f.x0 === far.x)).toBe(true);
+    expect(fx.filter((f) => f.t === 'blocked').length).toBe(1);
+    expect(s.hp).toBe(50 - 2);
+  });
+  it('lantern.sunrise: Beacon pays across the whole table', () => {
+    const hx = TABLE.x + 12;
+    const hy = TABLE.y + TABLE.h - 12;
+    const gx = TABLE.x + TABLE.w - 12;
+    const gy = TABLE.y + 12;
+    expect(Math.hypot(gx - hx, gy - hy) - 24).toBeGreaterThan(240);
+    expect(lit(['lantern.beacon', 'lantern.sunrise'], gx, gy, hx, hy)).toBe(24);
+    expect(lit(['lantern.beacon'], gx, gy, hx, hy)).toBe(20);
+  });
+  it('lantern.moth: two shooters in reach roll at the hero, the third shoots', () => {
+    const s = mlab(['lantern.moth'], { relics: ['lantern'], gearLevel: { lantern: 2 }, maxHp: 50 }, 90, 240);
+    s.hp = s.maxHp = 50;
+    const ks = [put(s, 'skirmisher', 30, 170), put(s, 'skirmisher', 150, 170), put(s, 'skirmisher', 90, 130)];
+    for (const k of ks) k.intent = { t: 'shoot', n: 2 };
+    const fx = enemyPhaseOnly(s);
+    expect(fx.filter((f) => f.t === 'launch' && f.intent === 'advance').length).toBe(2);
+    expect(fx.filter((f) => f.t === 'tracer').length).toBe(1);
+    expect(s.hp).toBe(50 - 2);
+    expect(s.mothLeft).toBe(0);
+  });
+});

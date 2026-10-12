@@ -125,8 +125,9 @@ function cardMap(v: unknown): Record<string, CardState> {
     if (id !== raw && id in (v as Record<string, unknown>)) continue;
     if (!CARD_IDS.includes(id) || !c || typeof c !== 'object') continue;
     const x = c as Record<string, unknown>;
-    const forks = strList(x.forks);
-    const caps = strList(x.caps);
+    const def = CARDS.find((d) => d.id === id)!;
+    const forks = strList(x.forks).filter((f, i, a) => def.forks.some((d) => d.id === f) && a.indexOf(f) === i);
+    const caps = strList(x.caps).filter((f, i, a) => def.caps.some((d) => d.id === f) && a.indexOf(f) === i);
     out[id] = {
       level: Math.min(3, Math.floor(num(x.level, 0))),
       forks,

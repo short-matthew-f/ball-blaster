@@ -1,5 +1,5 @@
 // v0.6 gallery cards (M2). Every piece of gear is a card with the same tree: unlock -> base I/II -> fork -> base III -> capstone.
-// Forks and capstones are typed here but empty until M3. Leaf module: imports only core/types and core/tuning.
+// Forks (base II, 1 token) and capstones (base III, 2 tokens) are the world-1 choices (M3 part 1); other worlds stay empty. Leaf module: imports only core/types and core/tuning.
 import {
   CARD_BASE_PRICE, CASH_GROWTH, CHILL_PHASES, EXPLOSIVE_R, HEAVY_MASS, LANTERN_REACH, LIGHT_SPEED, MIRROR_CHANCE, MOMENTUM_MAX,
   POISON_MAX, RICOCHET_MAX, SHRAPNEL_COUNT, SPIT_LIFE_CAP, STATIC_DMG, STICKY_STAGGER, THORNS_RELIC_DMG, TRICK_USES,
@@ -141,6 +141,35 @@ const ROWS: Row[] = [
   { id: 'bulwark', slot: 'relic', world: 6, name: 'BULWARK', desc: 'Blocks one hit', icon: 'gear_bulwark', lv: soon, stub: true },
 ];
 
+// ---- M3 part 1: world-1 forks (cost 1) and capstones (cost 2). id = `${card}.${choice}`; the sim reads them as `mod(s, id)`.
+const ch = (card: string, key: string, name: string, desc: string, cost: number): ForkChoice => ({ id: `${card}.${key}`, name, desc, cost });
+const CHOICES: Record<string, { forks: ForkChoice[]; caps: ForkChoice[] }> = {
+  break: {
+    forks: [ch('break', 'slam', 'SLAM', '+10% SPEED, MIN 60%', 1), ch('break', 'crack', 'CRACK', '1ST HIT +1 STAGGER', 1)],
+    caps: [ch('break', 'breaker', 'BREAKER', '1ST HIT SHOVES X2', 2), ch('break', 'steady', 'STEADY', 'AIM PREVIEW ON', 2)],
+  },
+  heavy: {
+    forks: [ch('heavy', 'anvil', 'ANVIL', '1ST HIT X2, STOPS', 1), ch('heavy', 'wrecking', 'WRECKING', 'SHOVES X1.5, NO +1', 1)],
+    caps: [ch('heavy', 'jugger', 'JUGGERNAUT', 'BLOCKS A CHARGE/TURN', 2), ch('heavy', 'avalanche', 'AVALANCHE', 'BUMPS DEAL 2', 2)],
+  },
+  ricochet: {
+    forks: [ch('ricochet', 'bank', 'BANK', '2+ RAILS: +2 EACH', 1), ch('ricochet', 'carom', 'CAROM', 'HITS COUNT AS RAILS', 1)],
+    caps: [ch('ricochet', 'pocket', 'POCKET', '2-RAIL SHOT: CASH X2', 2), ch('ricochet', 'ghost', 'GHOST RAIL', 'FULL-SPEED BANKS', 2)],
+  },
+  momentum: {
+    forks: [ch('momentum', 'streak', 'STREAK', '1-HIT SHOTS HOLD IT', 1), ch('momentum', 'snowball', 'SNOWBALL', '+5% CASH PER STEP', 1)],
+    caps: [ch('momentum', 'unstop', 'UNSTOPPABLE', 'AT 3: BREAK SHIELDS', 2), ch('momentum', 'overdrive', 'OVERDRIVE', 'AT MAX: +10% SPEED', 2)],
+  },
+  recall: {
+    forks: [ch('recall', 'blink', 'BLINK', 'NEAREST SAFE SPOT', 1), ch('recall', 'rewind', 'REWIND', 'BACK TO LAST LAUNCH', 1)],
+    caps: [ch('recall', 'encore', 'ENCORE', '1 FREE RECALL A WAVE', 2), ch('recall', 'anchor', 'ANCHOR', 'NEXT SHOT +2 DMG', 2)],
+  },
+  lantern: {
+    forks: [ch('lantern', 'beacon', 'BEACON', 'LIT KILLS +10%/LEVEL', 1), ch('lantern', 'glare', 'GLARE', 'DAZZLES 1 SHOOTER', 1)],
+    caps: [ch('lantern', 'sunrise', 'SUNRISE', 'REACH: WHOLE TABLE', 2), ch('lantern', 'moth', 'MOTH', 'SHOOTERS COME TO YOU', 2)],
+  },
+};
+
 /** The card catalogue: 24 real cards + 6 stubs, ordered by world then the spec table. */
 export const CARDS: CardDef[] = ROWS.map((r) => ({
   id: r.id,
@@ -156,8 +185,8 @@ export const CARDS: CardDef[] = ROWS.map((r) => ({
     cost: (l: 0 | 1 | 2) => basePrice(r.slot, r.world, l),
     ...(r.apply ? { apply: r.apply } : {}),
   })) as [BaseNode, BaseNode, BaseNode],
-  forks: [],
-  caps: [],
+  forks: CHOICES[r.id]?.forks ?? [],
+  caps: CHOICES[r.id]?.caps ?? [],
   ...(r.apply ? { apply: r.apply } : {}),
 }));
 
@@ -224,15 +253,44 @@ export function buyBase(save: SaveData, id: string): boolean {
   return true;
 }
 
-/** True when any card can be unlocked or any owned card's next base node bought (the GEAR button's dot). */
-export function anyCardAffordable(save: SaveData): boolean {
-  return CARDS.some((c) => cardBuyState(save, c.id) === 'open' || baseBuyState(save, c.id) === 'ok');
-}
+export type ChoiceBuyState = 'locked' | 'poor' | 'open' | 'owned' | 'active';
 
-/** M3: fork / capstone choices. Typed now; nothing to choose in M2. */
-export function setFork(_save: SaveData, _id: string, _choice: string): boolean {
-  return false;
+function choiceState(save: SaveData, card: string, id: string, row: 'fork' | 'cap'): ChoiceBuyState {
+  const def = BY_ID.get(card);
+  const c = save.cards?.[card];
+  if (!def || def.stub || !c) return 'locked';
+  const list = row === 'fork' ? def.forks : def.caps;
+  const ch = list.find((x) => x.id === id);
+  if (!ch || c.level < (row === 'fork' ? 2 : 3)) return 'locked';
+  if ((row === 'fork' ? c.fork : c.cap) === id) return 'active';
+  if ((row === 'fork' ? c.forks : c.caps).includes(id)) return 'owned';
+  return (save.tokens[cardToken(def)] ?? 0) >= ch.cost ? 'open' : 'poor';
 }
-export function setCap(_save: SaveData, _id: string, _choice: string): boolean {
-  return false;
+export const forkBuyState = (save: SaveData, card: string, id: string): ChoiceBuyState => choiceState(save, card, id, 'fork');
+export const capBuyState = (save: SaveData, card: string, id: string): ChoiceBuyState => choiceState(save, card, id, 'cap');
+
+function setChoice(save: SaveData, card: string, id: string, row: 'fork' | 'cap'): boolean {
+  const st = choiceState(save, card, id, row);
+  const c = save.cards[card];
+  if (st === 'active') return true;
+  if (st !== 'owned' && st !== 'open') return false;
+  const list = row === 'fork' ? c.forks : c.caps;
+  if (st === 'open') {
+    const def = BY_ID.get(card)!;
+    save.tokens[cardToken(def)] -= (row === 'fork' ? def.forks : def.caps).find((x) => x.id === id)!.cost;
+    list.push(id);
+  }
+  if (row === 'fork') c.fork = id;
+  else c.cap = id;
+  return true;
+}
+/** Owned choice: activate free. Open: spend the card's world token, own, activate. Else false. One active per row. */
+export const setFork = (save: SaveData, card: string, id: string): boolean => setChoice(save, card, id, 'fork');
+export const setCap = (save: SaveData, card: string, id: string): boolean => setChoice(save, card, id, 'cap');
+
+/** True when any card can be unlocked, any owned card's next base node bought, or any fork / capstone choice taken (the GEAR button's dot). */
+export function anyCardAffordable(save: SaveData): boolean {
+  return CARDS.some((c) =>
+    cardBuyState(save, c.id) === 'open' || baseBuyState(save, c.id) === 'ok' ||
+    c.forks.some((f) => forkBuyState(save, c.id, f.id) === 'open') || c.caps.some((f) => capBuyState(save, c.id, f.id) === 'open'));
 }

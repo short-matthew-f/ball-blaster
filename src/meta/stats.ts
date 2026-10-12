@@ -58,6 +58,11 @@ export function buildStats(save: SaveData): RunStats {
   }
   s.gearLevel = gl;
   s.trickUses = trick ? TRICK_USES[trick] + (gl[trick] ?? 0) : 0;
-  if (cue === 'break') s.aimPreview = 0;
+  for (const id of equipped) {
+    const c = save.cards[id];
+    if (c?.fork) s.mods.push(c.fork);
+    if (c?.cap) s.mods.push(c.cap);
+  }
+  if (cue === 'break' && !s.mods.includes('break.steady')) s.aimPreview = 0;
   return s;
 }

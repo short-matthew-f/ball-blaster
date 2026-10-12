@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_PULL, SIM_DT, TABLE, TOKEN_OF_WORLD, type RelicId, type RunResult, type RunState, type RunStats, type SaveData, type Target, type TokenId, type TrickId, type UpgradeNode } from '../src/core/types';
 import { bankRun, buildStats, buy, buyState, equip, newSave, nodeLevel, nodesFor, ownedGear, relicSlots, trickSlotOpen } from '../src/meta/index';
-import { CARDS, buyBase, buyCard, cardBuyState, cardById, cardOwned } from '../src/meta/cards';
+import { CARDS, buyBase, buyCard, cardBuyState, cardById, cardOwned, setCap, setFork } from '../src/meta/cards';
 import { nodeById } from '../src/meta/tree';
 import { BASE_STATS, ISLAND_PRICE_MULT, TARGET_DEFS, TRICK_USES, stageById } from '../src/core/tuning';
 import { globalIndex, idFromIndex, nextStageId, stageId } from '../src/core/worlds';
@@ -322,6 +322,60 @@ const DIAG = !!(DIAG_LOADOUT || DIAG_TRICK || DIAG_CUE);
 /** Trick-only diagnostic: the bot keeps choosing its own loadout. */
 const TRICK_ONLY = !!(DIAG_TRICK && DIAG_TRICK !== 'none' && DIAG_TRICK_USES !== null && !DIAG_LOADOUT && !DIAG_CUE);
 const PROG_ONLY = ENV.PROG_ONLY;
+/**
+ * PROG_FORK=<card.choice> (v0.6 M3 spec §4, report only): every seed from run 1 owns the card at the level the choice
+ * needs (fork: base II, cap: base III + the safe fork, since base III needs one), the choice active, and the card is
+ * force-equipped every run after the bot's own pick (relic: the last slot; cue/ball: its slot, Thin Rails included;
+ * trick: from stage 4, when the slot opens). The bot's shopping is unchanged otherwise.
+ */
+const PROG_FORK = ENV.PROG_FORK;
+let forkWarned = false;
+
+function forkDiag(): { card: string; choice: string; row: 'fork' | 'cap' } | null {
+  if (!PROG_FORK) return null;
+  const card = PROG_FORK.split('.')[0];
+  const def = cardById(card);
+  const row = def?.forks.some((f) => f.id === PROG_FORK) ? 'fork' : def?.caps.some((f) => f.id === PROG_FORK) ? 'cap' : null;
+  if (!def || !row) throw new Error(`PROG_FORK=${PROG_FORK}: no such fork/cap in the catalogue (forks landed: ${CARDS.some((c) => c.forks.length > 0)})`);
+  return { card, choice: PROG_FORK, row };
+}
+
+/** PROG_FORK: grant the card (level, choice active). Idempotent; re-asserted every run. */
+function grantFork(save: SaveData): void {
+  const d = forkDiag();
+  if (!d) return;
+  const def = cardById(d.card)!;
+  const st = (save.cards[d.card] ??= { level: 0, forks: [], fork: null, caps: [], cap: null });
+  st.level = Math.max(st.level, d.row === 'fork' ? 2 : 3);
+  if (d.row === 'fork') {
+    if (!st.forks.includes(d.choice)) st.forks.push(d.choice);
+    st.fork = d.choice;
+  } else {
+    if (st.fork === null) {
+      const safe = (def.forks.find((f) => SAFE_FORK.has(f.id)) ?? def.forks[0]).id;
+      if (!st.forks.includes(safe)) st.forks.push(safe);
+      st.fork = safe;
+    }
+    if (!st.caps.includes(d.choice)) st.caps.push(d.choice);
+    st.cap = d.choice;
+  }
+}
+
+/** PROG_FORK: force-equip the card after chooseLoadout. */
+function equipFork(save: SaveData): void {
+  const d = forkDiag();
+  if (!d) return;
+  const def = cardById(d.card)!;
+  const lo = save.loadout;
+  if (def.slot === 'cue') lo.cue = d.card as RunStats['cue'];
+  else if (def.slot === 'ball') lo.ball = d.card as RunStats['ballType'];
+  else if (def.slot === 'trick') {
+    if (trickSlotOpen(save)) lo.trick = d.card as TrickId;
+  } else if (!lo.relics.includes(d.card as RelicId)) {
+    if (lo.relics.length < relicSlots(save)) lo.relics.push(d.card as RelicId);
+    else lo.relics[lo.relics.length - 1] = d.card as RelicId;
+  }
+}
 
 const counterSet = (stage: string): RelicId[] => {
   const st = stageById(stage);
@@ -519,9 +573,11 @@ function playForResult(stage: string, seed: number, stats: RunStats, bot: ProgBo
 }
 
 // ---------- v0.6 shopping (M2 spec §6) ----------
-// Cash: island nodes 'ok' + buyable card bases, cheapest first (tie: id), until none. Tokens: per world ascending while
-// that world's token count is > 0: (1) the next island's portal, (2) the world's cards in CARD_PRIORITY order,
-// (3) the world's capstone; stop the world when none is buyable. An empty CARDS catalogue means "no cards" (pre-M2 tree:
+// Cash: island nodes 'ok' + buyable card bases, cheapest first (tie: id), until none. Tokens (v0.6 M3 spec §4): per world
+// ascending while that world's token count is > 0: (1) the next island's portal, (2) the safe fork (SAFE_FORK) of an owned
+// level-2+ card of the world without one, CARD_PRIORITY order (forks before unlocks, or the base-III gate stalls every card
+// at II), (3) the world's cards in CARD_PRIORITY order, (4) the world's island capstone, (5) the safe cap (SAFE_CAP) of a
+// level-3 card without one; stop the world when none is buyable. Empty forks/caps (pre-M3 catalogue) skip (2) and (5). An empty CARDS catalogue means "no cards" (pre-M2 tree:
 // the token phase then falls back to that world's token nodes, cheapest first, so M1 trees still shop).
 
 /** Card unlock order per world (index = world - 1). */
@@ -534,7 +590,8 @@ const CARD_PRIORITY: string[][] = [
   [],
 ];
 
-type SpendKind = 'portal' | 'card' | 'cap' | 'other';
+/** 'cap' = island capstone node; 'fork' / 'ccap' = card fork / capstone choices. */
+type SpendKind = 'portal' | 'fork' | 'card' | 'cap' | 'ccap' | 'other';
 
 /** Per-seed shop ledger (token flows, portal timing, the PROG_TOKENS trace). */
 interface Shop {
@@ -548,7 +605,7 @@ interface Shop {
 
 const zeroTokens = (): Record<TokenId, number> => Object.fromEntries(TOKEN_OF_WORLD.map((t) => [t, 0])) as Record<TokenId, number>;
 function newShop(): Shop {
-  return { r: 0, earned: zeroTokens(), spent: Object.fromEntries(TOKEN_OF_WORLD.map((t) => [t, { portal: 0, card: 0, cap: 0, other: 0 }])) as Shop['spent'], portalAt: {}, trace: [] };
+  return { r: 0, earned: zeroTokens(), spent: Object.fromEntries(TOKEN_OF_WORLD.map((t) => [t, { portal: 0, fork: 0, card: 0, cap: 0, ccap: 0, other: 0 }])) as Shop['spent'], portalAt: {}, trace: [] };
 }
 const sumTokens = (rec: Record<TokenId, number>) => TOKEN_OF_WORLD.reduce((a, t) => a + rec[t], 0);
 const spentTotal = (shop: Shop) => TOKEN_OF_WORLD.reduce((a, t) => a + Object.values(shop.spent[t]).reduce((x, y) => x + y, 0), 0);
@@ -568,6 +625,34 @@ function baseCost(save: SaveData, id: string): number | null {
   if (!def || def.stub || !st || st.level >= 3) return null;
   if (st.level === 2 && def.forks.length > 0 && st.fork === null) return null;
   return def.base[st.level].cost(st.level as 0 | 1 | 2);
+}
+
+/**
+ * Safe choices (spec §4 list). Named explicitly: the catalogue keeps the spec table's order, where the safe choice is not
+ * always [0] (break: slam, crack; heavy: anvil, wrecking; lantern: beacon, glare; ...). A card missing here, or an id not in
+ * the catalogue, falls back to forks[0] / caps[0].
+ */
+const SAFE_FORK = new Set(['break.crack', 'heavy.wrecking', 'ricochet.bank', 'momentum.streak', 'recall.blink', 'lantern.glare']);
+const SAFE_CAP = new Set(['break.steady', 'heavy.jugger', 'ricochet.ghost', 'momentum.unstop', 'recall.anchor', 'lantern.sunrise']);
+
+/**
+ * The safe fork / cap (SAFE_FORK / SAFE_CAP) to buy next for world w: first card in CARD_PRIORITY order that is owned at
+ * level >= 2 (fork) / 3 (cap), has no choice in that row yet, and whose choice the world's tokens cover. The "none owned"
+ * check is load-bearing: setFork/setCap on an owned choice is a free switch (true, no spend), which would spin the loop.
+ */
+function safeChoice(save: SaveData, w: number, row: 'fork' | 'cap'): { card: string; choice: string } | undefined {
+  const tok = TOKEN_OF_WORLD[w - 1];
+  for (const id of CARD_PRIORITY[w - 1]) {
+    const def = cardById(id);
+    const st = save.cards[id];
+    if (!def || def.world !== w || !st) continue;
+    const opts = row === 'fork' ? def.forks : def.caps;
+    const have = row === 'fork' ? st.forks : st.caps;
+    if (!opts.length || st.level < (row === 'fork' ? 2 : 3) || (have?.length ?? 0) > 0) continue;
+    const pick = opts.find((o) => (row === 'fork' ? SAFE_FORK : SAFE_CAP).has(o.id)) ?? opts[0];
+    if (save.tokens[tok] >= pick.cost) return { card: id, choice: pick.id };
+  }
+  return undefined;
 }
 
 function greedyBuy(save: SaveData, shop?: Shop): { bought: number; cash: number } {
@@ -613,6 +698,11 @@ function greedyBuy(save: SaveData, shop?: Shop): { bought: number; cash: number 
         note(tok, 'portal', portal.id, t0);
         continue;
       }
+      const fork = PROG_CARDS ? safeChoice(save, w, 'fork') : undefined;
+      if (fork && setFork(save, fork.card, fork.choice) && save.tokens[tok] < t0) {
+        note(tok, 'fork', fork.choice, t0);
+        continue;
+      }
       const card = PROG_CARDS ? CARD_PRIORITY[w - 1].find((id) => cardById(id)?.world === w && cardBuyState(save, id) === 'open') : undefined;
       if (card && buyCard(save, card)) {
         note(tok, 'card', card, t0);
@@ -621,6 +711,11 @@ function greedyBuy(save: SaveData, shop?: Shop): { bought: number; cash: number 
       const cap = nodeById(save, `cap_w${w}`);
       if (cap && buyState(save, cap) === 'ok' && buy(save, cap)) {
         note(tok, 'cap', cap.id, t0);
+        continue;
+      }
+      const ccap = PROG_CARDS ? safeChoice(save, w, 'cap') : undefined;
+      if (ccap && setCap(save, ccap.card, ccap.choice) && save.tokens[tok] < t0) {
+        note(tok, 'ccap', ccap.choice, t0);
         continue;
       }
       if (CARDS.length === 0) {
@@ -664,6 +759,11 @@ interface StageLog {
   tokOut: number;
   /** Cards owned at arrival. */
   cards: number;
+  /** Fork / capstone choices owned at arrival (all cards). */
+  forks: number;
+  caps: number;
+  /** Active choices of the equipped cards at arrival (stats.mods, choice names), '-' when none. */
+  active: string;
   /** Run index of the run that brought the bot here (0 for w1s1). */
   arriveR: number;
   /** dmg x hp of the clearing run (0 if never cleared). */
@@ -689,12 +789,21 @@ function progression(seed: number, bot: ProgBot): ProgLog {
   for (let r = 1; r <= PROG_RUNS; r++) {
     shop.r = r;
     const n = globalIndex(save.current);
+    grantFork(save);
     chooseLoadout(save);
+    equipFork(save);
     const st = diagStats(save, buildStats(save));
+    if (PROG_FORK && !forkWarned && n >= 4 && !(st.mods ?? []).includes(PROG_FORK)) {
+      forkWarned = true;
+      console.warn(`PROG_FORK=${PROG_FORK}: not in stats.mods at ${save.current} (mods: ${(st.mods ?? []).join(',') || '-'}): buildStats plumbing missing?`);
+    }
     if (!cur) {
       cur = {
         runs: 0, cleared: false, dmg: st.damage, hp: st.maxHp, open: openNodes(save), secs: [], earlyBuys: arrivalBuys, kit: kitName(st), ends: [0, 0, 0, 0],
         tokIn: sumTokens(shop.earned), tokOut: spentTotal(shop), cards: Object.keys(save.cards).length, arriveR, clearDH: 0,
+        forks: Object.values(save.cards).reduce((a, c) => a + (c.forks?.length ?? 0), 0),
+        caps: Object.values(save.cards).reduce((a, c) => a + (c.caps?.length ?? 0), 0),
+        active: (st.mods ?? []).map((m) => m.split('.')[1] ?? m).join('+') || '-',
       };
       log.stages[n] = cur;
       if (ENV.PROG_DUMP === save.current) console.log('STATS', JSON.stringify(st));
@@ -776,13 +885,15 @@ function runBot(bot: ProgBot): BotReport {
       'open nodes': f1(mean(logs.map((l) => l.open))),
       tokens: `${f1(mean(logs.map((l) => l.tokIn)))}/${f1(mean(logs.map((l) => l.tokOut)))}`,
       cards: f1(mean(logs.map((l) => l.cards))),
+      'fork/cap own': `${f1(mean(logs.map((l) => l.forks)))}/${f1(mean(logs.map((l) => l.caps)))}`,
+      'mods on': topKits(logs.map((l) => l.active)),
       'portal run': portal,
       'dead seeds': rep.dead[n],
       'lost at w1-4': [0, 1, 2, 3].map((i) => logs.reduce((a, l) => a + l.ends[i], 0)).join('/'),
       kit: topKits(logs.map((l) => l.kit)),
     };
   }
-  console.log(`Multi-stage progression, ${bot} bot, gear ${PROG_GEAR ? 'on' : 'off'}, cards ${PROG_CARDS ? (CARDS.length ? 'on' : 'none in catalogue') : 'off'} (${PROG_SEEDS} seeds x up to ${PROG_RUNS} runs; rtc = runs to clear; stages 12+ smoke only)`);
+  console.log(`Multi-stage progression, ${bot} bot${PROG_FORK ? `, PROG_FORK=${PROG_FORK}` : ''}, gear ${PROG_GEAR ? 'on' : 'off'}, cards ${PROG_CARDS ? (CARDS.length ? 'on' : 'none in catalogue') : 'off'} (${PROG_SEEDS} seeds x up to ${PROG_RUNS} runs; rtc = runs to clear; stages 12+ smoke only)`);
   console.table(rep.table);
   console.log(`Cash by run 60 (${bot}, mean over seeds): earned ${Math.round(rep.earned)}, spent on the tree ${Math.round(rep.spent)} (${Math.round((100 * rep.spent) / Math.max(1, rep.earned))} %)`);
   // Token budget per world over the whole progression (mean over seeds; min-max of earned).
@@ -791,7 +902,7 @@ function runBot(bot: ProgBot): BotReport {
     const earned = all.map((l) => l.shop.earned[t]);
     if (!earned.some((x) => x > 0)) continue;
     const sp = (k: SpendKind) => f1(mean(all.map((l) => l.shop.spent[t][k])));
-    tok[t] = { earned: f1(mean(earned)), 'min-max': `${Math.min(...earned)}-${Math.max(...earned)}`, portal: sp('portal'), cards: sp('card'), cap: sp('cap'), other: sp('other'), left: f1(mean(all.map((l) => l.shop.earned[t] - Object.values(l.shop.spent[t]).reduce((a, b) => a + b, 0)))) };
+    tok[t] = { earned: f1(mean(earned)), 'min-max': `${Math.min(...earned)}-${Math.max(...earned)}`, portal: sp('portal'), fork: sp('fork'), cards: sp('card'), cap: sp('cap'), 'card cap': sp('ccap'), other: sp('other'), left: f1(mean(all.map((l) => l.shop.earned[t] - Object.values(l.shop.spent[t]).reduce((a, b) => a + b, 0)))) };
   }
   console.log(`Token budget per world (${bot}, mean over seeds, whole progression)`);
   console.table(tok);
@@ -804,7 +915,7 @@ describe('multi-stage progression bot (greedy cheapest-node shopper)', () => {
     const noisy = PROG_ONLY === 'perfect' ? empty : runBot('noisy');
     const perfect = PROG_ONLY === 'noisy' ? empty : runBot('perfect');
     // Diagnostic runs (forced loadouts, gear off, one bot) only report.
-    if (DIAG || !PROG_GEAR || !PROG_CARDS || PROG_ONLY) return;
+    if (DIAG || PROG_FORK || !PROG_GEAR || !PROG_CARDS || PROG_ONLY) return;
     const fails: string[] = [];
     for (let n = 0; n < GATE_STAGES; n++) {
       const id = idFromIndex(n);

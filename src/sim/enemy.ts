@@ -29,10 +29,11 @@ import {
   BOSS_COG_CAP,
   MAINSPRING_MOVE_DIST,
   REPAIR_HEAL,
+  MOTH_CAP,
   gearVal,
 } from '../core/tuning';
 import { applyDamage, heal, hero, heroDamage, kill, scaleCash, stageWaves } from './damage';
-import { has, lv } from './gear';
+import { has, heroGap, lanternR, lv, mod } from './gear';
 import { bossCogs, repairTarget, rollIntent } from './intents';
 import { runSweep, scheduleSweep } from './belts';
 import { relaxAll } from './physics';
@@ -62,6 +63,8 @@ export function startEnemyPhase(s: RunState, fx: FxEvent[]): void {
   s.touching = {};
   s.acted = [];
   s.rangedTaken = 0;
+  s.juggerUsed = false;
+  s.mothLeft = mod(s, 'lantern.moth') ? MOTH_CAP : 0;
   for (const t of s.targets) t.chargeDmg = 0;
   // Freezes tick down first, so a freeze set this phase lasts FREEZE_PHASES full phases.
   for (const t of s.targets) {
@@ -89,9 +92,27 @@ export function startEnemyPhase(s: RunState, fx: FxEvent[]): void {
   s.skipNextEnemyPhase = false;
   s.enemyQueue = reflex ? [] : s.targets.filter((t) => !t.dead && !fresh.has(t.id)).map((t) => t.id);
   s.enemyNext = s.t;
+  if (mod(s, 'lantern.glare') && !s.timeStopped) glare(s, fx);
   // Clockwork: a body on a belt holds the phase BELT_HOLD s, then the sweep runs before anyone acts (also under
   // Reflex and Time Stop). No belts: no hold, identical to v0.4.
   scheduleSweep(s);
+}
+
+/** Glare (lantern fork): the nearest queued shooter within lanternR rests this phase (it rerolls after acting). */
+function glare(s: RunState, fx: FxEvent[]): void {
+  const R = lanternR(s);
+  let best: Target | undefined;
+  let bestD = Infinity;
+  for (const id of s.enemyQueue) {
+    const t = s.targets.find((o) => o.id === id);
+    // Only a shooter that will act this phase (a skipped one keeps its intent: it would rest twice).
+    if (!t || t.dead || t.intent.t !== 'shoot' || staggered(t) || (t.frozen ?? 0) > 0) continue;
+    const d = heroGap(s, t);
+    if (d <= R && (d < bestD || (d === bestD && best && t.id < best.id))) ((best = t), (bestD = d));
+  }
+  if (!best) return;
+  best.intent = { t: 'rest' };
+  fx.push({ t: 'blocked', x: best.x, y: best.y });
 }
 
 /**
@@ -414,6 +435,12 @@ function executeIntent(s: RunState, e: Target, fx: FxEvent[]): boolean {
     case 'advance':
       return advance(s, e, h, fx);
     case 'shoot': {
+      // Moth (lantern capstone): a shooter within reach rolls straight at the hero instead (MOTH_CAP a phase).
+      if ((s.mothLeft ?? 0) > 0 && heroGap(s, e) <= lanternR(s)) {
+        s.mothLeft = (s.mothLeft ?? 0) - 1;
+        fx.push({ t: 'blocked', x: e.x, y: e.y });
+        return advance(s, e, h, fx, false);
+      }
       fx.push({ t: 'tracer', x0: e.x, y0: e.y, x1: h.x, y1: h.y });
       // Mirror relic: the shot is reflected (rng drawn only when equipped, so other runs keep their streams).
       if (has(s, 'mirror') && s.rng.chance(gearVal(MIRROR_CHANCE, lv(s, 'mirror')))) {

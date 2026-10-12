@@ -3,7 +3,6 @@ import { PALETTE } from '../render/palette';
 import { drawText, textWidth } from '../render/text';
 import { drawSprite } from '../render/sprite-cache';
 import { buyState, nodesFor } from '../meta/index';
-import { CARDS, cardBuyState } from '../meta/cards';
 import { TOKEN_OF_WORLD } from '../core/types';
 import type { SaveData, TokenId } from '../core/types';
 import { parseStageId } from '../core/worlds';
@@ -169,17 +168,7 @@ export function drawTokenStrip(ctx: CanvasRenderingContext2D, save: SaveData, x0
   reached.forEach((id, i) => drawTokenCount(ctx, id, save.tokens?.[id] ?? 0, x0 + i * pitch, 8));
 }
 
-/** True when any card can be bought (token in hand) or any owned card's next base level is affordable. */
-export function anyCardAffordable(save: SaveData): boolean {
-  for (const c of CARDS) {
-    if (cardBuyState(save, c.id) === 'open') return true;
-    const st = save.cards?.[c.id];
-    if (!st || c.stub || st.level >= 3) continue;
-    if (st.level === 2 && c.forks.length > 0 && st.fork === null) continue;
-    if (save.cash >= c.base[st.level].cost(st.level as 0 | 1 | 2)) return true;
-  }
-  return false;
-}
+export { anyCardAffordable } from '../meta/cards';
 
 /** True when any revealed upgrade node is currently buyable (cash or token). */
 export function anyAffordable(app: App): boolean {

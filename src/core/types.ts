@@ -453,6 +453,16 @@ export interface RunState {
   lanternOn: boolean;
   /** Hero launch point and speed of the current shot (Draw cue). */
   launch?: { x: number; y: number; speed: number };
+  /** v0.6 M3 Juggernaut (heavy.jugger): a charge was already blocked this enemy phase. */
+  juggerUsed?: boolean;
+  /** v0.6 M3 Moth (lantern.moth): shooter advances left this enemy phase (reset to MOTH_CAP). */
+  mothLeft?: number;
+  /** v0.6 M3 Pocket (ricochet.pocket): shot number whose kills pay x POCKET_MULT. */
+  pocketShot?: number;
+  /** v0.6 M3 Anchor (recall.anchor): shot number whose hero contacts deal +ANCHOR_DMG. */
+  anchorShot?: number;
+  /** v0.6 M3 Encore (recall.encore): wave in which the free recall was spent. */
+  encoreWave?: number;
 }
 
 /** Public sim API implemented by sim/index.ts. */
