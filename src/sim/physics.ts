@@ -218,7 +218,7 @@ function cueAfterContact(s: RunState, b: Ball, pvx: number, pvy: number): void {
   }
 }
 
-/** Explosive relic: the first hit of the shot blasts ceil(dmg/2) to other enemies near the impact; the ball loses speed. */
+/** Explosive relic: the first hit of the shot blasts floor(dmg/2) (min 1) to other enemies near the impact; the ball loses speed. */
 function explode(s: RunState, b: Ball, t: Target, dmg: number, fx: FxEvent[]): void {
   const L = lv(s, 'explosive');
   const R = gearVal(EXPLOSIVE_R, L);
@@ -226,7 +226,7 @@ function explode(s: RunState, b: Ball, t: Target, dmg: number, fx: FxEvent[]): v
   const ix = b.x + (t.x - b.x) * k;
   const iy = b.y + (t.y - b.y) * k;
   fx.push({ t: 'blast', x: ix, y: iy, r: R });
-  const n = Math.ceil(dmg / 2);
+  const n = Math.max(1, Math.floor(dmg / 2));
   for (const o of s.targets.slice()) {
     if (o.dead || o === t) continue;
     if (Math.hypot(o.x - ix, o.y - iy) - o.r <= R) hitEnemy(s, o, n, 'explosion', fx);

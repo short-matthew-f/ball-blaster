@@ -9,6 +9,7 @@ import { Rng } from '../src/core/rng';
 const SPAWN_ZONE_Y = TABLE.y + TABLE.h - SPAWN_ZONE;
 import { canFastForward, createRun, heal, intentVisible, previewShot, shoot, step, useTrick } from '../src/sim/index';
 import type { RunStats } from '../src/core/types';
+import { BREAK_SPEED_MULT, THIN_RAILS_BOUNCE } from '../src/core/tuning';
 import { makeEnemy, placeFormation } from '../src/sim/spawn';
 import { maxOverlap } from '../src/sim/physics';
 import { rageLevel } from '../src/sim/enemy';
@@ -636,7 +637,7 @@ describe('v0.3 step 2: stage generator, scaling, modifiers, boss traits, hazards
     const base = WORLDS[0].waves;
     const count = (st: ReturnType<typeof makeStage>, k: string) => st.waves.reduce((a, w) => a + w.slots.filter((x) => x === k).length, 0);
     const find = (m: Modifier) => allStageIds(1).map(makeStage).find((st) => st.modifiers.includes(m) && st.world !== 2)!;
-    expect(find('thinRails').wallBounce).toBe(0.6);
+    expect(find('thinRails').wallBounce).toBe(THIN_RAILS_BOUNCE);
     expect(find('swift').advanceMult).toBe(1.5);
     expect(find('earlyBoss').waves.length).toBe(2);
     expect(count(find('bombers'), 'bomber')).toBeGreaterThanOrEqual(4);
@@ -773,13 +774,13 @@ function untilFirstHit(s: RunState): FxEvent[] {
 }
 
 describe('v0.4 cues', () => {
-  it('break: +35 % launch speed and at least 50 % power', () => {
+  it('break: faster launch (BREAK_SPEED_MULT) and at least 50 % power', () => {
     const s = glab({ cue: 'break' });
     shoot(s, { x: 0, y: -13 });
-    expect(speedOf(s)).toBeCloseTo(0.5 * MAX_LAUNCH_SPEED * 1.35, 6);
+    expect(speedOf(s)).toBeCloseTo(0.5 * MAX_LAUNCH_SPEED * BREAK_SPEED_MULT, 6);
     const t = glab({ cue: 'break' });
     shoot(t, { x: 0, y: -MAX_PULL });
-    expect(speedOf(t)).toBeCloseTo(MAX_LAUNCH_SPEED * 1.35, 6);
+    expect(speedOf(t)).toBeCloseTo(MAX_LAUNCH_SPEED * BREAK_SPEED_MULT, 6);
   });
   it('jump: passes over the first enemy untouched, lands, and its next contact deals -1', () => {
     const s = glab({ cue: 'jump', damage: 3 }, 90, 260);
@@ -886,7 +887,7 @@ describe('v0.4 relics', () => {
     expect(s.cash).toBeGreaterThan(cash);
     expect(s.combo.chainKills).toBe(0);
   });
-  it('explosive: the first hit blasts ceil(dmg/2) + 1 stagger to enemies near the impact and costs half the speed', () => {
+  it('explosive: the first hit blasts floor(dmg/2) (min 1) + 1 stagger to enemies near the impact and costs half the speed', () => {
     const run = (relics: RunStats['relics']) => {
       const s = glab({ relics, damage: 3 });
       const a = put(s, 'grunt', 90, 170);
@@ -900,7 +901,7 @@ describe('v0.4 relics', () => {
     const on = run(['explosive']);
     const off = run([]);
     expect(on.fx.some((f) => f.t === 'blast')).toBe(true);
-    expect(on.b.hp).toBe(10 - 2);
+    expect(on.b.hp).toBe(10 - 1);
     expect(on.b.stagger).toBe(1);
     expect(off.b.hp).toBe(10);
     expect(speedOf(on.s)).toBeCloseTo(speedOf(off.s) / 2, 0);
@@ -1049,14 +1050,19 @@ describe('v0.4 tricks', () => {
     expect(glab({}).trickUsesLeft).toBe(0);
     expect(useTrick(glab({}))).toBe(false);
   });
-  it('time stop: the next enemy phase is skipped and intents keep', () => {
+  it('time stop: the next enemy phase only lets enemies close in; nothing hits and intents keep', () => {
     const s = glab({ trick: 'timeStop', trickUses: 1 });
-    const g = put(s, 'grunt', 90, 170);
+    const g = put(s, 'grunt', 90, 120);
     g.intent = { t: 'attack', n: 2 };
+    const k = put(s, 'skirmisher', 30, 60);
+    k.intent = { t: 'shoot', n: 2 };
     expect(useTrick(s)).toBe(true);
     enemyPhaseOnly(s);
     expect(s.hp).toBe(BASE_STATS.maxHp);
+    expect(g.y).toBeGreaterThan(150); // advanced toward the hero
     expect(g.intent).toEqual({ t: 'attack', n: 2 });
+    expect(k.intent).toEqual({ t: 'shoot', n: 2 });
+    k.intent = { t: 'rest' };
     enemyPhaseOnly(s);
     expect(s.hp).toBe(BASE_STATS.maxHp - 2);
   });

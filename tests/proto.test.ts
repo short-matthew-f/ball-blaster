@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_PULL, SIM_DT, TABLE, type RelicId, type RunResult, type RunState, type RunStats, type SaveData, type Target, type TrickId } from '../src/core/types';
 import { bankRun, buildStats, buy, buyState, equip, newSave, nextCost, nodesFor, ownedGear, relicSlots, trickSlotOpen } from '../src/meta/index';
-import { BASE_STATS, TARGET_DEFS, stageById } from '../src/core/tuning';
+import { BASE_STATS, TARGET_DEFS, TRICK_USES, stageById } from '../src/core/tuning';
 import { globalIndex, idFromIndex, nextStageId, stageId } from '../src/core/worlds';
 import { createRun, shoot, step, useTrick } from '../src/sim/index';
 import { maxOverlap } from '../src/sim/physics';
@@ -240,7 +240,7 @@ describe('v0.2 prototype bot (30 seeds per config)', () => {
 const PROG_SEEDS = Number(ENV.PROG_SEEDS ?? 16);
 const PROG_RUNS = Number(ENV.PROG_RUNS ?? 160);
 const GATE_STAGES = 12; // w1s1 .. w3s4: asserted
-const SMOKE_STAGES = 16; // + w4s1 .. w4s4: reported only
+const SMOKE_STAGES = Number(ENV.PROG_STAGES ?? 16); // + w4s1 .. w4s4: reported only
 const GATE: [number, number] = [4, 9];
 const LAST_STAGE_MAX = 20; // stage 11: worst seed
 const BUY_WINDOW = 3;
@@ -252,18 +252,55 @@ type ProgBot = 'perfect' | 'noisy';
 const NOISE_DEG = 6;
 const NOISE_POWER: [number, number] = [0.7, 1];
 const NOISE_SECOND = 0.15;
+/** Diagnostic: aim error with Break (it turns the preview off; the bot never reads it). Default = NOISE_DEG (±10 made the gate worse). */
+const NOISE_DEG_BREAK = Number(ENV.PROG_BREAK_DEG ?? NOISE_DEG);
 
 // ---------- v0.4 bot loadout policy (DESIGN-v0.4-loadout "Balance notes") ----------
 // Four fixed loadouts; the best = most of its relics owned (ties: listed order). Empty slots are back-filled with any
-// owned relic (so owned Lightning/Split/Spitter keep working). Cue: Break if owned and the stage has no Thin Rails.
+// owned relic (so owned Lightning/Split/Spitter keep working). Cue: Break if owned, unless Thin Rails + damage loadout.
 // Trick: the first owned of shockwave / timeStop / recall, used greedily (see useTricks). PROG_GEAR=0: empty loadout.
 const PROG_GEAR = ENV.PROG_GEAR !== '0';
 const BACKFILL: RelicId[] = ['lightning', 'split', 'spitter', 'explosive', 'momentum', 'shrapnel', 'poison', 'thorns', 'chill', 'static', 'ricochet', 'mirror', 'lantern'];
 const TRICK_PREF: TrickId[] = ['shockwave', 'timeStop', 'recall'];
+// Diagnostics (never asserted): PROG_LOADOUT=damage|chain|control|counter|none forces that relic set (granted free, no
+// back-fill, 1 slot before w2 and 2 after; 'legacy' = lightning+split); PROG_TRICK=<id>|none forces that trick from w2;
+// PROG_CUE=<id> forces the cue; PROG_ONLY=noisy|perfect.
+const DIAG_LOADOUT = ENV.PROG_LOADOUT;
+const DIAG_TRICK = ENV.PROG_TRICK;
+const DIAG_CUE = ENV.PROG_CUE;
+const DIAG = !!(DIAG_LOADOUT || DIAG_TRICK || DIAG_CUE);
+const PROG_ONLY = ENV.PROG_ONLY;
+
+function loadoutSets(stage: string): Record<string, RelicId[]> {
+  const st = stageById(stage);
+  const counter: RelicId[] = st.modifiers.includes('dark') ? ['lantern'] : st.modifiers.includes('ranged') ? ['mirror'] : ['thorns', 'poison'];
+  return { damage: ['explosive', 'momentum'], chain: ['lightning', 'shrapnel'], control: ['chill', 'static'], counter, legacy: ['lightning', 'split'] };
+}
+
+function diagStats(save: SaveData, stats: RunStats): RunStats {
+  if (!DIAG) return stats;
+  const n = globalIndex(save.current);
+  const out: RunStats = { ...stats, cue: 'standard', relics: [], trick: null, trickUses: 0, gearLevel: {} };
+  if (DIAG_LOADOUT && DIAG_LOADOUT !== 'none') out.relics = loadoutSets(save.current)[DIAG_LOADOUT].slice(0, n >= 4 ? 2 : 1);
+  if (DIAG_CUE) out.cue = DIAG_CUE as RunStats['cue'];
+  if (out.relics.includes('split') && out.splitCount <= 0) out.splitCount = 1;
+  if (out.relics.includes('lightning') && out.lightningChance <= 0) Object.assign(out, { lightningChance: 0.22, lightningArcs: 1, lightningRange: 40, lightningDamage: 1 });
+  if (DIAG_TRICK && DIAG_TRICK !== 'none' && n >= 4) {
+    out.trick = DIAG_TRICK as TrickId;
+    out.trickUses = TRICK_USES[out.trick];
+  }
+  return out;
+}
+
+/** Loadout label for the report: relic ids (3 letters), cue, trick. */
+function kitName(stats: RunStats): string {
+  const r = stats.relics.map((id) => id.slice(0, 3)).join('+') || '-';
+  return `${r}${stats.cue === 'break' ? '/brk' : ''}${stats.trick ? '/' + stats.trick.slice(0, 4) : ''}`;
+}
 
 function chooseLoadout(save: SaveData): void {
   save.loadout = { cue: 'standard', relics: [], trick: null };
-  if (!PROG_GEAR) return;
+  if (!PROG_GEAR || DIAG) return;
   const st = stageById(save.current);
   const own = ownedGear(save);
   const counter: RelicId[] = st.modifiers.includes('dark') ? ['lantern'] : st.modifiers.includes('ranged') ? ['mirror'] : ['thorns', 'poison'];
@@ -272,7 +309,8 @@ function chooseLoadout(save: SaveData): void {
   const score = (set: RelicId[]) => set.filter((id) => own.relics.includes(id)).slice(0, n).length;
   const best = sets.reduce((a, b) => (score(b) > score(a) ? b : a));
   for (const id of [...best, ...BACKFILL]) if (own.relics.includes(id) && save.loadout.relics.length < n) equip(save, 'relic', id);
-  if (own.cues.includes('break') && !st.modifiers.includes('thinRails')) equip(save, 'cue', 'break');
+  // Break everywhere except Thin Rails with the damage loadout (a slam into a soft rail overshoots the rack).
+  if (ENV.PROG_NO_BREAK !== '1' && own.cues.includes('break') && !(st.modifiers.includes('thinRails') && best === sets[0])) equip(save, 'cue', 'break');
   if (trickSlotOpen(save)) {
     const t = TRICK_PREF.find((id) => own.tricks.includes(id));
     if (t) equip(save, 'trick', t);
@@ -313,7 +351,8 @@ function playForResult(stage: string, seed: number, stats: RunStats, bot: ProgBo
     } else {
       const live = s.targets.filter((t) => !t.dead).sort((a, b) => Math.hypot(a.x - h.x, a.y - h.y) - Math.hypot(b.x - h.x, b.y - h.y) || a.id - b.id);
       tg = live.length > 1 && noise.chance(NOISE_SECOND) ? live[1] : live[0];
-      ang = Math.atan2(tg.y - h.y, tg.x - h.x) + ((noise.range(-NOISE_DEG, NOISE_DEG) * Math.PI) / 180);
+      const err = s.stats.cue === 'break' ? NOISE_DEG_BREAK : NOISE_DEG;
+      ang = Math.atan2(tg.y - h.y, tg.x - h.x) + ((noise.range(-err, err) * Math.PI) / 180);
       power = noise.range(NOISE_POWER[0], NOISE_POWER[1]);
     }
     shoot(s, { x: Math.cos(ang) * MAX_PULL * power, y: Math.sin(ang) * MAX_PULL * power });
@@ -354,6 +393,8 @@ interface StageLog {
   secs: number[];
   /** Nodes bought from arrival through the first BUY_WINDOW runs on the stage. */
   earlyBuys: number;
+  /** Loadout on arrival (kitName). */
+  kit: string;
 }
 
 interface ProgLog {
@@ -373,11 +414,11 @@ function progression(seed: number, bot: ProgBot): ProgLog {
     const n = globalIndex(save.current);
     chooseLoadout(save);
     if (!cur) {
-      const st = buildStats(save);
-      cur = { runs: 0, cleared: false, dmg: st.damage, hp: st.maxHp, open: openNodes(save), secs: [], earlyBuys: arrivalBuys };
+      const st = diagStats(save, buildStats(save));
+      cur = { runs: 0, cleared: false, dmg: st.damage, hp: st.maxHp, open: openNodes(save), secs: [], earlyBuys: arrivalBuys, kit: kitName(st) };
       log.stages[n] = cur;
     }
-    const res = playForResult(save.current, seed * 1000 + r, buildStats(save), bot);
+    const res = playForResult(save.current, seed * 1000 + r, diagStats(save, buildStats(save)), bot);
     bankRun(save, res);
     if (r <= 60) log.earned60 += res.cash;
     cur.runs++;
@@ -407,6 +448,12 @@ interface BotReport {
   spent: number;
 }
 
+function topKits(kits: string[]): string {
+  const c = new Map<string, number>();
+  for (const k of kits) c.set(k, (c.get(k) ?? 0) + 1);
+  return [...c.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k, v]) => `${k}:${v}`).join(' ');
+}
+
 function runBot(bot: ProgBot): BotReport {
   const all = Array.from({ length: PROG_SEEDS }, (_, k) => progression(7 + k, bot));
   const rep: BotReport = { table: {}, med: [], worst: [], dead: [], earned: mean(all.map((l) => l.earned60)), spent: mean(all.map((l) => l.spent60)) };
@@ -430,6 +477,7 @@ function runBot(bot: ProgBot): BotReport {
       'dmg/hp arrive': `${f1(mean(logs.map((l) => l.dmg)))}/${f1(mean(logs.map((l) => l.hp)))}`,
       'open nodes': f1(mean(logs.map((l) => l.open))),
       'dead seeds': rep.dead[n],
+      kit: topKits(logs.map((l) => l.kit)),
     };
   }
   console.log(`Multi-stage progression, ${bot} bot, gear ${PROG_GEAR ? 'on' : 'off'} (${PROG_SEEDS} seeds x up to ${PROG_RUNS} runs; rtc = runs to clear; stages 12+ smoke only)`);
@@ -440,13 +488,19 @@ function runBot(bot: ProgBot): BotReport {
 
 describe('multi-stage progression bot (greedy cheapest-node shopper)', () => {
   it('noisy bot: rtc median in [4, 9], stage 11 worst <= 20, no dead economy; perfect bot: median >= 2 (no trivial stage)', () => {
-    const noisy = runBot('noisy');
-    const perfect = runBot('perfect');
+    const empty: BotReport = { table: {}, med: [], worst: [], dead: [], earned: 0, spent: 0 };
+    const noisy = PROG_ONLY === 'perfect' ? empty : runBot('noisy');
+    const perfect = PROG_ONLY === 'noisy' ? empty : runBot('perfect');
+    // Diagnostic runs (forced loadouts, gear off, one bot) only report.
+    if (DIAG || !PROG_GEAR || PROG_ONLY) return;
     const fails: string[] = [];
     for (let n = 0; n < GATE_STAGES; n++) {
       const id = idFromIndex(n);
       const m = noisy.med[n];
-      if (!(m >= GATE[0] && m <= GATE[1])) fails.push(`noisy ${id}: median ${m}`);
+      // World openers (slot 1 of world >= 2) are breathers after a slot-4 grind: lower bound 2 (DECISIONS: Balance).
+      const opener = n >= 4 && n % 4 === 0;
+      const lo = opener ? 2 : GATE[0];
+      if (!(m >= lo && m <= GATE[1])) fails.push(`noisy ${id}: median ${m}`);
       if (n === GATE_STAGES - 1 && !(noisy.worst[n] <= LAST_STAGE_MAX)) fails.push(`noisy ${id}: worst ${noisy.worst[n]}`);
       if ((noisy.dead[n] ?? 0) > 0) fails.push(`noisy ${id}: ${noisy.dead[n]} seeds could not buy anything in ${BUY_WINDOW} runs`);
       if (!(perfect.med[n] >= PERFECT_MIN)) fails.push(`perfect ${id}: median ${perfect.med[n]}`);

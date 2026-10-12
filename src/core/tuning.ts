@@ -238,7 +238,7 @@ export const RANGED_EXTRA = 1;
 export const RANGED_SHOOT = 1;
 /** Ranged's Shoot bonus applies from this slot on. */
 export const RANGED_SHOOT_SLOT = 3;
-export const THIN_RAILS_BOUNCE = 0.6;
+export const THIN_RAILS_BOUNCE = 0.65;
 export const EARLY_BOSS_WAVES = 2;
 /** Ice hazard patches: friction and rolling deceleration x this inside a patch (near zero; a trace keeps phases finite). */
 export const ICE_PATCH_FRICTION = 0.1;
@@ -251,8 +251,8 @@ export function stageById(id: StageId): StageDef {
 }
 
 // ---------- v0.4 gear (DESIGN-v0.4-loadout). Arrays are indexed by gearLevel (clamped to the last entry). ----------
-/** Break cue: launch speed x this; every shot fires at >= BREAK_MIN_POWER. */
-export const BREAK_SPEED_MULT = 1.35;
+/** Break cue: launch speed x this (doc 1.35; bot-tuned v0.4: it was the first emerald buy and trivialised w2/w3); every shot fires at >= BREAK_MIN_POWER. */
+export const BREAK_SPEED_MULT = 1.2;
 export const BREAK_MIN_POWER = 0.5;
 /** Jump cue: damage penalty on the first contact after landing (min 1). */
 export const JUMP_PENALTY = [1, 0];
@@ -262,11 +262,11 @@ export const DRAW_RETURN = 0.5;
 /** Follow cue: after the first contact the ball keeps FOLLOW_KEEP x its pre-impact velocity; charges deal +FOLLOW_CHARGE_EXTRA. */
 export const FOLLOW_KEEP = 0.6;
 export const FOLLOW_CHARGE_EXTRA = 1;
-/** Poison: stacks per ball contact (+1 per level), cap; level >= POISON_NO_DECAY_LV: stacks never decay. */
-export const POISON_MAX = 5;
+/** Poison: stacks per ball contact (+1 per level), cap by level; level >= POISON_NO_DECAY_LV: stacks never decay. */
+export const POISON_MAX = [4, 4, 5];
 export const POISON_NO_DECAY_LV = 2;
-/** Explosive: blast radius (px, edge gap from the impact point) and ball speed kept, by level. */
-export const EXPLOSIVE_R = [40, 50, 60];
+/** Explosive: blast radius (px, edge gap from the impact point) and ball speed kept, by level. Blast = floor(dmg/2), min 1. */
+export const EXPLOSIVE_R = [36, 46, 56];
 export const EXPLOSIVE_KEEP = [0.5, 0.5, 1];
 /** Chill: phases, charge speed / reach multiplier, Advance multiplier. */
 export const CHILL_PHASES = [1, 2];
@@ -284,7 +284,7 @@ export const RICOCHET_MAX = [3, 5];
 /** Thorns relic: damage to an enemy whose charge lands on the hero. */
 export const THORNS_RELIC_DMG = [2, 3];
 /** Momentum: cap; a shot with >= MOMENTUM_HITS hits adds +1, fewer resets. */
-export const MOMENTUM_MAX = [3, 5];
+export const MOMENTUM_MAX = [2, 4];
 export const MOMENTUM_HITS = 2;
 /** Mirror: chance a Shoot is reflected (no damage to the hero, MIRROR_DMG to the shooter). */
 export const MIRROR_CHANCE = [0.3, 0.5];

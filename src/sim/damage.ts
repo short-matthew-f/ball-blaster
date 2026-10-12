@@ -111,11 +111,11 @@ export function addStagger(t: Target, n: number, fx: FxEvent[], s?: RunState): v
 export function addPoison(s: RunState, t: Target, fx: FxEvent[]): void {
   if (t.dead || !has(s, 'poison')) return;
   const before = t.poison ?? 0;
-  t.poison = Math.min(POISON_MAX, before + 1 + lv(s, 'poison'));
+  t.poison = Math.min(gearVal(POISON_MAX, lv(s, 'poison')), before + 1 + lv(s, 'poison'));
   if (before <= 0 && t.poison > 0) fx.push({ t: 'status', id: t.id, kind: 'poison', on: true });
 }
 
-/** Shrapnel relic: a kill by a ball releases shards (spat-like balls, SHARD_LIFE s, 1 damage). */
+/** Shrapnel relic: a kill by the hero ball releases shards (spat-like balls, SHARD_LIFE s, 1 damage). */
 function spawnShards(s: RunState, t: Target, fx: FxEvent[]): void {
   const n = gearVal(SHRAPNEL_COUNT, lv(s, 'shrapnel'));
   const r = 2;
@@ -242,7 +242,7 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
   }
   // Sweep counts kills within a shot; a poison tick at the start of the enemy phase is not part of the shot.
   if (!t.summon && t.kind !== 'boss' && (s.waveKillShot ?? -1) < 0 && src !== 'poison') s.waveKillShot = s.shots;
-  if (!quiet && isBallSource(src) && s.phase === 'resolve' && !killer?.shard && has(s, 'shrapnel')) spawnShards(s, t, fx);
+  if (!quiet && src === 'main' && s.phase === 'resolve' && has(s, 'shrapnel')) spawnShards(s, t, fx);
   if (t.kind === 'cadre') updateBossShield(s);
   if (def.splitsInto) {
     const { kind, count } = def.splitsInto;

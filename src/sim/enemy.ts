@@ -74,11 +74,12 @@ export function startEnemyPhase(s: RunState, fx: FxEvent[]): void {
   const fresh = advanceWave(s, fx);
   const rage = rageLevel(s);
   if (rage > 0) fx.push({ t: 'enrage', level: rage });
-  // Reflex: the first enemy phase of each wave is skipped. Time Stop (trick): this whole phase is skipped.
+  // Reflex: the first enemy phase of each wave is skipped. Time Stop (trick): enemies only close in (Advance) this
+  // phase; nothing attacks, shoots or casts, and every intent is kept.
   const reflex = s.stats.reflex > 0 && s.waveTurn === 0 && fresh.size === 0;
-  const stopped = s.skipNextEnemyPhase;
+  s.timeStopped = s.skipNextEnemyPhase;
   s.skipNextEnemyPhase = false;
-  s.enemyQueue = reflex || stopped ? [] : s.targets.filter((t) => !t.dead && !fresh.has(t.id)).map((t) => t.id);
+  s.enemyQueue = reflex ? [] : s.targets.filter((t) => !t.dead && !fresh.has(t.id)).map((t) => t.id);
   s.enemyNext = s.t;
 }
 
@@ -137,6 +138,14 @@ export function enemyStep(s: RunState, h: number, fx: FxEvent[], physics: (s: Ru
     if (!e || e.dead) continue;
     // Staggered (or frozen): skip; the intent is kept, not rerolled.
     if (staggered(e) || (e.frozen ?? 0) > 0) continue;
+    if (s.timeStopped) {
+      // Time Stop: melee enemies close in without attacking; the intent is kept (not added to acted).
+      if ((e.intent.t === 'attack' || e.intent.t === 'advance') && e.kind !== 'skirmisher' && advance(s, e, hero(s), fx)) {
+        s.enemyNext = s.t + LAUNCH_GAP;
+        break;
+      }
+      continue;
+    }
     s.acted.push(e.id);
     if (execute(s, e, fx)) {
       s.enemyNext = s.t + LAUNCH_GAP;
@@ -171,6 +180,7 @@ export function enemyStep(s: RunState, h: number, fx: FxEvent[], physics: (s: Ru
 /** Reroll intents for enemies that acted, clear stagger, tick chill, advance the enrage clock. */
 function endEnemyPhase(s: RunState, fx: FxEvent[]): void {
   s.targets = s.targets.filter((t) => !t.dead);
+  s.timeStopped = false;
   const acted = new Set(s.acted);
   for (const t of s.targets) {
     if (acted.has(t.id)) rollIntent(s, t);

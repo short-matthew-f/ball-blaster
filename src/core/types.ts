@@ -409,8 +409,10 @@ export interface RunState {
   pendingFx?: FxEvent[];
   /** Trick uses left this run. */
   trickUsesLeft: number;
-  /** Time Stop: the next enemy phase is skipped entirely (intents keep). */
+  /** Time Stop: the next enemy phase is stopped (enemies only close in; intents keep). */
   skipNextEnemyPhase: boolean;
+  /** Time Stop is active in the current enemy phase. */
+  timeStopped?: boolean;
   /** Momentum relic: current bonus damage. */
   momentum: number;
   /** Rail bounces of the main ball before its first enemy hit this shot (Ricochet). */
