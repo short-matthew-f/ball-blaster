@@ -117,3 +117,5 @@ Resolves DESIGN-v0.4-loadout gaps. Numbers live in `core/tuning.ts` (per-level a
 - All art and sound are original and generated in code.
 
 | World openers may be breathers | The gate's lower bound is 2 (not 4) for slot 1 of worlds >= 2: a player arrives over-levelled after grinding the previous world's slot 4, and the plain opener is meant to feel like relief. Per-slot HP multipliers only moved which stage was easy. (v0.4 gear pass: w3s1 noisy median 2, perfect 3.) |
+
+| Time Stop untested at scale | The progression bot never owns a trick through world 3 (10–15 emeralds; it buys the cheapest node first), so Time Stop is covered only by unit tests and the per-trick diagnostic (PROG_TRICK). Watch it in human play. |
