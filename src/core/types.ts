@@ -150,6 +150,8 @@ export interface BossDef {
   phases: number[];
   /** Shield minions spawned around the boss; the boss takes no damage while any lives. 0 = none. */
   cadre: number;
+  /** v0.5: intent kit from the world's boss archetype (absent = 'stripe'). Sim rollIntent/checkBossPhase dispatch on it. */
+  kit?: 'stripe' | 'golem' | 'mainspring';
 }
 
 // ---------- Entities ----------

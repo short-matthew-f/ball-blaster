@@ -2,7 +2,7 @@
 import type { RunResult, RunState, Vec } from '../core/types';
 import { CANCEL_RADIUS, FAST_FORWARD_MULT, MAX_PULL, MIN_POWER, SIM_DT, TABLE } from '../core/types';
 import { PALETTE } from '../render/palette';
-import { drawHud, drawWorld, modifierLine, ringDots } from '../render/renderer';
+import { drawBeltGhost, drawHud, drawWorld, modifierLine, ringDots } from '../render/renderer';
 import { stageById } from '../core/tuning';
 import { Fx } from '../render/fx';
 import { drawText } from '../render/text';
@@ -166,7 +166,8 @@ export class RunScreen implements Screen {
     ctx.save();
     ctx.translate(sh.x, sh.y);
     const flash = this.app.save.settings.flash;
-    drawWorld(ctx, s, now, flash, { heroFlash: this.fx.heroFlash });
+    drawWorld(ctx, s, now, flash, { heroFlash: this.fx.heroFlash, beltFlash: this.fx.beltFlash });
+    drawBeltGhost(ctx, s, now);
     this.drawHint(ctx, s, now);
     this.drawAim(ctx, s);
     this.fx.draw(ctx);

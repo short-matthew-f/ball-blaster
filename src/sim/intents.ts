@@ -1,10 +1,57 @@
 // Intent rolls. Not reach-aware (execution is): an Attack rolled out of reach executes as Advance.
 import type { RunState, Target } from '../core/types';
-import { BOSS_ATTACK, BOSS_SLAM, TARGET_DEFS, stageById } from '../core/tuning';
+import { BOSS_ATTACK, BOSS_COG_CAP, BOSS_SLAM, REPAIR_RANGE, TARGET_DEFS, stageById } from '../core/tuning';
 
 /** Stage attack scaling (x ATK_GROWTH^n), applied before the Overtime bonus so the shown number is the hit. */
 function atk(s: RunState, n: number): number {
   return n > 0 ? Math.max(1, Math.round(n * stageById(s.stage).atkScale)) : n;
+}
+
+/** Live cogs summoned by the Mainspring (its own cap, BOSS_COG_CAP). */
+export function bossCogs(s: RunState): number {
+  let n = 0;
+  for (const t of s.targets) if (!t.dead && t.kind === 'cog' && t.summon) n++;
+  return n;
+}
+
+/**
+ * Tinker Repair target: the live ally (not `e`, the boss or cadre) within REPAIR_RANGE (edge gap) missing the most HP;
+ * ties: lowest id. Undefined when nobody in range is damaged.
+ */
+export function repairTarget(s: RunState, e: Target): Target | undefined {
+  let best: Target | undefined;
+  for (const o of s.targets) {
+    if (o === e || o.dead || o.kind === 'boss' || o.kind === 'cadre' || o.hp >= o.maxHp) continue;
+    if (Math.hypot(o.x - e.x, o.y - e.y) - o.r - e.r > REPAIR_RANGE) continue;
+    const miss = o.maxHp - o.hp;
+    const bm = best ? best.maxHp - best.hp : -1;
+    if (miss > bm || (miss === bm && best && o.id < best.id)) best = o;
+  }
+  return best;
+}
+
+/**
+ * The Mainspring. Phase 1: Attack 4 (50) / Advance (25) / Wind (25). Phase 2: Slam 8 after a Charge; else Charge (40) /
+ * Summon cog (30; 0 at BOSS_COG_CAP live boss cogs) / Attack 4 (30).
+ */
+function mainspringIntent(s: RunState, e: Target, bonus: number): void {
+  if (e.phase === 0) {
+    const p = s.rng.pick([
+      { t: 'attack' as const, weight: 50 },
+      { t: 'advance' as const, weight: 25 },
+      { t: 'wind' as const, weight: 25 },
+    ]);
+    e.intent = p.t === 'attack' ? { t: 'attack', n: atk(s, BOSS_ATTACK) + bonus } : { t: p.t };
+  } else if (e.charged) {
+    e.intent = { t: 'attack', n: atk(s, BOSS_SLAM) + bonus };
+  } else {
+    const p = s.rng.pick([
+      { t: 'charge' as const, weight: 40 },
+      { t: 'summon' as const, weight: bossCogs(s) >= BOSS_COG_CAP ? 0 : 30 },
+      { t: 'attack' as const, weight: 30 },
+    ]);
+    e.intent = p.t === 'attack' ? { t: 'attack', n: atk(s, BOSS_ATTACK) + bonus } : { t: p.t };
+  }
 }
 
 export function rollIntent(s: RunState, e: Target): void {
@@ -23,6 +70,10 @@ export function rollIntent(s: RunState, e: Target): void {
       e.intent = e.charged ? { t: 'attack', n: atk(s, def.chargedAttack ?? 5) + bonus } : { t: 'charge' };
       return;
     case 'boss':
+      if (stageById(s.stage).boss.kit === 'mainspring') {
+        mainspringIntent(s, e, bonus);
+        return;
+      }
       if (e.phase === 0) {
         const p = s.rng.pick([
           { t: 'attack' as const, weight: 50 },
@@ -37,7 +88,9 @@ export function rollIntent(s: RunState, e: Target): void {
       }
       return;
   }
-  const p = s.rng.pick(def.intents);
+  let p = s.rng.pick(def.intents);
+  // Tinker: Repair only rolls with a damaged ally in range; otherwise it Shoots.
+  if (p.t === 'repair' && !repairTarget(s, e)) p = def.intents.find((x) => x.t === 'shoot') ?? p;
   let n = p.n;
   if (n !== undefined) {
     if (p.t === 'attack' && e.charged) n = def.chargedAttack ?? n * 2;

@@ -1,5 +1,5 @@
 // Public sim API (see SimApi in core/types.ts). Pure and deterministic: all randomness comes from state.rng.
-import type { RunState, SimApi } from '../core/types';
+import type { SimApi } from '../core/types';
 import { canFastForward, createRun, previewShot, shoot, step, useTrick } from './run';
 
 export { canFastForward, createRun, previewShot, shoot, step, useTrick };
@@ -11,9 +11,8 @@ export { onIce } from './physics';
 export const sim: SimApi = { createRun, step, shoot, previewShot, canFastForward, useTrick };
 
 /**
- * Clockwork: where the hero will rest after the next conveyor sweep (Grip-adjusted), or null when the hero is not on a
- * belt. Render draws a dotted outline there during aim. (Stub until sim/belts.ts lands.)
+ * Clockwork: where the hero will rest after the next conveyor sweep (CLEATS-adjusted), or null when the hero is not on a
+ * belt. Render draws a dotted outline there during aim. Implemented in sim/belts.ts.
  */
-export function beltPreview(_s: RunState): { x: number; y: number } | null {
-  return null;
-}
+export { beltPreview } from './belts';
+export { BELT_SHIFT, MAINSPRING_MOVE_DIST } from '../core/tuning';

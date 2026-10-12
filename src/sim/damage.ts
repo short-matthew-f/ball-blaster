@@ -186,12 +186,22 @@ export function applyDamage(s: RunState, t: Target, dmg: number, src: DamageSour
 }
 
 export function checkBossPhase(s: RunState, b: Target, fx: FxEvent[]): void {
-  const phases = stageById(s.stage).boss.phases;
+  const boss = stageById(s.stage).boss;
+  const phases = boss.phases;
   const frac = b.hp / b.maxHp;
   while (b.phase < phases.length && frac <= phases[b.phase]) {
     b.phase++;
     b.charged = false;
     fx.push({ t: 'bossPhase', phase: b.phase });
+    // The Mainspring's phase 2 entry (once): every conveyor on this run's board reverses.
+    if (boss.kit === 'mainspring' && b.phase === 1) {
+      for (const z of s.hazards) {
+        if (z.kind !== 'conveyor') continue;
+        z.dx = -(z.dx ?? 0) || 0;
+        z.dy = -(z.dy ?? 0) || 0;
+      }
+      fx.push({ t: 'beltReverse' });
+    }
   }
 }
 
@@ -211,7 +221,7 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
   if (!quiet) {
     const st = stageById(s.stage);
     const mult = (t.elite ? ELITE_CASH_MULT : 1) * overtimeCashMult(s);
-    const cash = Math.round(def.cash * st.cashScale * s.stats.cashMult * mult);
+    const cash = Math.round((t.cashBase ?? def.cash) * st.cashScale * s.stats.cashMult * mult);
     s.cash += cash;
     s.combo.cash = (s.combo.cash ?? 0) + cash;
     fx.push({ t: 'kill', x: t.x, y: t.y, targetKind: t.kind, cash });

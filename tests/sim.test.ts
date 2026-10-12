@@ -707,7 +707,7 @@ describe('v0.3 step 2: stage generator, scaling, modifiers, boss traits, hazards
 
   it('ice hazard: patches only on Ice; a body crossing one keeps (almost) all its speed', () => {
     expect(makeStage('w1s1').hazards).toEqual([]);
-    expect(makeStage('w3s1').hazards).toEqual([]);
+    expect(makeStage('w4s1').hazards).toEqual([]); // w3 has conveyors (v0.5); mud/lava/slot are still data-only
     const st = makeStage('w2s1');
     expect(st.hazards.length).toBeGreaterThan(0);
     expect(st.hazards.every((h) => h.kind === 'ice')).toBe(true);
@@ -1107,5 +1107,420 @@ describe('v0.4 determinism with gear', () => {
     const { t: _a, ...ff } = snapshot(go(SIM_DT * FAST_FORWARD_MULT));
     const { t: _b, ...normal } = snapshot(go(SIM_DT));
     expect(ff).toEqual(normal);
+  });
+});
+
+// ---------- v0.5 Clockwork Works (world 3) ----------
+import { BELT_SHIFT, ENEMY_WALL_BOUNCE, MAINSPRING_MOVE_DIST } from '../src/core/tuning';
+import { beltPreview } from '../src/sim/index';
+import { liveRegulars, spawnWave } from '../src/sim/spawn';
+const spawnWaveForTest = (s: RunState) => spawnWave(s, []);
+import { applyDamage } from '../src/sim/damage';
+import type { Hazard, Target } from '../src/core/types';
+
+const belt = (x: number, y: number, w: number, h: number, dx: number, dy: number): Hazard => ({ kind: 'conveyor', x, y, r: 0, w, h, dx, dy });
+/** A full-width belt carrying right along y = 150. */
+const RIGHT_BELT = belt(90, 150, 160, 20, 1, 0);
+
+/** Empty table on `stage` with the hero at (x,y) and the given belts. */
+function clab(hazards: Hazard[], x = 40, y = 150, over: Partial<RunStats> = {}, stage = 'w1s1'): RunState {
+  const s = createRun(stage, { ...BASE_STATS, ...over }, 42);
+  s.targets = [];
+  s.obstacles = [];
+  s.hazards = hazards.map((z) => ({ ...z }));
+  s.balls[0].x = x;
+  s.balls[0].y = y;
+  return s;
+}
+function resting(s: RunState, kind: TargetKind, x: number, y: number): Target {
+  const e = put(s, kind, x, y);
+  e.intent = { t: 'rest' };
+  return e;
+}
+const belts = (fx: FxEvent[]) => fx.filter((f): f is Extract<FxEvent, { t: 'belt' }> => f.t === 'belt');
+/** Put the state into a bare enemy phase (no intents queued) so hand-launched bodies play out under enemy rules. */
+function bareEnemyPhase(s: RunState): void {
+  s.phase = 'enemy';
+  s.enemyQueue = [];
+  s.enemyNext = s.t;
+  s.resolveTime = 0;
+  s.lastHit = {};
+  s.touching = {};
+}
+
+describe('v0.5 Clockwork: stage generator', () => {
+  it('w3s1-4: belts 1/2/2/3, gears 0/1/1/1, in bounds above the spawn zone, no overlaps, deterministic', () => {
+    const want = [[1, 0], [2, 1], [2, 1], [3, 1]];
+    for (let k = 1; k <= 4; k++) {
+      const hz = makeStage(stageId(3, k)).hazards;
+      const bs = hz.filter((z) => z.kind === 'conveyor');
+      const gs = hz.filter((z) => z.kind === 'gear');
+      expect([bs.length, gs.length]).toEqual(want[k - 1]);
+      bs.forEach((b, i) => {
+        expect([b.w, b.h]).toEqual(i % 2 === 0 ? [100, 20] : [20, 80]);
+        expect(Math.abs(b.dx!) + Math.abs(b.dy!)).toBe(1);
+        expect(i % 2 === 0 ? b.dy : b.dx).toBe(0);
+        expect(b.x - b.w! / 2).toBeGreaterThanOrEqual(16);
+        expect(b.x + b.w! / 2).toBeLessThanOrEqual(164);
+        expect(b.y - b.h! / 2).toBeGreaterThanOrEqual(50);
+        expect(b.y + b.h! / 2).toBeLessThanOrEqual(222);
+        expect(b.y + b.h! / 2).toBeLessThan(SPAWN_ZONE_Y);
+        for (const o of bs) {
+          if (o === b) continue;
+          const gx = Math.max(0, Math.abs(o.x - b.x) - (o.w! + b.w!) / 2);
+          const gy = Math.max(0, Math.abs(o.y - b.y) - (o.h! + b.h!) / 2);
+          expect(Math.hypot(gx, gy)).toBeGreaterThanOrEqual(12);
+        }
+        for (const g of gs) {
+          const gx = Math.max(0, Math.abs(g.x - b.x) - b.w! / 2);
+          const gy = Math.max(0, Math.abs(g.y - b.y) - b.h! / 2);
+          expect(Math.hypot(gx, gy) - g.r).toBeGreaterThanOrEqual(8);
+        }
+      });
+      for (const g of gs) {
+        expect(g.r).toBe(14);
+        expect(g.x).toBeGreaterThanOrEqual(50);
+        expect(g.x).toBeLessThanOrEqual(130);
+        expect(g.y).toBeGreaterThanOrEqual(94);
+        expect(g.y).toBeLessThanOrEqual(160);
+      }
+    }
+    // Deterministic: seeded by the global index only (snapshot of w3s1).
+    const b0 = makeStage('w3s1').hazards[0];
+    expect([Math.round(b0.x), Math.round(b0.y), b0.dx, b0.dy]).toEqual([111, 81, 1, 0]);
+  });
+  it('worlds 1-2 stage data is unchanged by v0.5 (hash of makeStage n = 0..7)', () => {
+    let h = 0;
+    const str = JSON.stringify(Array.from({ length: 8 }, (_, n) => makeStage(idFromIndex(n))));
+    for (let i = 0; i < str.length; i++) h = (Math.imul(h, 31) + str.charCodeAt(i)) | 0;
+    expect([h, str.length]).toEqual([70826863, 9446]);
+  });
+  it('createRun: the gear becomes an unbreakable obstacle; hazards are a copy (a reversal never leaks into the stage)', () => {
+    const a = createRun('w3s2', BASE_STATS, 3);
+    const stageBelts = makeStage('w3s2').hazards.filter((z) => z.kind === 'conveyor');
+    expect(a.hazards).toEqual(stageBelts);
+    const gear = a.obstacles.filter((o) => o.kind === 'gear');
+    expect(gear.length).toBe(1);
+    expect(gear[0].hp).toBe(Infinity);
+    expect(gear[0].r).toBe(14);
+    for (const t of a.targets) expect(Math.hypot(t.x - gear[0].x, t.y - gear[0].y)).toBeGreaterThanOrEqual(t.r + 14);
+    // The Mainspring's phase 2 reverses the run's belts; the next run starts un-reversed.
+    const boss = makeEnemy(a, 'boss', 90, 60);
+    a.targets.push(boss);
+    applyDamage(a, boss, boss.hp - Math.floor(boss.maxHp / 2), 'main', []);
+    expect(a.hazards.map((z) => z.dx! + 2 * z.dy!)).toEqual(stageBelts.map((z) => -(z.dx! + 2 * z.dy!)));
+    const b = createRun('w3s2', BASE_STATS, 3);
+    expect(b.hazards).toEqual(stageBelts);
+    expect(createRun('w3s2', BASE_STATS, 4).hazards).toEqual(stageBelts);
+  });
+});
+
+describe('v0.5 Clockwork: conveyor sweep', () => {
+  it('a right belt carries the hero and a resting grunt 24 px (one belt fx each), after the hold, before anyone acts', () => {
+    const s = clab([RIGHT_BELT], 40, 150);
+    const g = put(s, 'grunt', 100, 150);
+    g.intent = { t: 'advance' };
+    const fx = enemyPhaseOnly(s);
+    expect(BELT_SHIFT).toBe(24);
+    expect(s.balls[0].x).toBeCloseTo(64, 6);
+    const bf = belts(fx);
+    expect(bf.length).toBe(2);
+    for (const f of bf) expect([f.dx, f.dy]).toEqual([24, 0]);
+    // The sweep fires before the queue: the grunt's launch comes after the belt fx.
+    expect(fx.findIndex((f) => f.t === 'launch')).toBeGreaterThan(fx.findIndex((f) => f.t === 'belt'));
+    expect(maxOverlap(s)).toBeLessThanOrEqual(0.01);
+    expect(s.beltAt).toBeUndefined();
+  });
+  it('a frozen enemy stays (and blocks); a body 1 px from the rail moves 1; queues advance front-first', () => {
+    const s = clab([RIGHT_BELT], 40, 150);
+    const ice = resting(s, 'grunt', 100, 150);
+    ice.frozen = 2;
+    const edge = resting(s, 'grunt', TABLE.x + TABLE.w - 12 - 1, 150);
+    enemyPhaseOnly(s);
+    expect(ice.x).toBe(100);
+    expect(edge.x).toBeCloseTo(TABLE.x + TABLE.w - 12, 6);
+    expect(s.balls[0].x).toBeCloseTo(64, 6);
+    // Hero behind a grunt that is stopped by the rail: slides to contact.
+    const q = clab([RIGHT_BELT], 120, 150);
+    const front = resting(q, 'grunt', TABLE.x + TABLE.w - 12 - 1, 150);
+    const pv = beltPreview(q)!;
+    const fx = enemyPhaseOnly(q);
+    expect(front.x).toBeCloseTo(158, 6);
+    expect(q.balls[0].x).toBeCloseTo(158 - 24, 6);
+    expect(pv.x).toBeCloseTo(q.balls[0].x, 6);
+    expect(belts(fx).length).toBe(2);
+    expect(maxOverlap(q)).toBeLessThanOrEqual(0.01);
+  });
+  it('CLEATS: beltGrip 1 carries the hero 12 px, 2 not at all; enemies always 24; beltPreview matches', () => {
+    for (const [grip, d] of [[0, 24], [1, 12], [2, 0]]) {
+      const s = clab([RIGHT_BELT], 40, 150, { beltGrip: grip });
+      const g = resting(s, 'grunt', 100, 150);
+      expect(beltPreview(s)!.x).toBeCloseTo(40 + d, 6);
+      const fx = enemyPhaseOnly(s);
+      expect(s.balls[0].x).toBeCloseTo(40 + d, 6);
+      expect(g.x).toBeCloseTo(124, 6);
+      expect(belts(fx).length).toBe(d > 0 ? 2 : 1);
+    }
+    const off = clab([RIGHT_BELT], 90, 250);
+    expect(beltPreview(off)).toBeNull();
+    expect(beltPreview(lab())).toBeNull();
+  });
+  it('belts still run under Time Stop and Reflex', () => {
+    const s = clab([RIGHT_BELT], 40, 150, { trick: 'timeStop', trickUses: 1 });
+    const g = put(s, 'grunt', 100, 150);
+    g.intent = { t: 'attack', n: 2 };
+    expect(useTrick(s)).toBe(true);
+    enemyPhaseOnly(s);
+    expect(s.balls[0].x).toBeCloseTo(64, 6);
+    expect(s.hp).toBe(BASE_STATS.maxHp);
+    const r = clab([RIGHT_BELT], 40, 150, { reflex: 1 });
+    resting(r, 'grunt', 100, 230);
+    r.waveTurn = 0;
+    enemyPhaseOnly(r);
+    expect(r.balls[0].x).toBeCloseTo(64, 6);
+  });
+  it('no belt under anyone: no hold (worlds without belts take the v0.4 path)', () => {
+    const s = clab([RIGHT_BELT], 90, 250);
+    resting(s, 'grunt', 90, 60);
+    shoot(s, { x: 0, y: 20 });
+    s.balls[0].vx = s.balls[0].vy = 0;
+    step(s, SIM_DT);
+    expect(s.phase).toBe('enemy');
+    expect(s.beltAt).toBeUndefined();
+  });
+});
+
+describe('v0.5 Clockwork: gear', () => {
+  const gearAt = (s: RunState, x: number, y: number) => s.obstacles.push({ id: 900, kind: 'gear', x, y, r: 14, hp: Infinity, flash: 0, dead: false });
+  it('the hero leaves the gear 35 deg clockwise off the reflection, untouched', () => {
+    const s = lab(90, 240);
+    gearAt(s, 90, 150);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    let fx: FxEvent[] = [];
+    while (s.phase === 'resolve' && !fx.some((f) => f.t === 'gearSpin')) fx = step(s, SIM_DT);
+    expect(fx.some((f) => f.t === 'gearSpin')).toBe(true);
+    const h = s.balls[0];
+    // Head-on from below: the reflection points straight down (90 deg, y-down); the gear turns it to 125 deg.
+    const deg = (Math.atan2(h.vy, h.vx) * 180) / Math.PI;
+    expect(Math.abs(deg - 125)).toBeLessThanOrEqual(3);
+    untilSettled(s);
+    expect(s.hp).toBe(BASE_STATS.maxHp);
+    expect(s.obstacles.find((o) => o.kind === 'gear')!.dead).toBe(false);
+  });
+  it('a charger through the gear deals nothing and takes +1 stagger (once)', () => {
+    const s = lab(90, 240);
+    gearAt(s, 90, 172);
+    const g = put(s, 'grunt', 90, 115);
+    g.intent = { t: 'attack', n: 2 };
+    shoot(s, { x: 0, y: 20 });
+    s.balls[0].vx = s.balls[0].vy = 0;
+    let stag = -1;
+    const all: FxEvent[] = [];
+    for (let i = 0; i < 240 * 6 && s.phase !== 'aim'; i++) {
+      const fx = step(s, SIM_DT);
+      all.push(...fx);
+      if (stag < 0 && fx.some((f) => f.t === 'gearSpin')) stag = g.stagger;
+    }
+    expect(all.some((f) => f.t === 'gearSpin')).toBe(true);
+    expect(all.some((f) => f.t === 'blocked')).toBe(true);
+    expect(stag).toBe(1);
+    expect(s.hp).toBe(BASE_STATS.maxHp);
+    expect(g.hp).toBe(g.maxHp);
+  });
+});
+
+describe('v0.5 Clockwork: cog and tinker', () => {
+  it('a charging cog bumps its own side (1 each down the line) and keeps its charge', () => {
+    const s = lab(150, 280);
+    const cog = resting(s, 'cog', 90, 80);
+    const g1 = resting(s, 'grunt', 90, 140);
+    const g2 = resting(s, 'grunt', 90, 175);
+    bareEnemyPhase(s);
+    cog.chargeDmg = 3;
+    cog.railHits = 0;
+    cog.vy = TARGET_DEFS.cog.chargeSpeed;
+    cog.resting = false;
+    let kept = -1;
+    for (let i = 0; i < 240 * 6 && s.phase === 'enemy'; i++) {
+      step(s, SIM_DT);
+      if (kept < 0 && g1.hp < g1.maxHp) kept = cog.chargeDmg ?? 0;
+    }
+    expect(kept).toBe(3);
+    expect(g1.hp).toBe(g1.maxHp - 1);
+    expect(g2.hp).toBe(g2.maxHp - 1);
+  });
+  it('a cog Attack hits the hero for the scaled 3; banks off one rail; the second rail contact stops it', () => {
+    const s = clab([], 90, 250, {}, 'w3s1');
+    const cog = put(s, 'cog', 90, 140);
+    rollIntentForTest(s, cog);
+    const n3 = Math.max(1, Math.round(3 * stageById('w3s1').atkScale));
+    cog.intent = { t: 'attack', n: n3 };
+    enemyPhaseOnly(s);
+    expect(s.hp).toBe(BASE_STATS.maxHp - n3);
+    // Two rails: left, then top.
+    const r = lab(150, 280);
+    resting(r, 'grunt', 150, 200);
+    const c = resting(r, 'cog', 40, 100);
+    bareEnemyPhase(r);
+    c.chargeDmg = 3;
+    c.railHits = 0;
+    c.vx = -250;
+    c.vy = -120;
+    c.resting = false;
+    let after1: number | null = null;
+    let stopped = false;
+    for (let i = 0; i < 240 * 4 && r.phase === 'enemy'; i++) {
+      const vx0 = c.vx;
+      step(r, SIM_DT);
+      if (after1 === null && c.railHits === 1) after1 = c.vx / vx0;
+      if (c.railHits === 2) {
+        stopped = c.vx === 0 && c.vy === 0 && (c.chargeDmg ?? 0) === 0;
+        break;
+      }
+    }
+    // Rail restitution 0.6 x 1.2 (never the stage's hero wallBounce / Thin Rails).
+    expect(after1!).toBeCloseTo(-ENEMY_WALL_BOUNCE * TARGET_DEFS.cog.bounce, 1);
+    expect(stopped).toBe(true);
+  });
+  it('cogs per regular wave are capped at 2 (extras become grunts)', () => {
+    const s = createRun('w3s4', BASE_STATS, 5);
+    for (let w = 1; w <= 3; w++) {
+      s.targets = [];
+      s.wave = w;
+      spawnWaveForTest(s);
+      expect(s.targets.filter((t) => t.kind === 'cog').length).toBeLessThanOrEqual(2);
+    }
+  });
+  it('tinker: Repair heals the most damaged ally in range (never itself); none in range: it rolls Shoot and executes nothing', () => {
+    const s = lab(90, 270);
+    const tk = put(s, 'tinker', 90, 100);
+    tk.hp = 1;
+    const a = resting(s, 'grunt', 55, 100);
+    const b = resting(s, 'grunt', 125, 100);
+    a.hp = a.maxHp - 1;
+    b.hp = b.maxHp - 2;
+    tk.intent = { t: 'repair' };
+    const fx = enemyPhaseOnly(s);
+    expect(b.hp).toBe(b.maxHp);
+    expect(a.hp).toBe(a.maxHp - 1);
+    expect(tk.hp).toBe(1);
+    expect(fx.filter((f) => f.t === 'repair')).toEqual([{ t: 'repair', x: b.x, y: b.y, amount: 2 }]);
+    // Nobody damaged in range: always Shoot.
+    const q = lab(90, 270);
+    const t2 = put(q, 'tinker', 90, 100);
+    t2.hp = 1;
+    const far = resting(q, 'grunt', 90, 200);
+    far.hp = 1;
+    for (let i = 0; i < 30; i++) {
+      rollIntentForTest(q, t2);
+      expect(t2.intent.t).toBe('shoot');
+    }
+    // A Repair whose target is gone is a Rest.
+    t2.intent = { t: 'repair' };
+    const hp0 = q.hp;
+    const f2 = enemyPhaseOnly(q);
+    expect(q.hp).toBe(hp0);
+    expect(f2.some((f) => f.t === 'repair' || f.t === 'heroHit')).toBe(false);
+  });
+});
+
+describe('v0.5 Clockwork: The Mainspring', () => {
+  it('Wind: the next sweep runs twice (48 px), then clears; the boss soft-rolls 40 px after it', () => {
+    const s = clab([belt(90, 200, 160, 20, 1, 0)], 90, 270, {}, 'w3s1');
+    const boss = put(s, 'boss', 90, 70);
+    boss.intent = { t: 'wind' };
+    resting(s, 'grunt', 150, 60);
+    enemyPhaseOnly(s);
+    expect(s.beltWound).toBe(true);
+    expect(boss.y - 70).toBeGreaterThan(MAINSPRING_MOVE_DIST - 10);
+    expect(boss.y - 70).toBeLessThan(MAINSPRING_MOVE_DIST + 10);
+    boss.intent = { t: 'rest' };
+    s.balls[0].x = 40;
+    s.balls[0].y = 200;
+    expect(beltPreview(s)!.x).toBeCloseTo(88, 6);
+    const fx = enemyPhaseOnly(s);
+    expect(s.balls[0].x).toBeCloseTo(88, 6);
+    expect(belts(fx).find((f) => Math.abs(f.y - 200) < 1e-6)!.dx).toBeCloseTo(48, 6);
+    expect(s.beltWound).toBe(false);
+  });
+  it('phase 2 (50 %) reverses every belt once, with beltReverse right after bossPhase; other bosses do not', () => {
+    const s = clab([belt(90, 100, 100, 20, 1, 0), belt(40, 180, 20, 80, 0, -1)], 90, 270, {}, 'w3s1');
+    const boss = put(s, 'boss', 120, 220);
+    const fx: FxEvent[] = [];
+    applyDamage(s, boss, boss.hp - Math.floor(boss.maxHp / 2), 'main', fx);
+    const i = fx.findIndex((f) => f.t === 'bossPhase');
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(fx[i + 1]).toEqual({ t: 'beltReverse' });
+    expect(s.hazards.map((z) => [z.dx, z.dy])).toEqual([[-1, 0], [0, 1]]);
+    applyDamage(s, boss, 1, 'main', fx);
+    expect(fx.filter((f) => f.t === 'beltReverse').length).toBe(1);
+    // Big Stripe (w1) keeps its v0.4 kit.
+    const w1 = clab([belt(90, 100, 100, 20, 1, 0)], 90, 270, {}, 'w1s2');
+    const bs = put(w1, 'boss', 120, 220);
+    const f1: FxEvent[] = [];
+    applyDamage(w1, bs, bs.hp - Math.floor(bs.maxHp / 2), 'main', f1);
+    expect(f1.some((f) => f.t === 'beltReverse')).toBe(false);
+    expect(w1.hazards[0].dx).toBe(1);
+  });
+  it('phase 2: Summon makes cogs (cap 2, pay 1, never count for the clear); weight 0 at the cap', () => {
+    const s = clab([], 90, 280, {}, 'w3s1');
+    const boss = put(s, 'boss', 90, 70);
+    boss.phase = 1;
+    const g = resting(s, 'grunt', 30, 250);
+    for (let k = 0; k < 3; k++) {
+      boss.intent = { t: 'summon' };
+      for (const t of s.targets) if (t !== boss) t.intent = { t: 'rest' };
+      enemyPhaseOnly(s);
+    }
+    const cogs = s.targets.filter((t) => !t.dead && t.kind === 'cog');
+    expect(cogs.length).toBe(2);
+    for (const c of cogs) expect([c.summon, c.cashBase]).toEqual([true, 1]);
+    expect(liveRegulars(s)).toBe(2); // boss + grunt
+    expect(g.dead).toBe(false);
+    for (let i = 0; i < 60; i++) {
+      boss.charged = false;
+      rollIntentForTest(s, boss);
+      expect(boss.intent.t).not.toBe('summon');
+    }
+    const fx: FxEvent[] = [];
+    kill(s, cogs[0], 'main', fx);
+    const st = stageById('w3s1');
+    expect(fx.find((f) => f.t === 'kill')).toMatchObject({ cash: Math.round(1 * st.cashScale) });
+  });
+  it('phase 1 rolls Attack / Advance / Wind; other bosses never Wind', () => {
+    const s = clab([], 90, 280, {}, 'w3s1');
+    const boss = put(s, 'boss', 90, 70);
+    const seen = new Set<string>();
+    for (let i = 0; i < 200; i++) {
+      rollIntentForTest(s, boss);
+      seen.add(boss.intent.t);
+    }
+    expect([...seen].sort()).toEqual(['advance', 'attack', 'wind']);
+    const w = lab();
+    const b2 = put(w, 'boss', 90, 70);
+    for (let i = 0; i < 200; i++) {
+      rollIntentForTest(w, b2);
+      expect(b2.intent.t).not.toBe('wind');
+    }
+  });
+});
+
+describe('v0.5 Clockwork: determinism', () => {
+  it('same seed + same shots on a belt + gear stage => identical state; fast-forward matches', () => {
+    const go = (dt: number, seed: number) => {
+      const s = createRun('w3s4', BASE_STATS, seed);
+      for (const p of SHOTS) {
+        if (s.phase !== 'aim') break;
+        shoot(s, p);
+        untilSettled(s, dt);
+      }
+      return s;
+    };
+    for (const seed of [3, 8]) {
+      expect(snapshot(go(SIM_DT, seed))).toEqual(snapshot(go(SIM_DT, seed)));
+      const { t: _a, ...ff } = snapshot(go(SIM_DT * FAST_FORWARD_MULT, seed));
+      const { t: _b, ...normal } = snapshot(go(SIM_DT, seed));
+      expect(ff).toEqual(normal);
+    }
   });
 });

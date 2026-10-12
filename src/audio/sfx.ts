@@ -294,6 +294,29 @@ export class Sfx {
           [392, 330, 262, 196, 147].forEach((f, i) => this.tone(f, 0.3, 'triangle', 0.22, f * 0.85, i * 0.16));
           this.noise(0.5, 0.12, 'lowpass', 250, 0.3);
           break;
+        case 'belt':
+          if (!this.gate('belt')) break;
+          this.noise(0.14, 0.09, 'bandpass', 500);
+          this.tone(110, 0.14, 'sawtooth', 0.07, 80);
+          this.tone(150, 0.04, 'square', 0.06, 0, 0.07);
+          break;
+        case 'gearSpin':
+          if (!this.gate('gear')) break;
+          this.tone(1240, 0.18, 'square', 0.1, 1180);
+          this.tone(1870, 0.12, 'triangle', 0.08, 1700, 0.01);
+          this.noise(0.05, 0.1, 'highpass', 3000);
+          break;
+        case 'repair':
+          if (!this.gate('repair')) break;
+          this.tone(1047, 0.12, 'sine', 0.1);
+          this.tone(1568, 0.22, 'sine', 0.08, 0, 0.07);
+          break;
+        case 'beltReverse':
+          if (!this.gate('beltRev')) break;
+          this.tone(260, 0.5, 'sawtooth', 0.14, 60);
+          this.noise(0.5, 0.12, 'bandpass', 700);
+          this.tone(130, 0.4, 'square', 0.06, 45, 0.1);
+          break;
         case 'shoot': // played locally on a successful shoot() call
         case 'shimmer':
           break;

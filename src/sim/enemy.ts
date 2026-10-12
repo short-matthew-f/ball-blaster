@@ -28,11 +28,15 @@ import {
   MIRROR_CHANCE,
   MIRROR_DMG,
   POISON_NO_DECAY_LV,
+  BOSS_COG_CAP,
+  MAINSPRING_MOVE_DIST,
+  REPAIR_HEAL,
   gearVal,
 } from '../core/tuning';
 import { applyDamage, heal, hero, heroDamage, kill, scaleCash, stageWaves } from './damage';
 import { has, lv } from './gear';
-import { rollIntent } from './intents';
+import { bossCogs, repairTarget, rollIntent } from './intents';
+import { runSweep, scheduleSweep } from './belts';
 import { relaxAll } from './physics';
 import { liveRegulars, spawnWave, summonNear } from './spawn';
 
@@ -81,6 +85,9 @@ export function startEnemyPhase(s: RunState, fx: FxEvent[]): void {
   s.skipNextEnemyPhase = false;
   s.enemyQueue = reflex ? [] : s.targets.filter((t) => !t.dead && !fresh.has(t.id)).map((t) => t.id);
   s.enemyNext = s.t;
+  // Clockwork: a body on a belt holds the phase BELT_HOLD s, then the sweep runs before anyone acts (also under
+  // Reflex and Time Stop). No belts: no hold, identical to v0.4.
+  scheduleSweep(s);
 }
 
 /**
@@ -132,6 +139,7 @@ function advanceWave(s: RunState, fx: FxEvent[]): Set<number> {
 /** One enemy-phase substep. Returns true when the phase has finished (intents rerolled, stagger cleared). */
 export function enemyStep(s: RunState, h: number, fx: FxEvent[], physics: (s: RunState, h: number, fx: FxEvent[]) => void): boolean {
   s.resolveTime += h;
+  if (s.beltAt !== undefined && s.t + 1e-9 >= s.beltAt) runSweep(s, fx);
   while (s.enemyQueue.length > 0 && s.t + 1e-9 >= s.enemyNext) {
     const id = s.enemyQueue.shift()!;
     const e = s.targets.find((t) => t.id === id);
@@ -160,10 +168,11 @@ export function enemyStep(s: RunState, h: number, fx: FxEvent[], physics: (s: Ru
 
   if (s.resolveTime >= MAX_ENEMY_SECONDS) {
     s.enemyQueue = [];
+    s.beltAt = undefined;
     for (const b of s.balls) ((b.vx = 0), (b.vy = 0), (b.resting = true));
     for (const t of s.targets) ((t.vx = 0), (t.vy = 0), (t.resting = true), (t.chargeDmg = 0));
   }
-  if (s.enemyQueue.length > 0) return false;
+  if (s.enemyQueue.length > 0 || s.beltAt !== undefined) return false;
   if (!s.balls.every((b) => b.resting) || !s.targets.every((t) => t.dead || t.resting)) return false;
   // The last regular died during the enemy phase (bump, detonation): the next wave arrives now (it acts next phase).
   if (s.wavePending || liveRegulars(s) === 0) {
@@ -181,6 +190,7 @@ export function enemyStep(s: RunState, h: number, fx: FxEvent[], physics: (s: Ru
 function endEnemyPhase(s: RunState, fx: FxEvent[]): void {
   s.targets = s.targets.filter((t) => !t.dead);
   s.timeStopped = false;
+  s.beltAt = undefined;
   const acted = new Set(s.acted);
   for (const t of s.targets) {
     if (acted.has(t.id)) rollIntent(s, t);
@@ -284,10 +294,10 @@ function speedFor(s: RunState, dist: number, vmax: number): number {
  * Advance: a soft roll toward the hero (skirmisher: sideways reposition). It stops ADVANCE_STANDOFF short of the
  * hero instead of shoving it (an advance is not an attack), so the roll is shortened when the hero is close.
  */
-function advance(s: RunState, e: Target, h: Ball, fx: FxEvent[], sideways = e.kind === 'skirmisher'): boolean {
+function advance(s: RunState, e: Target, h: Ball, fx: FxEvent[], sideways = e.kind === 'skirmisher', base?: number): boolean {
   let dx = h.x - e.x;
   let dy = h.y - e.y;
-  let dist = (e.elite === 'swift' ? SWIFT_ADVANCE_DIST : ADVANCE_DIST) * stageById(s.stage).advanceMult;
+  let dist = (base ?? (e.elite === 'swift' ? SWIFT_ADVANCE_DIST : ADVANCE_DIST)) * stageById(s.stage).advanceMult;
   if ((e.chill ?? 0) > 0) dist *= CHILL_ADVANCE_MULT;
   if (sideways) {
     const px = -dy;
@@ -343,9 +353,16 @@ export function intentVisible(s: RunState, t: Target): boolean {
  * also repositions after an intent that did not launch (summon, charge, rest): toward the hero, or sideways when close.
  */
 function execute(s: RunState, e: Target, fx: FxEvent[]): boolean {
+  const it = e.intent.t;
   const launched = executeIntent(s, e, fx);
-  if (launched || e.dead || e.kind !== 'boss' || !stageById(s.stage).bossTraits.includes('moves')) return launched;
+  const st = stageById(s.stage);
+  if (launched || e.dead || e.kind !== 'boss' || !st.bossTraits.includes('moves')) return launched;
   const h = hero(s);
+  // The Mainspring: a shorter soft roll, only after Wind, Charge or Summon (sideways when inside the standoff).
+  if (st.boss.kit === 'mainspring') {
+    if (it !== 'wind' && it !== 'charge' && it !== 'summon') return false;
+    return advance(s, e, h, fx, false, MAINSPRING_MOVE_DIST) || advance(s, e, h, fx, true, MAINSPRING_MOVE_DIST);
+  }
   return advance(s, e, h, fx) || advance(s, e, h, fx, true);
 }
 
@@ -370,10 +387,11 @@ function executeIntent(s: RunState, e: Target, fx: FxEvent[]): boolean {
         return false;
       }
       const speed = (e.charged ? (def.chargedSpeed ?? def.chargeSpeed * 1.25) : def.chargeSpeed) * ((e.chill ?? 0) > 0 ? CHILL_CHARGE_MULT : 1);
-      const d = chargeDir(s, e, h, e.kind === 'bouncer' || slam || far);
+      const d = chargeDir(s, e, h, e.kind === 'bouncer' || e.kind === 'cog' || slam || far);
       launch(e, d.x, d.y, speed, fx, 'attack');
       e.chargeDmg = (it.n ?? 0) + rage;
       e.charged = false;
+      if (e.kind === 'cog') e.railHits = 0; // the second rail contact of this charge stops it (physics.ts)
       return true;
     }
     case 'advance':
@@ -426,13 +444,32 @@ function executeIntent(s: RunState, e: Target, fx: FxEvent[]): boolean {
       kill(s, e, 'explosion', fx, undefined, true);
       return false;
     case 'summon': {
+      // The Mainspring summons cogs (own cap; they pay 1 and never count for the wave clear).
+      if (e.kind === 'boss' && stageById(s.stage).boss.kit === 'mainspring') {
+        if (bossCogs(s) < BOSS_COG_CAP) {
+          const c = summonNear(s, e, 'cog', fx);
+          if (c) c.cashBase = 1;
+        }
+        return false;
+      }
       const grubs = s.targets.filter((t) => !t.dead && t.summon).length;
       const cap = e.kind === 'hive' ? HIVE_GRUB_CAP : SUMMON_CAP;
       if (grubs < cap) summonNear(s, e, 'grub', fx);
       return false;
     }
-    case 'repair': // Clockwork tinker (sim owner implements)
-    case 'wind': // Clockwork Mainspring (sim owner implements)
+    case 'repair': {
+      // Tinker: heal the most damaged ally in range (not itself, the boss or cadre); nobody in range = Rest.
+      const best = repairTarget(s, e);
+      if (!best) return false;
+      const amount = Math.min(best.maxHp - best.hp, Math.ceil(REPAIR_HEAL * stageById(s.stage).hpScale));
+      best.hp += amount;
+      e.aimId = best.id;
+      fx.push({ t: 'repair', x: best.x, y: best.y, amount });
+      return false;
+    }
+    case 'wind': // The Mainspring: the next conveyor sweep runs twice.
+      s.beltWound = true;
+      return false;
     case 'rest':
       return false;
   }

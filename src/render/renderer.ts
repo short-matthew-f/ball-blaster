@@ -2,10 +2,10 @@
 import type { RunState, Target } from '../core/types';
 import { TABLE, VIEW_H, VIEW_W } from '../core/types';
 import { BLAST_HERO_R, TARGET_DEFS, WAVES_PER_STAGE, stageById } from '../core/tuning';
-import { overtimeCashMult, rageLevel, rageStart } from '../sim/index';
+import { beltPreview, overtimeCashMult, rageLevel, rageStart } from '../sim/index';
 import type { Hazard } from '../core/types';
 import { PALETTE } from './palette';
-import { drawSprite, spriteSize, WHITE } from './sprite-cache';
+import { drawSprite, getSprite, spriteSize, WHITE } from './sprite-cache';
 import { drawText, textWidth } from './text';
 import { drawBar } from '../ui/widgets';
 import { MODIFIER_NAMES, WORLDS, makeStage, parseStageId } from '../core/worlds';
@@ -143,10 +143,10 @@ export function ringDots(ctx: CanvasRenderingContext2D, x: number, y: number, r:
   }
 }
 
-/** Worlds 3-6 reuse the Big Stripe sprite until their art lands: overlay the world tint. Null = no tint. */
+/** Worlds 4-6 reuse the Big Stripe sprite until their art lands: overlay the world tint. Null = no tint. */
 function bossTint(stage: string): string | null {
   const w = parseStageId(stage).world;
-  return w >= 3 ? WORLDS[w - 1]?.tint ?? null : null;
+  return w >= 4 ? WORLDS[w - 1]?.tint ?? null : null;
 }
 
 /** Banner text for a stage's active modifiers ("RANGED · DARK"); '' when none. */
@@ -162,7 +162,9 @@ export function drawModIcons(ctx: CanvasRenderingContext2D, stage: string, x: nu
 }
 
 /** Board hazards under the enemies: ice = pale cyan dithered disc with a lighter rim; stub kinds = dim grey. */
-function drawHazard(ctx: CanvasRenderingContext2D, h: Hazard): void {
+function drawHazard(ctx: CanvasRenderingContext2D, h: Hazard, s: RunState, now: number, flash: boolean, beltFlash: number): void {
+  if (h.kind === 'conveyor') { drawConveyor(ctx, h, s, now, flash, beltFlash); return; }
+  if (h.kind !== 'ice' && h.kind !== 'mud' && h.kind !== 'lava' && h.kind !== 'slot') return; // gear lives in s.obstacles
   const ice = h.kind === 'ice';
   const fill = ice ? P.c : P['3'];
   const rim = ice ? P['5'] : P['4'];
@@ -182,15 +184,72 @@ function drawHazard(ctx: CanvasRenderingContext2D, h: Hazard): void {
   ctx.globalAlpha = 1;
 }
 
+/** Conveyor: dim rect, 8x8 arrow tiles pointing along (dx,dy), frames alternate every 0.2 s, rim bright while a sweep is pending. */
+function drawConveyor(ctx: CanvasRenderingContext2D, h: Hazard, s: RunState, now: number, flash: boolean, beltFlash: number): void {
+  const w = h.w ?? 0, hh = h.h ?? 0;
+  if (w <= 0 || hh <= 0) return;
+  const dx = h.dx ?? 1, dy = h.dy ?? 0;
+  const horiz = Math.abs(dx) >= Math.abs(dy);
+  const L = horiz ? w : hh, W = horiz ? hh : w; // along / across the belt
+  const ang = Math.atan2(dy, dx);
+  const cols = Math.max(1, Math.floor(L / 8)), rows = Math.max(1, Math.floor(W / 8));
+  const frame = flash ? Math.floor(now / 0.2) % 2 : 0;
+  const name = frame ? 'belt_b' : 'belt';
+  const holding = s.beltAt !== undefined;
+  ctx.save();
+  ctx.translate(Math.round(h.x), Math.round(h.y));
+  ctx.rotate(ang);
+  const l0 = -Math.round(L / 2), w0 = -Math.round(W / 2);
+  ctx.globalAlpha = 0.5;
+  ctx.fillStyle = P['1'];
+  ctx.fillRect(l0, w0, Math.round(L), Math.round(W));
+  ctx.globalAlpha = 0.85;
+  const tl = -cols * 4, tw = -rows * 4;
+  const img = getSprite(name);
+  for (let i = 0; i < cols; i++) for (let j = 0; j < rows; j++) ctx.drawImage(img, tl + i * 8, tw + j * 8);
+  // rim
+  ctx.globalAlpha = holding ? 1 : 0.7;
+  ctx.fillStyle = holding ? P.Y : P['0'];
+  const rl = Math.round(L), rw = Math.round(W);
+  ctx.fillRect(l0, w0, rl, 1);
+  ctx.fillRect(l0, w0 + rw - 1, rl, 1);
+  ctx.fillRect(l0, w0, 1, rw);
+  ctx.fillRect(l0 + rl - 1, w0, 1, rw);
+  if (beltFlash > 0) {
+    ctx.globalAlpha = Math.min(1, beltFlash / 0.4) * 0.85;
+    ctx.fillStyle = WHITE;
+    ctx.fillRect(l0, w0, rl, rw);
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+/** Aim phase: dotted hero outline where the belt will carry the hero. */
+export function drawBeltGhost(ctx: CanvasRenderingContext2D, s: RunState, now: number): void {
+  if (s.phase !== 'aim') return;
+  let p: { x: number; y: number } | null = null;
+  try { p = beltPreview(s); } catch { p = null; }
+  const hero = s.balls.find((b) => b.kind === 'main');
+  if (!p || !hero) return;
+  drawSprite(ctx, 'hero', p.x, p.y, { alpha: 0.25 });
+  ringDots(ctx, p.x, p.y, hero.r + 1, P['5'], 0, 0.4);
+  void now;
+}
+
 /** Enemy sprite by kind (v2 names equal kinds); the boss is picked by stage. */
 export function enemySprite(t: Target, stage: string): string {
-  if (t.kind === 'boss') return parseStageId(stage).world === 2 ? 'boss_rime_golem' : 'boss_old_eight';
+  if (t.kind === 'boss') {
+    const w = parseStageId(stage).world;
+    return w === 2 ? 'boss_rime_golem' : w === 3 ? 'boss_mainspring' : 'boss_old_eight';
+  }
   return t.kind === 'cadre' ? 'grunt' : t.kind;
 }
 
 export interface WorldView {
   /** Seconds of hero hit-flash remaining. */
   heroFlash?: number;
+  /** Seconds of conveyor reversal flash remaining. */
+  beltFlash?: number;
 }
 
 function segDist(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
@@ -393,9 +452,10 @@ function drawEnemyOverlay(ctx: CanvasRenderingContext2D, s: RunState, t: Target,
 /** Table contents. Call inside the shake translate. */
 export function drawWorld(ctx: CanvasRenderingContext2D, s: RunState, now: number, flash = true, view: WorldView = {}): void {
   ctx.drawImage(getTableBg(s.stage), 0, 0);
-  for (const h of s.hazards ?? []) drawHazard(ctx, h);
+  for (const h of s.hazards ?? []) drawHazard(ctx, h, s, now, flash, view.beltFlash ?? 0);
   for (const o of s.obstacles) {
     if (o.dead) continue;
+    if (o.kind === 'gear') { drawSprite(ctx, flash && Math.floor(now * 4) % 2 ? 'gear_b' : 'gear', o.x, o.y); continue; }
     drawSprite(ctx, o.kind, o.x, o.y, o.flash > 0 ? { tint: WHITE } : {});
   }
   for (const t of s.targets) if (!t.dead) drawEnemyBody(ctx, t, s.stage, now, flash);

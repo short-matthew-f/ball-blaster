@@ -210,6 +210,8 @@ interface GraftSpec {
   d: [number, number];
   p: [number, number];
   counter: [string, string];
+  /** Replaces the default counter (+2 HP per level, max 3) with a world mechanic counter. Node id stays g<w>_counter. */
+  counterNode?: { name: string; desc: string; max: number; icon: string; apply: (s: RunStats, l: number) => void };
   cash: [string, string];
   cap: [string, string, (s: RunStats) => void];
 }
@@ -222,7 +224,9 @@ const GRAFTS: Record<number, GraftSpec> = {
     counter: ['ICE GRIP', '+2 HP on ice'], cash: ['ICE FUNDS', '+5% cash on ice'],
     cap: ['ICE MASTER', '+25% mass,+1 heal', (s) => { s.massMult += 0.25; s.waveHeal += 1; }] },
   3: { trunk: 'tactics', anchor: 'mass', d: [-1, 0], p: [0, 1],
-    counter: ['GEARBOX', '+2 HP on works'], cash: ['SCRAP SALE', '+5% cash on works'],
+    counter: ['CLEATS', 'Belts move you -12px'], cash: ['SCRAP SALE', '+5% cash on works'],
+    // Belts carry the hero 24 / 12 / 0 px (RunStats.beltGrip; sim BELT_GRIP_SHIFT). Ice already has ICE GRIP.
+    counterNode: { name: 'CLEATS', desc: 'Belts move you -12px', max: 2, icon: 'icon_cleats', apply: (s, l) => { s.beltGrip = l; } },
     cap: ['TIMEKEEPER', '+1 aim, +10% mass', (s) => { s.aimPreview += 1; s.massMult += 0.1; }] },
   4: { trunk: 'combo', anchor: 'comboLockdown', d: [1, 0], p: [0, 1],
     counter: ['MUD BOOTS', '+2 HP in bog'], cash: ['BOG TRADE', '+5% cash in bog'],
@@ -263,8 +267,9 @@ export function makeGraft(world: number): UpgradeNode[] {
   const id = (k: string) => `g${world}_${k}`;
   const tierName = ROMAN[world + 1];
   const common = { trunk: g.trunk, ring, graft: world };
-  const counter = mk({ ...common, id: id('counter'), name: g.counter[0], desc: g.counter[1], kind: 'counter', g: at(1, 0), links: [g.anchor], max: 3,
-    cost: price(100, 1.5), icon: 'icon_hp', apply: (s, l) => { s.maxHp += 2 * l; } });
+  const co = g.counterNode;
+  const counter = mk({ ...common, id: id('counter'), name: co?.name ?? g.counter[0], desc: co?.desc ?? g.counter[1], kind: 'counter', g: at(1, 0), links: [g.anchor],
+    max: co?.max ?? 3, cost: price(100, 1.5), icon: co?.icon ?? 'icon_hp', apply: co?.apply ?? ((s, l) => { s.maxHp += 2 * l; }) });
   const cash = mk({ ...common, id: id('cash'), name: g.cash[0], desc: g.cash[1], kind: 'stat', g: at(1, 1), links: [id('counter')], max: 5,
     cost: price(80, 1.5), icon: 'icon_cash', apply: (s, l) => { s.cashMult += 0.05 * l; } });
   const dmg = mk({ ...common, id: id('dmg'), name: `DAMAGE ${tierName}`, desc: '+12% damage', kind: 'stat', g: at(2, 0), links: [id('counter')], max: 8,

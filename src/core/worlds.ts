@@ -23,6 +23,7 @@ import {
   ATK_GROWTH,
   SWIFT_MOD,
   THIN_RAILS_BOUNCE,
+  BELT_SIZE,
 } from './tuning';
 
 export type { HazardKind };
@@ -81,6 +82,15 @@ const ICE_WAVES: WaveDef[] = [
 const ICE_BOSS_WAVE: WaveDef = { slots: ['boss', 'frost', 'grunt'], formations: ['pincer', 'ring'], formationWeights: BOSS_FORM };
 
 const FELT_ROSTER: TargetKind[] = ['grunt', 'skirmisher', 'bouncer', 'bomber', 'broodmother', 'thornback', 'brute', 'cleric', 'hive'];
+
+// Clockwork Works (v0.5): cogs (banked ricochet charges that bump their own side) and tinkers (repair) replace the
+// skirmishers; Felt formation weights. Regular waves hold at most COG_WAVE_CAP cogs (sim/spawn.ts).
+const CLOCK_WAVES: WaveDef[] = [
+  { slots: ['grunt', 'cog', 'tinker'], formations: ['rack'], formationWeights: W1_FORM },
+  { slots: ['grunt', 'cog', 'tinker', ['bouncer', 'thornback'], 'brute'], formations: ['rack', 'wall'], formationWeights: W2_FORM },
+  { slots: ['cog', 'tinker', 'bomber', ['broodmother', 'hive'], 'brute'], formations: ['rack', 'wall', 'pincer', 'ring'], formationWeights: W3_FORM, elite: 4 },
+];
+const CLOCK_BOSS_WAVE: WaveDef = { slots: ['boss', 'tinker', 'cog'], formations: ['pincer', 'ring'], formationWeights: BOSS_FORM };
 const FELT_PHYS = { friction: 0.6, rollDecel: 70, wallBounce: 0.75 };
 
 /** Worlds 3-6 are stubs for now: Felt roster/waves, their own physics, names, tints and boss names. */
@@ -95,9 +105,9 @@ export const WORLDS: WorldDef[] = [
     boss: { name: 'Rime Golem', hp: 40, r: 23, signature: ['cadre'], cadre: 3 }, waves: ICE_WAVES, bossWave: ICE_BOSS_WAVE,
   },
   {
-    index: 3, id: 'clock', name: 'Clockwork Works', tint: 'y', physics: { friction: 0.6, rollDecel: 70, wallBounce: 0.8 }, hpMult: 2.2, atkMult: 1.4, hazard: 'conveyor',
-    roster: FELT_ROSTER,
-    boss: { name: 'The Mainspring', hp: 60, r: 23, signature: ['moves'], cadre: 2, kit: 'mainspring' }, waves: FELT_WAVES, bossWave: FELT_BOSS_WAVE,
+    index: 3, id: 'clock', name: 'Clockwork Works', tint: 'y', physics: { friction: 0.6, rollDecel: 70, wallBounce: 0.8 }, hpMult: 1.8, atkMult: 1.3, hazard: 'conveyor',
+    roster: [...FELT_ROSTER, 'cog', 'tinker'],
+    boss: { name: 'The Mainspring', hp: 70, r: 23, signature: ['moves'], cadre: 2, kit: 'mainspring' }, waves: CLOCK_WAVES, bossWave: CLOCK_BOSS_WAVE,
   },
   {
     index: 4, id: 'bog', name: 'Bog', tint: 'w', physics: { friction: 0.9, rollDecel: 110, wallBounce: 0.6 }, hpMult: 2.2, atkMult: 1.4, hazard: 'mud',
@@ -245,9 +255,63 @@ function applyModifier(m: Modifier, waves: WaveDef[], world: WorldDef): void {
 // ---------- Hazards ----------
 
 const ICE_PATCHES = 3;
+/** Clockwork: conveyors and gears per slot (loops: the slot-4 counts). */
+const BELT_COUNT = [1, 2, 2, 3];
+const GEAR_COUNT = [0, 1, 1, 1];
+/** Belt rects lie inside this box (above the spawn zone); belts keep BELT_GAP from each other and GEAR_GAP from the gear. */
+const BELT_BOX = { x0: 16, x1: 164, y0: 50, y1: 222 };
+const GEAR_BOX = { x0: 50, x1: 130, y0: 94, y1: 160 };
+const GEAR_R = 14;
+const BELT_GAP = 12;
+const GEAR_GAP = 8;
 
-function makeHazards(world: WorldDef, n: number): Hazard[] {
-  if (world.hazard !== 'ice') return []; // conveyor / mud / lava / slot: data shape only, no generator or behaviour yet
+/** Euclidean gap between two axis-aligned rects (centre + size); 0 when they overlap. */
+function rectGap(a: Hazard, b: Hazard): number {
+  const gx = Math.max(0, Math.abs(a.x - b.x) - ((a.w ?? 0) + (b.w ?? 0)) / 2);
+  const gy = Math.max(0, Math.abs(a.y - b.y) - ((a.h ?? 0) + (b.h ?? 0)) / 2);
+  return Math.hypot(gx, gy);
+}
+
+/** Gap between a circle's edge and a rect (negative = overlapping). */
+function circleRectGap(c: Hazard, b: Hazard): number {
+  const gx = Math.max(0, Math.abs(c.x - b.x) - (b.w ?? 0) / 2);
+  const gy = Math.max(0, Math.abs(c.y - b.y) - (b.h ?? 0) / 2);
+  return Math.hypot(gx, gy) - c.r;
+}
+
+/**
+ * Clockwork: the gear first (if the slot has one), then belts k = 0.. (even k horizontal), each with a 50/50 direction
+ * sign; 200 placement tries in all. Output: belts in placement order, then the gear (createRun turns it into an
+ * Obstacle). Seeded by n only.
+ */
+function makeClockHazards(n: number, slot: number, loop: number): Hazard[] {
+  const rng = new Rng(0xbe17 + 7919 * (n + 1));
+  const nBelts = loop > 0 ? BELT_COUNT[3] : BELT_COUNT[slot - 1];
+  const nGears = loop > 0 ? GEAR_COUNT[3] : GEAR_COUNT[slot - 1];
+  const gears: Hazard[] = [];
+  const belts: Hazard[] = [];
+  for (let tries = 0; gears.length < nGears && tries < 200; tries++) {
+    gears.push({ kind: 'gear', x: rng.range(GEAR_BOX.x0, GEAR_BOX.x1), y: rng.range(GEAR_BOX.y0, GEAR_BOX.y1), r: GEAR_R });
+  }
+  for (let tries = 0; belts.length < nBelts && tries < 200; tries++) {
+    const horiz = belts.length % 2 === 0;
+    const { w, h } = horiz ? BELT_SIZE.h : BELT_SIZE.v;
+    const x = rng.range(BELT_BOX.x0 + w / 2, BELT_BOX.x1 - w / 2);
+    const y = rng.range(BELT_BOX.y0 + h / 2, BELT_BOX.y1 - h / 2);
+    const b: Hazard = { kind: 'conveyor', x, y, r: 0, w, h, dx: 0, dy: 0 };
+    if (belts.some((o) => rectGap(o, b) < BELT_GAP)) continue;
+    if (gears.some((g) => circleRectGap(g, b) < GEAR_GAP)) continue;
+    const sign = rng.chance(0.5) ? 1 : -1;
+    if (horiz) b.dx = sign;
+    else b.dy = sign;
+    belts.push(b);
+  }
+  return [...belts, ...gears];
+}
+
+function makeHazards(world: WorldDef, n: number, slot = 1, loop = 0): Hazard[] {
+  if (world.hazard === 'conveyor') return makeClockHazards(n, slot, loop);
+  if (world.hazard !== 'ice') return []; // mud / lava / slot: data shape only, no generator or behaviour yet
   const rng = new Rng(0x1ce + 7919 * (n + 1));
   const out: Hazard[] = [];
   for (let tries = 0; out.length < ICE_PATCHES && tries < 200; tries++) {
@@ -299,7 +363,7 @@ export function makeStage(id: StageId): StageDef {
     name: `${world.name} ${slot}${loop > 0 ? ` +${loop}` : ''}`,
     modifiers,
     bossTraits,
-    hazards: makeHazards(world, n),
+    hazards: makeHazards(world, n, slot, loop),
     friction: world.physics.friction,
     rollDecel: world.physics.rollDecel,
     wallBounce: modifiers.includes('thinRails') ? THIN_RAILS_BOUNCE : world.physics.wallBounce,
@@ -319,6 +383,7 @@ export function makeStage(id: StageId): StageDef {
       r: world.boss.r,
       phases: bossTraits.includes('phases') ? [0.5] : [],
       cadre: bossTraits.includes('cadre') ? world.boss.cadre : 0,
+      ...(world.boss.kit ? { kit: world.boss.kit } : {}),
     },
   };
   cache.set(canon, st);

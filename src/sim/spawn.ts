@@ -11,6 +11,7 @@ import {
   SPAWN_ZONE,
   TARGET_DEFS,
   WAVES_PER_STAGE,
+  COG_WAVE_CAP,
   stageById,
 } from '../core/tuning';
 import { rollIntent } from './intents';
@@ -273,6 +274,8 @@ export function spawnWave(s: RunState, fx: FxEvent[]): Target[] {
   def.slots.forEach((slot) => {
     kinds.push(Array.isArray(slot) ? slot[s.rng.int(0, slot.length - 1)] : slot);
   });
+  // Clockwork: at most COG_WAVE_CAP cogs per wave (extras become grunts, before the caps below).
+  for (let i = 0, cogs = 0; i < kinds.length; i++) if (kinds[i] === 'cog' && ++cogs > COG_WAVE_CAP) kinds[i] = 'grunt';
   // Area cap (regulars <= AREA_CAP of the table) and hard cap: drop grunts first.
   const cap = AREA_CAP * TABLE.w * TABLE.h;
   const total = () => kinds.reduce((a, k) => a + area(k, s), 0);

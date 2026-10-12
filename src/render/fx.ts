@@ -10,6 +10,7 @@ interface Floater { x: number; y: number; text: string; color: string; life: num
 interface Banner { text: string; color: string; life: number; max: number; scale: number; keep?: boolean }
 interface Bolt { pts: Vec[]; life: number }
 interface Tracer { x0: number; y0: number; x1: number; y1: number; life: number }
+interface Afterimage { x: number; y: number; life: number; max: number }
 interface Ring { x: number; y: number; r: number; life: number; max: number; color?: string; color2?: string; inward?: boolean }
 
 const P = PALETTE;
@@ -43,6 +44,9 @@ export class Fx {
   bolts: Bolt[] = [];
   rings: Ring[] = [];
   tracers: Tracer[] = [];
+  afterimages: Afterimage[] = [];
+  /** Seconds of conveyor-reversal white flash remaining. */
+  beltFlash = 0;
   shake = 0;
   /** Seconds of hero hit-flash remaining. */
   heroFlash = 0;
@@ -70,6 +74,8 @@ export class Fx {
     this.bolts.length = 0;
     this.rings.length = 0;
     this.tracers.length = 0;
+    this.afterimages.length = 0;
+    this.beltFlash = 0;
     this.heroFlash = 0;
     this.vignette = 0;
     this.shake = 0;
@@ -338,6 +344,25 @@ export class Fx {
         case 'trick':
           this.trick(e.id);
           break;
+        case 'belt':
+          // three fading afterimages trailing from the start of the carry toward the end
+          for (let k = 0; k < 3; k++) {
+            const f = k / 3;
+            this.afterimages.push({ x: e.x - e.dx * (1 - f), y: e.y - e.dy * (1 - f), life: 0.3 - k * 0.06, max: 0.3 });
+          }
+          break;
+        case 'gearSpin':
+          this.burst(e.x, e.y, [P.Y, P.o, P['5'], P.y], 10, 85, 0.35, 60, 1);
+          this.addShake(0.5);
+          break;
+        case 'repair':
+          this.floater(e.x, e.y - 12, `+${fmt(e.amount)}`, P.E);
+          this.burst(e.x, e.y, [P.E, P.e, P['5']], 5, 25, 0.5, -30);
+          break;
+        case 'beltReverse':
+          this.beltFlash = 0.4;
+          this.addShake(1.5);
+          break;
         case 'shimmer':
         case 'ballClack':
         case 'launch':
@@ -366,6 +391,9 @@ export class Fx {
     this.bolts = this.bolts.filter((b) => b.life > 0);
     for (const t of this.tracers) t.life -= dt;
     this.tracers = this.tracers.filter((t) => t.life > 0);
+    for (const a of this.afterimages) a.life -= dt;
+    this.afterimages = this.afterimages.filter((a) => a.life > 0);
+    this.beltFlash = Math.max(0, this.beltFlash - dt);
     this.heroFlash = Math.max(0, this.heroFlash - dt);
     this.vignette = Math.max(0, this.vignette - dt);
     for (const r of this.rings) r.life -= dt;
@@ -394,6 +422,15 @@ export class Fx {
       }
       ctx.globalAlpha = 1;
     }
+    for (const a of this.afterimages) {
+      ctx.globalAlpha = Math.max(0, a.life / a.max) * 0.7;
+      ctx.fillStyle = P['5'];
+      for (let i = 0; i < 10; i++) {
+        const ang = (i / 10) * Math.PI * 2;
+        ctx.fillRect(Math.round(a.x + Math.cos(ang) * 4), Math.round(a.y + Math.sin(ang) * 4), 1, 1);
+      }
+    }
+    ctx.globalAlpha = 1;
     for (const p of this.particles) {
       ctx.globalAlpha = Math.min(1, p.life / (p.max * 0.4));
       ctx.fillStyle = p.color;

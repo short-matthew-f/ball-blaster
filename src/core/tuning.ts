@@ -255,6 +255,29 @@ export const ICE_PATCH_FRICTION = 0.1;
 /** Dark: an intent is shown only when the enemy is within max(its reach, DARK_REVEAL_R) px (edge gap) of the hero. */
 export const DARK_REVEAL_R = 80;
 
+// ---------- v0.5 Clockwork Works (world 3) ----------
+/** Conveyor sweep: px a body is carried per pass (slides to first contact), and the hold before it fires (s). */
+export const BELT_SHIFT = 24;
+export const BELT_HOLD = 0.3;
+/** Hero carry by CLEATS level (RunStats.beltGrip 0/1/2). */
+export const BELT_GRIP_SHIFT = [24, 12, 0];
+/** Conveyor rect sizes (w x h, centre-anchored): horizontal 100 x 20, vertical 20 x 80. */
+export const BELT_SIZE = { h: { w: 100, h: 20 }, v: { w: 20, h: 80 } } as const;
+/** Gear obstacle: restitution, minimum kick (px/s) and the clockwise deflection of the exit velocity (deg, y-down). */
+export const GEAR_BOUNCE = 0.9;
+export const GEAR_MIN_KICK = 80;
+export const GEAR_SPIN_DEG = 35;
+/** The turned exit stays within this angle of the outward normal (a glancing exit is turned less), so nothing orbits. */
+export const GEAR_EXIT_MAX_DEG = 75;
+/** Tinker Repair: range (edge gap, px) and heal (x stage hpScale, ceil). */
+export const REPAIR_RANGE = 70;
+export const REPAIR_HEAL = 2;
+/** Cogs per regular wave (extras become grunts) and live boss-summoned cogs. */
+export const COG_WAVE_CAP = 2;
+export const BOSS_COG_CAP = 2;
+/** The Mainspring's soft roll after Wind / Charge / Summon (px). */
+export const MAINSPRING_MOVE_DIST = 40;
+
 /** Stage definitions are generated (core/worlds.ts); this delegates to the memoised generator. */
 export function stageById(id: StageId): StageDef {
   return makeStage(id);

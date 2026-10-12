@@ -37,7 +37,7 @@ import { Rng } from '../core/rng';
 import { physicsStep, relaxAll, spawnSpat } from './physics';
 import { emptyCombo, evaluateCombos } from './combos';
 import { enemyStep, startEnemyPhase } from './enemy';
-import { spawnObstacle, spawnWave } from './spawn';
+import { OBSTACLE_R, spawnObstacle, spawnWave } from './spawn';
 import { hero, stageWaves } from './damage';
 
 export function mainBall(s: RunState): Ball {
@@ -49,7 +49,8 @@ export function createRun(stage: StageId, stats: RunStats, seed: number, _bestWa
   const bt = BALL_TYPES[stats.ballType];
   const s: RunState = {
     stage: st.id,
-    hazards: st.hazards.map((z) => ({ ...z })),
+    // Deep copy (hazards are flat): the Mainspring's reversal negates dx/dy on the run's copy, never the StageDef.
+    hazards: st.hazards.filter((z) => z.kind !== 'gear').map((z) => ({ ...z })),
     dark: st.modifiers.includes('dark'),
     seed,
     rng: new Rng(seed),
@@ -106,6 +107,10 @@ export function createRun(stage: StageId, stats: RunStats, seed: number, _bestWa
     resting: true,
     banked: false,
   });
+  // Clockwork gear hazards become static, unbreakable obstacles before the first wave is placed around them.
+  for (const z of st.hazards) {
+    if (z.kind === 'gear') s.obstacles.push({ id: s.nextId++, kind: 'gear', x: z.x, y: z.y, r: OBSTACLE_R.gear, hp: Infinity, flash: 0, dead: false });
+  }
   spawnWave(s, s.pendingFx!);
   for (const t of s.targets) t.shimmer = 0;
 

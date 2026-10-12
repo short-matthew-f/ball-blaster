@@ -395,6 +395,8 @@ interface StageLog {
   earlyBuys: number;
   /** Loadout on arrival (kitName). */
   kit: string;
+  /** Runs ending at stage wave 1..4 (index 0..3) without the boss kill. */
+  ends: number[];
 }
 
 interface ProgLog {
@@ -415,14 +417,16 @@ function progression(seed: number, bot: ProgBot): ProgLog {
     chooseLoadout(save);
     if (!cur) {
       const st = diagStats(save, buildStats(save));
-      cur = { runs: 0, cleared: false, dmg: st.damage, hp: st.maxHp, open: openNodes(save), secs: [], earlyBuys: arrivalBuys, kit: kitName(st) };
+      cur = { runs: 0, cleared: false, dmg: st.damage, hp: st.maxHp, open: openNodes(save), secs: [], earlyBuys: arrivalBuys, kit: kitName(st), ends: [0, 0, 0, 0] };
       log.stages[n] = cur;
+      if (ENV.PROG_DUMP === save.current) console.log('STATS', JSON.stringify(st));
     }
     const res = playForResult(save.current, seed * 1000 + r, diagStats(save, buildStats(save)), bot);
     bankRun(save, res);
     if (r <= 60) log.earned60 += res.cash;
     cur.runs++;
     cur.secs.push(res.seconds);
+    if (!res.bossKilled) cur.ends[Math.max(1, Math.min(4, res.wave)) - 1]++;
     const onStage = cur;
     if (res.bossKilled) {
       cur.cleared = true;
@@ -477,6 +481,7 @@ function runBot(bot: ProgBot): BotReport {
       'dmg/hp arrive': `${f1(mean(logs.map((l) => l.dmg)))}/${f1(mean(logs.map((l) => l.hp)))}`,
       'open nodes': f1(mean(logs.map((l) => l.open))),
       'dead seeds': rep.dead[n],
+      'lost at w1-4': [0, 1, 2, 3].map((i) => logs.reduce((a, l) => a + l.ends[i], 0)).join('/'),
       kit: topKits(logs.map((l) => l.kit)),
     };
   }

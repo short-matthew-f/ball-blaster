@@ -37,6 +37,10 @@ import {
   RICOCHET_MAX,
   SHARD_DMG,
   THORNS_RELIC_DMG,
+  GEAR_BOUNCE,
+  GEAR_MIN_KICK,
+  GEAR_SPIN_DEG,
+  GEAR_EXIT_MAX_DEG,
   gearVal,
   stageById,
 } from '../core/tuning';
@@ -246,8 +250,22 @@ export function onIce(s: RunState, x: number, y: number): boolean {
   return false;
 }
 
-/** Enemy-enemy bump: the slower body (pre-impact) is the bumped one; a charger that bumps anything is blocked. */
+/**
+ * Enemy-enemy bump: the slower body (pre-impact) is the bumped one; a charger that bumps anything is blocked.
+ * Clockwork cog: a charging cog is never the bumped body and keeps its charge; the other takes the flat bump.
+ */
 function enemyBump(s: RunState, a: Target, b: Target, rel: number, spA: number, spB: number, fx: FxEvent[]): void {
+  const cogA = a.kind === 'cog' && (a.chargeDmg ?? 0) > 0;
+  const cogB = b.kind === 'cog' && (b.chargeDmg ?? 0) > 0;
+  if (cogA !== cogB) {
+    const other = cogA ? b : a;
+    if ((other.chargeDmg ?? 0) > 0) {
+      other.chargeDmg = 0;
+      fx.push({ t: 'blocked', x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+    }
+    hitEnemy(s, other, 1, 'bump', fx, undefined, 1, rel);
+    return;
+  }
   for (const c of [a, b]) {
     if ((c.chargeDmg ?? 0) > 0) {
       c.chargeDmg = 0;
@@ -391,6 +409,7 @@ function collideStatic(b: Body, o: { x: number; y: number; r: number }, e: numbe
 }
 
 function hitObstacle(s: RunState, o: Obstacle, fx: FxEvent[]): void {
+  if (o.kind === 'gear') return; // unbreakable; contact handled by gearSpin
   o.flash = 0.12;
   if (o.kind === 'bumper') {
     s.combo.bumperHits++;
@@ -410,6 +429,37 @@ function hitObstacle(s: RunState, o: Obstacle, fx: FxEvent[]): void {
     const cash = scaleCash(s, (o.kind === 'chest' ? s.stats.chestCash : s.stats.crateCash) * s.stats.cashMult);
     s.cash += cash;
     fx.push({ t: 'chest', x: o.x, y: o.y, cash });
+  }
+}
+
+/**
+ * Clockwork gear contact (after collideStatic): the exit velocity turns GEAR_SPIN_DEG clockwise (y-down). An enemy takes
+ * +1 stagger once per phase (pair bookkeeping); no damage, no chain. Chargers lose their charge (cover, in physicsStep).
+ */
+function gearSpin(s: RunState, b: Body, o: Obstacle, fx: FxEvent[]): void {
+  const sp = Math.hypot(b.vx, b.vy);
+  const d = Math.hypot(b.x - o.x, b.y - o.y);
+  if (sp > 1e-9 && d > 1e-9) {
+    // Exit angle relative to the outward normal; turn it clockwise by GEAR_SPIN_DEG but never past GEAR_EXIT_MAX_DEG,
+    // so the body always leaves (an uncapped turn can aim a glancing exit back into the gear: it would orbit).
+    const nx = (b.x - o.x) / d;
+    const ny = (b.y - o.y) / d;
+    const phi = Math.atan2(nx * b.vy - ny * b.vx, nx * b.vx + ny * b.vy);
+    const max = (GEAR_EXIT_MAX_DEG * Math.PI) / 180;
+    const turned = phi >= max ? phi : Math.min(phi + (GEAR_SPIN_DEG * Math.PI) / 180, max);
+    const a = Math.atan2(ny, nx) + turned;
+    b.vx = Math.cos(a) * sp;
+    b.vy = Math.sin(a) * sp;
+  }
+  o.flash = 0.12;
+  const k = (o.r / (o.r + b.r));
+  fx.push({ t: 'gearSpin', x: o.x + (b.x - o.x) * k, y: o.y + (b.y - o.y) * k });
+  if (b.en && !b.en.dead) {
+    const key = pairKey(o.id, b.id);
+    if (eligible(s, key)) {
+      markHit(s, key);
+      addStagger(b.en, 1, fx, s);
+    }
   }
 }
 
@@ -558,12 +608,23 @@ export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
       if (b.ball.kind === 'main' && s.phase === 'resolve' && !s.firstHitDone) s.shotBounces++;
       fx.push({ t: 'wall', x: b.x, y: b.y, speed: sp });
     }
+    // Cog: a charge ricochets off one rail; the second rail contact of the same charge stops it dead.
+    if (sp > 0 && b.en && b.en.kind === 'cog' && (b.en.chargeDmg ?? 0) > 0) {
+      b.en.railHits = (b.en.railHits ?? 0) + 1;
+      if (b.en.railHits >= 2) {
+        b.vx = 0;
+        b.vy = 0;
+        b.en.chargeDmg = 0;
+      }
+    }
     for (const o of s.obstacles) {
       if (o.dead) continue;
       const bumper = o.kind === 'bumper';
-      const e = bumper ? s.stats.bumperBounce : OBSTACLE_RESTITUTION;
-      const hit = collideStatic(b, o, e, bumper ? BUMPER_MIN_KICK : 0);
-      if (hit >= 0 && b.ball) hitObstacle(s, o, fx);
+      const gear = o.kind === 'gear';
+      const e = bumper ? s.stats.bumperBounce : gear ? GEAR_BOUNCE : OBSTACLE_RESTITUTION;
+      const hit = collideStatic(b, o, e, bumper ? BUMPER_MIN_KICK : gear ? GEAR_MIN_KICK : 0);
+      if (hit >= 0 && gear) gearSpin(s, b, o, fx);
+      else if (hit >= 0 && b.ball) hitObstacle(s, o, fx);
       // Obstacles are cover: a charger that hits a crate/bumper/chest loses its charge (shrines are not cover).
       if (hit >= 0 && b.en && o.kind !== 'shrine' && (b.en.chargeDmg ?? 0) > 0) {
         b.en.chargeDmg = 0;
