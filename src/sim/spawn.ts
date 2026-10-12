@@ -4,8 +4,6 @@ import {
   AREA_CAP,
   FORMATION_JITTER,
   HARDY_HP_MULT,
-  OVERTIME_HP_PER_WAVE,
-  OVERTIME_SCATTER_WEIGHT,
   WAVE_HP_STEP,
   REGULAR_CAP,
   SPAWN_ZONE,
@@ -28,9 +26,9 @@ const WALL_GAP = 30;
 export const OBSTACLE_R: Record<ObstacleKind, number> = { bumper: 6, crate: 5, chest: 6, shrine: 6, gear: 14 };
 const OBSTACLE_HP: Record<ObstacleKind, number> = { bumper: Infinity, crate: 1, chest: 2, shrine: 1, gear: Infinity };
 
-/** Summons (grubs) never count for wave clear or the area cap. */
+/** Summons (grubs) never count for wave clear or the area cap; nor does the Loot Goblin. */
 export function isRegular(t: Target): boolean {
-  return !t.summon;
+  return !t.summon && t.kind !== 'goblin';
 }
 
 export function liveRegulars(s: RunState): number {
@@ -43,7 +41,7 @@ export function bossAlive(s: RunState): boolean {
   return s.targets.some((t) => t.kind === 'boss' && !t.dead);
 }
 
-export function makeEnemy(s: RunState, kind: TargetKind, x: number, y: number, atkBonus = 0): Target {
+export function makeEnemy(s: RunState, kind: TargetKind, x: number, y: number): Target {
   const def = TARGET_DEFS[kind];
   const st = stageById(s.stage);
   // The boss uses the stage's boss HP (archetype HP x HP_GROWTH^n), not hpScale (Hardy and the v0.2 per-world
@@ -69,7 +67,6 @@ export function makeEnemy(s: RunState, kind: TargetKind, x: number, y: number, a
     shielded: false,
     dead: false,
   };
-  if (atkBonus > 0) t.atkBonus = atkBonus;
   rollIntent(s, t);
   return t;
 }
@@ -248,19 +245,15 @@ export function placeFormation(s: RunState, kinds: TargetKind[], formation: Form
   return placed;
 }
 
-function waveFor(s: RunState): { def: WaveDef; bonus: number } {
+/** Wave `s.wave`: a stage wave, or the boss wave after the last one (the boss's death ends the waves). */
+function waveFor(s: RunState): WaveDef {
   const st = stageById(s.stage);
-  const nw = st.waves.length;
   const w = s.wave;
-  if (w <= nw) return { def: st.waves[w - 1], bonus: 0 };
-  if (w === nw + 1) return { def: st.bossWave, bonus: 0 };
-  const k = w - (nw + 1); // Overtime wave k: +k HP, +k attack
-  return { def: st.waves[(k - 1) % nw], bonus: k };
+  return w <= st.waves.length ? st.waves[w - 1] : st.bossWave;
 }
 
-function pickFormation(s: RunState, def: WaveDef, overtime: boolean): Formation {
+function pickFormation(s: RunState, def: WaveDef): Formation {
   const w: Partial<Record<Formation, number>> = { ...(def.formationWeights ?? Object.fromEntries(def.formations.map((f) => [f, 1]))) };
-  if (overtime) w.scatter = (w.scatter ?? 0) + OVERTIME_SCATTER_WEIGHT;
   const items = (Object.keys(w) as Formation[]).filter((f) => (w[f] ?? 0) > 0).map((f) => ({ f, weight: w[f] ?? 0 }));
   return s.rng.pick(items).f;
 }
@@ -269,7 +262,7 @@ const area = (k: TargetKind, s: RunState) => Math.PI * (k === 'boss' ? stageById
 
 /** Spawn wave `s.wave`. Returns the new enemies (they act from the next enemy phase). */
 export function spawnWave(s: RunState, fx: FxEvent[]): Target[] {
-  const { def, bonus } = waveFor(s);
+  const def = waveFor(s);
   const kinds: TargetKind[] = [];
   def.slots.forEach((slot) => {
     kinds.push(Array.isArray(slot) ? slot[s.rng.int(0, slot.length - 1)] : slot);
@@ -289,14 +282,14 @@ export function spawnWave(s: RunState, fx: FxEvent[]): Target[] {
   const eliteKinds: TargetKind[] = [];
   for (let i = 0; i < nElite && eligible.length > 0; i++) eliteKinds.push(eligible.splice(s.rng.int(0, eligible.length - 1), 1)[0]);
 
-  const formation = pickFormation(s, def, bonus > 0);
+  const formation = pickFormation(s, def);
   const slots = placeFormation(s, kinds, formation);
   const out: Target[] = [];
   for (const m of slots) {
-    const e = makeEnemy(s, m.kind, m.x, m.y, bonus);
-    // HP scaling: +WAVE_HP_STEP per stage wave (not the boss), + OVERTIME_HP_PER_WAVE x k in Overtime wave k.
+    const e = makeEnemy(s, m.kind, m.x, m.y);
+    // HP scaling: +WAVE_HP_STEP per stage wave (not the boss).
     const waveIdx = Math.min(s.wave, stageById(s.stage).waves.length, WAVES_PER_STAGE) - 1;
-    const hp = e.kind === 'boss' ? e.hp : Math.round(e.hp * (1 + WAVE_HP_STEP * waveIdx)) + OVERTIME_HP_PER_WAVE * bonus;
+    const hp = e.kind === 'boss' ? e.hp : Math.round(e.hp * (1 + WAVE_HP_STEP * waveIdx));
     e.hp = e.maxHp = hp;
     const ei = eliteKinds.indexOf(m.kind);
     if (ei >= 0) {
@@ -320,7 +313,7 @@ export function spawnWave(s: RunState, fx: FxEvent[]): Target[] {
   s.waveKillShot = -1;
   nudgeHeroClear(s, fx);
   s.waveTurn = 0;
-  fx.push({ t: 'waveStart', wave: s.wave, overtime: bonus > 0 });
+  fx.push({ t: 'waveStart', wave: s.wave });
   return out;
 }
 
@@ -334,7 +327,7 @@ function spawnCadre(s: RunState, boss: Target, fx: FxEvent[]): Target[] {
     const d = boss.r + r + 4;
     const p = findFreeNear(s, boss.x + Math.cos(a) * d, boss.y + Math.sin(a) * d, r);
     if (!p) continue;
-    const c = makeEnemy(s, 'cadre', p.x, p.y, boss.atkBonus ?? 0);
+    const c = makeEnemy(s, 'cadre', p.x, p.y);
     c.shimmer = 0.5;
     s.targets.push(c);
     out.push(c);
@@ -381,7 +374,7 @@ export function summonNear(s: RunState, near: Target, kind: TargetKind, fx: FxEv
   const d = near.r + r + GAP + 1;
   const p = findFreeNear(s, near.x + Math.cos(a) * d, near.y + Math.sin(a) * d, r);
   if (!p) return null;
-  const g = makeEnemy(s, kind, p.x, p.y, near.atkBonus ?? 0);
+  const g = makeEnemy(s, kind, p.x, p.y);
   g.summon = true;
   g.shimmer = 0.5;
   s.targets.push(g);

@@ -109,6 +109,8 @@ export class MapScreen implements Screen {
         drawSprite(ctx, 'icon_lock', cx, t.y + TILE_H / 2, { alpha: 0.6 });
         continue;
       }
+      const bl = save.bestLoot?.[t.id] ?? 0;
+      if (killed && bl > 0) drawText(ctx, `LOOT ${bl}`, cx, t.y + TILE_H + 2, { align: 'center', color: P.o });
       if (killed) drawSprite(ctx, 'elite_crown', cx, t.y + 7);
       else drawText(ctx, String(t.slot), cx, t.y + 4, { align: 'center', scale: 1, color: isCur ? P.Y : P['4'] });
       const mods = (() => { try { return makeStage(t.id).modifiers; } catch { return []; } })();

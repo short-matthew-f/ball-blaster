@@ -12,7 +12,6 @@ import {
   BLAST_HERO_DMG,
   BLAST_HERO_R,
   ELITE_CASH_MULT,
-  OVERTIME_CASH_WAVES,
   SHATTER_MULT,
   BLAST_DEATH_HERO_DMG,
   FOLLOW_CHARGE_EXTRA,
@@ -22,6 +21,8 @@ import {
   SHRAPNEL_COUNT,
   STATIC_DMG,
   TARGET_DEFS,
+  TOKENS_FIRST_SLOT4,
+  TOKENS_KILL,
   gearVal,
   stageById,
 } from '../core/tuning';
@@ -46,14 +47,9 @@ export function stageWaves(s: RunState): number {
   return stageById(s.stage).waves.length;
 }
 
-export function isOvertime(s: RunState): boolean {
-  return s.wave > stageWaves(s) + 1;
-}
-
-/** Overtime cash multiplier: the stage's overtimeCash (2; loops 1) for the first OVERTIME_CASH_WAVES Overtime waves, then 1. */
-export function overtimeCashMult(s: RunState): number {
-  const k = s.wave - (stageWaves(s) + 1);
-  return k >= 1 && k <= OVERTIME_CASH_WAVES ? stageById(s.stage).overtimeCash : 1;
+/** The Loot Goblin: never damaged, staggered, statused, killed or counted. */
+export function isGoblin(t: Target): boolean {
+  return t.kind === 'goblin';
 }
 
 /** Enemy attack value scaled for the stage (intents, blasts, thorns), at least 1 for a positive base. */
@@ -72,7 +68,7 @@ export function scaleCash(s: RunState, n: number): number {
  * damage); lightning thaws.
  */
 export function hitEnemy(s: RunState, t: Target, dmg: number, src: DamageSource, fx: FxEvent[], killer?: Ball, stagger = 1, speed = 0): void {
-  if (t.dead) return;
+  if (t.dead || isGoblin(t)) return;
   if ((t.frozen ?? 0) > 0) {
     if (src === 'explosion' || speed >= SHATTER_SPEED) {
       addStagger(t, stagger, fx, s);
@@ -98,6 +94,7 @@ export function hitEnemy(s: RunState, t: Target, dmg: number, src: DamageSource,
  * crossing the threshold also deals STATIC_DMG (via applyDamage: no further stagger, respects 1-hit shields).
  */
 export function addStagger(t: Target, n: number, fx: FxEvent[], s?: RunState): void {
+  if (isGoblin(t)) return;
   const at = TARGET_DEFS[t.kind].staggerAt;
   const before = t.stagger;
   t.stagger += n;
@@ -109,7 +106,7 @@ export function addStagger(t: Target, n: number, fx: FxEvent[], s?: RunState): v
 
 /** Poison relic: a ball contact adds 1 + level stacks (max POISON_MAX). */
 export function addPoison(s: RunState, t: Target, fx: FxEvent[]): void {
-  if (t.dead || !has(s, 'poison')) return;
+  if (t.dead || isGoblin(t) || !has(s, 'poison')) return;
   const before = t.poison ?? 0;
   t.poison = Math.min(gearVal(POISON_MAX, lv(s, 'poison')), before + 1 + lv(s, 'poison'));
   if (before <= 0 && t.poison > 0) fx.push({ t: 'status', id: t.id, kind: 'poison', on: true });
@@ -117,6 +114,7 @@ export function addPoison(s: RunState, t: Target, fx: FxEvent[]): void {
 
 /** Shrapnel relic: a kill by the hero ball releases shards (spat-like balls, SHARD_LIFE s, 1 damage). */
 function spawnShards(s: RunState, t: Target, fx: FxEvent[]): void {
+  if (isGoblin(t)) return;
   const n = gearVal(SHRAPNEL_COUNT, lv(s, 'shrapnel'));
   const r = 2;
   const a0 = s.rng.range(0, Math.PI * 2);
@@ -167,7 +165,7 @@ export function updateBossShield(s: RunState): void {
 
 /** Every point of enemy damage goes through here: shield -> hp -> boss phase -> death. */
 export function applyDamage(s: RunState, t: Target, dmg: number, src: DamageSource, fx: FxEvent[], killer?: Ball): void {
-  if (t.dead) return;
+  if (t.dead || isGoblin(t)) return;
   if (t.kind === 'boss' && t.shielded) dmg = 0;
   // Poison ignores 1-hit shields (the boss cadre shield still holds).
   if ((t.shield ?? 0) > 0 && dmg > 0 && src !== 'poison') {
@@ -207,7 +205,7 @@ export function checkBossPhase(s: RunState, b: Target, fx: FxEvent[]): void {
 
 /** Death with rewards. `quiet` (bomber detonating itself) skips cash and kill credit. */
 export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], killer?: Ball, quiet = false): void {
-  if (t.dead) return;
+  if (t.dead || isGoblin(t)) return;
   t.dead = true;
   t.hp = 0;
   t.chargeDmg = 0;
@@ -220,7 +218,7 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
   const def = TARGET_DEFS[t.kind];
   if (!quiet) {
     const st = stageById(s.stage);
-    const mult = (t.elite ? ELITE_CASH_MULT : 1) * overtimeCashMult(s);
+    const mult = t.elite ? ELITE_CASH_MULT : 1;
     const cash = Math.round((t.cashBase ?? def.cash) * st.cashScale * s.stats.cashMult * mult);
     s.cash += cash;
     s.combo.cash = (s.combo.cash ?? 0) + cash;
@@ -234,9 +232,12 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
       for (const o of s.targets) if (!o.dead && o !== t && Math.hypot(o.x - t.x, o.y - t.y) <= CASCADE_R + o.r) addStagger(o, 1, fx, s);
     }
     if (t.kind === 'boss') {
+      // The boss's death ends the waves: no wave follows; the loot phase starts when this shot / enemy phase ends.
       s.bossKilled = true;
-      s.wavePending = true; // Overtime starts next enemy phase
       fx.push({ t: 'bossDead', x: t.x, y: t.y });
+      const tokens = stageById(s.stage).slot === 4 && s.bestWave < 4 ? TOKENS_FIRST_SLOT4 : TOKENS_KILL;
+      s.tokens += tokens;
+      fx.push({ t: 'token', x: t.x, y: t.y, amount: tokens });
     } else {
       s.kills++;
       if (s.phase === 'resolve') {
@@ -244,10 +245,6 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
         if (src === 'main' && killer && killer.banked) s.combo.bankKills++;
         if (src === 'lightning' || src === 'explosion' || src === 'bump') s.combo.chainKills++;
       }
-    }
-    if (s.stats.strayEmeraldChance > 0 && s.rng.chance(s.stats.strayEmeraldChance)) {
-      s.emeralds += 1;
-      fx.push({ t: 'emerald', x: t.x, y: t.y, amount: 1 });
     }
   }
   // Sweep counts kills within a shot; a poison tick at the start of the enemy phase is not part of the shot.
@@ -314,8 +311,9 @@ export function chainLightning(s: RunState, from: Target, fx: FxEvent[]): void {
   const { lightningChance, lightningArcs, lightningRange, lightningDamage } = s.stats;
   if (lightningChance <= 0 || lightningArcs <= 0 || lightningRange <= 0 || !has(s, 'lightning')) return;
   if (!s.rng.chance(lightningChance)) return;
+  if (isGoblin(from)) return;
   const cands = s.targets
-    .filter((o) => !o.dead && o !== from)
+    .filter((o) => !o.dead && o !== from && !isGoblin(o))
     .map((o) => ({ o, d: Math.hypot(o.x - from.x, o.y - from.y) }))
     .filter((c) => c.d <= lightningRange + c.o.r)
     .sort((a, b) => a.d - b.d || a.o.id - b.o.id)

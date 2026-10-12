@@ -13,6 +13,8 @@ export class Sfx {
   private master: GainNode | null = null;
   private noiseBuf: AudioBuffer | null = null;
   private played = new Set<string>();
+  /** Goblin hits this loot phase (pitch ladder). */
+  private gobHits = 0;
 
   /** Call from a user gesture. */
   unlock(): void {
@@ -239,10 +241,49 @@ export class Sfx {
           [392, 523, 659, 784, 1047].forEach((f, i) => this.tone(f, i === 4 ? 0.6 : 0.14, 'square', 0.16, 0, i * 0.11));
           this.noise(0.5, 0.25, 'lowpass', 1500);
           break;
-        case 'emerald':
-          if (!this.gate('emerald')) break;
-          this.tone(1200, 0.15, 'sine', 0.14);
-          this.tone(1800, 0.25, 'sine', 0.1, 0, 0.08);
+        case 'lootStart':
+          this.gobHits = 0;
+          if (!this.gate('lootStart')) break;
+          [523, 659, 784, 1047].forEach((f, i) => this.tone(f, 0.12, 'square', 0.1, 0, i * 0.07));
+          this.tone(1568, 0.3, 'triangle', 0.08, 0, 0.3);
+          break;
+        case 'goblinHit': {
+          const k = Math.min(this.gobHits++, 5);
+          const base = 1320 * Math.pow(2, (k * 2) / 12); // pitch climbs a whole tone per hit
+          if (this.gate('goblinHit')) {
+            this.tone(base, 0.1, 'square', 0.1, base * 0.97);
+            this.tone(base * 1.5, 0.16, 'triangle', 0.09, 0, 0.04);
+            this.noise(0.04, 0.08, 'highpass', 5000);
+          }
+          if (e.tier === 'jackpot' && this.gate('jackpot')) {
+            [784, 988, 1175, 1568, 1976].forEach((f, i) => this.tone(f, 0.14, 'square', 0.12, 0, 0.1 + i * 0.07));
+            this.tone(2349, 0.5, 'sine', 0.1, 0, 0.45);
+          } else if (e.tier === 'big' && this.gate('big')) {
+            this.tone(1568, 0.12, 'triangle', 0.1, 0, 0.08);
+            this.tone(2093, 0.2, 'triangle', 0.1, 0, 0.15);
+          }
+          break;
+        }
+        case 'tooth':
+          if (!this.gate('tooth')) break;
+          [1319, 1760, 2637].forEach((f, i) => this.tone(f, 0.35, 'sine', 0.1, 0, 0.1 + i * 0.09));
+          this.tone(3520, 0.2, 'triangle', 0.05, 0, 0.35);
+          break;
+        case 'scurry':
+          if (!this.gate('scurry')) break;
+          for (let i = 0; i < 5; i++) {
+            this.noise(0.03, 0.1, 'bandpass', 1800 + (i % 2) * 600, i * 0.05);
+            this.tone(700 + (i % 2) * 150, 0.03, 'square', 0.04, 0, i * 0.05);
+          }
+          break;
+        case 'lootEnd':
+          if (!this.gate('lootEnd')) break;
+          for (let i = 0; i < 5; i++) this.tone(1800 + Math.random() * 900, 0.05, 'triangle', 0.07, 0, i * 0.045);
+          break;
+        case 'token':
+          if (!this.gate('token')) break;
+          this.tone(1568, 0.12, 'sine', 0.12);
+          this.tone(2093, 0.3, 'sine', 0.1, 0, 0.09);
           break;
         case 'chest':
           if (!this.gate('chest')) break;

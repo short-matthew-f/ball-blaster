@@ -1,8 +1,8 @@
 // Draws the run view (table, entities, HUD) from RunState. Read-only with respect to sim state.
 import type { RunState, Target } from '../core/types';
 import { TABLE, VIEW_H, VIEW_W } from '../core/types';
-import { BLAST_HERO_R, TARGET_DEFS, WAVES_PER_STAGE, stageById } from '../core/tuning';
-import { beltPreview, overtimeCashMult, rageLevel, rageStart } from '../sim/index';
+import { BLAST_HERO_R, TARGET_DEFS, WAVES_PER_STAGE, stageById, TOOTH_HIT } from '../core/tuning';
+import { beltPreview, rageLevel, rageStart } from '../sim/index';
 import type { Hazard } from '../core/types';
 import { PALETTE } from './palette';
 import { drawSprite, getSprite, spriteSize, WHITE } from './sprite-cache';
@@ -237,7 +237,8 @@ export function drawBeltGhost(ctx: CanvasRenderingContext2D, s: RunState, now: n
 }
 
 /** Enemy sprite by kind (v2 names equal kinds); the boss is picked by stage. */
-export function enemySprite(t: Target, stage: string): string {
+export function enemySprite(t: Target, stage: string, goblinHits = 0): string {
+  if (t.kind === 'goblin') return goblinHits >= TOOTH_HIT ? 'goblin_b' : 'goblin';
   if (t.kind === 'boss') {
     const w = parseStageId(stage).world;
     return w === 2 ? 'boss_rime_golem' : w === 3 ? 'boss_mainspring' : 'boss_old_eight';
@@ -250,6 +251,8 @@ export interface WorldView {
   heroFlash?: number;
   /** Seconds of conveyor reversal flash remaining. */
   beltFlash?: number;
+  /** Eased position of a scurrying goblin (by target id); null = at its sim position. */
+  goblinAt?: (id: number) => { x: number; y: number } | null;
 }
 
 function segDist(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
@@ -282,7 +285,6 @@ export function reachState(s: RunState, e: Target): Reach {
 
 /** Enrage state for the next (or current) enemy phase: level >= 1 = raging; `inTurns` = phases until it starts. */
 export function rageInfo(s: RunState): { level: number; inTurns: number } {
-  // Same clock as the sim (Overtime starts flat at ENRAGE_OVERTIME_TURN).
   return { level: rageLevel(s), inTurns: rageStart(s) - (s.waveTurn + 1) };
 }
 
@@ -301,8 +303,8 @@ function trail(ctx: CanvasRenderingContext2D, x: number, y: number, vx: number, 
 
 const FAST_TRAIL = 90;
 
-function drawEnemyBody(ctx: CanvasRenderingContext2D, t: Target, stage: string, now: number, flash: boolean): void {
-  const name = enemySprite(t, stage);
+function drawEnemyBody(ctx: CanvasRenderingContext2D, t: Target, stage: string, now: number, flash: boolean, hits = 0): void {
+  const name = enemySprite(t, stage, hits);
   const { w, h } = spriteSize(name);
   if (t.shimmer > 0) {
     // arrival ghost: sprite alpha rises 0.25 -> 0.9 across the 0.5 s shimmer, over a dotted ring (steady when flash is off)
@@ -351,7 +353,7 @@ function drawEnemyOverlay(ctx: CanvasRenderingContext2D, s: RunState, t: Target,
 
   // intent: hidden once acted this phase (it rerolls) and while frozen
   const acted = s.phase === 'enemy' && s.acted.includes(t.id);
-  if (!acted && !frozen && !intentVisible(s, t)) {
+  if (!acted && !frozen && t.kind !== 'goblin' && !intentVisible(s, t)) {
     // Dark: intent hidden outside reach; a small grey "?" marks the enemy
     const gx = Math.round(t.x), gy = Math.max(33, Math.round(t.y - t.r - 7 - (elite ? 3 : 0)));
     ctx.globalAlpha = 0.8;
@@ -394,6 +396,20 @@ function drawEnemyOverlay(ctx: CanvasRenderingContext2D, s: RunState, t: Target,
     if (num) drawText(ctx, num, gx0 + 13, gy - 2, { color: ncol, shadow: P['0'] });
     ctx.globalAlpha = 1;
     if (t.chill && t.chill > 0) drawSprite(ctx, 'status_chill', gx0 + 10, gy - 4);
+  }
+
+  if (t.kind === 'goblin') {
+    // coin-sack meter: TOOTH_HIT coins, one gone per hit; the last is the tooth
+    const left = Math.max(0, TOOTH_HIT - s.goblinHits);
+    const py = Math.round(t.y + t.r + 3), px = Math.round(t.x) - 6;
+    ctx.fillStyle = P['0'];
+    ctx.fillRect(px - 1, py - 1, 15, 5);
+    for (let i = 0; i < 3; i++) {
+      ctx.fillStyle = i < left ? P.Y : P['2'];
+      ctx.fillRect(px + i * 5, py, 4, 3);
+      if (i < left) { ctx.fillStyle = P['5']; ctx.fillRect(px + i * 5, py, 2, 1); }
+    }
+    return;
   }
 
   if (staggered && !frozen) {
@@ -458,7 +474,12 @@ export function drawWorld(ctx: CanvasRenderingContext2D, s: RunState, now: numbe
     if (o.kind === 'gear') { drawSprite(ctx, flash && Math.floor(now * 4) % 2 ? 'gear_b' : 'gear', o.x, o.y); continue; }
     drawSprite(ctx, o.kind, o.x, o.y, o.flash > 0 ? { tint: WHITE } : {});
   }
-  for (const t of s.targets) if (!t.dead) drawEnemyBody(ctx, t, s.stage, now, flash);
+  // a scurrying goblin is drawn along its slide, not at its (already moved) sim position
+  const vis = (t: Target): Target => {
+    const p = t.kind === 'goblin' ? view.goblinAt?.(t.id) : null;
+    return p ? { ...t, x: p.x, y: p.y } : t;
+  };
+  for (const t of s.targets) if (!t.dead) drawEnemyBody(ctx, vis(t), s.stage, now, flash, s.goblinHits);
   for (const b of s.balls) {
     const x = Math.round(b.x), y = Math.round(b.y);
     if (b.kind === 'main') {
@@ -468,7 +489,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, s: RunState, now: numbe
       if ((view.heroFlash ?? 0) > 0) drawSprite(ctx, 'hero', x, y, { tint: P.R, alpha: 0.7 });
     } else drawSprite(ctx, b.kind === 'split' ? 'ball_split' : 'ball_spat', x, y);
   }
-  for (const t of s.targets) if (!t.dead) drawEnemyOverlay(ctx, s, t, now, flash);
+  for (const t of s.targets) if (!t.dead) drawEnemyOverlay(ctx, s, vis(t), now, flash);
 }
 
 export interface HudOpts {
@@ -486,17 +507,15 @@ export function drawHud(ctx: CanvasRenderingContext2D, s: RunState, bestWave: nu
   drawSprite(ctx, 'icon_hp', 10, 9);
   drawBar(ctx, 17, 3, 90, 12, frac, low ? P.p : P.R, low ? P.R : P.p, P['2']);
   drawText(ctx, `HP ${Math.ceil(Math.max(0, s.hp))}/${s.maxHp}`, 62, 4, { align: 'center', scale: 2, color: P['5'], shadow: P['0'] });
-  // Row 2: cash, emeralds, overtime tag; enrage on the right
+  // Row 2: cash, this stage's boss token; enrage on the right
   const nw = st.waves.length;
-  const overtime = s.wave > nw + 1;
   drawSprite(ctx, 'coin', 9, 21);
   drawText(ctx, String(Math.floor(s.cash)), 16, 18, { color: P.Y, shadow: P['0'] });
-  drawSprite(ctx, 'emerald', 62, 21);
-  drawText(ctx, String(s.emeralds), 69, 18, { color: P.E, shadow: P['0'] });
-  const otMult = overtimeCashMult(s);
-  if (overtime && otMult > 1) drawText(ctx, `X${otMult}`, 88, 18, { color: P.o, shadow: P['0'] });
+  const tid = s.stats.tokenId ?? 'stripe';
+  drawSprite(ctx, `token_${tid}`, 62, 21, { alpha: s.tokens > 0 ? 1 : 0.4 });
+  drawText(ctx, String(s.tokens), 69, 18, { color: s.tokens > 0 ? P['5'] : P['3'], shadow: P['0'] });
   const rage = rageInfo(s);
-  if (s.phase !== 'over') {
+  if (s.phase !== 'over' && !s.bossKilled) {
     const on = !flash || Math.floor(now * 3) % 2 === 0;
     if (rage.level > 0) {
       if (on) drawText(ctx, `RAGE +${rage.level}`, 175, 18, { align: 'right', color: P.p, shadow: P['0'] });
@@ -505,14 +524,14 @@ export function drawHud(ctx: CanvasRenderingContext2D, s: RunState, bestWave: nu
     }
   }
 
-  // Bottom band: wave track / boss bar / overtime
+  // Bottom band: wave track / boss bar / loot pulls
   const bx = opts.trick ? 36 : TABLE.x, bw = opts.trick ? 96 : 120, ly = 294;
   const boss = s.targets.find((t) => t.kind === 'boss' && !t.dead);
-  if (overtime) {
-    drawText(ctx, `OVERTIME +${s.wave - (nw + 1)}`, bx, ly, { scale: 2, color: P.Y, shadow: P['0'] });
-    if (otMult > 1) drawText(ctx, `${otMult}X CASH`, bx, 308, { color: P.o, shadow: P['0'] });
-  } else if (s.bossKilled) {
-    drawText(ctx, 'STAGE CLEARED', bx, ly, { scale: 2, color: P.Y, shadow: P['0'] });
+  if (s.bossKilled) {
+    const pulls = s.pulls ?? 0;
+    if (pulls > 0 && s.phase !== 'over') drawText(ctx, `PULLS ${pulls}`, bx, ly, { scale: 2, color: P.Y, shadow: P['0'] });
+    else drawText(ctx, 'STAGE CLEARED', bx, ly, { scale: 2, color: P.Y, shadow: P['0'] });
+    drawText(ctx, `LOOT ${Math.floor(s.loot ?? 0)}`, bx, 308, { color: P.o, shadow: P['0'] });
   } else if (s.bossSpawned && boss) {
     drawText(ctx, st.boss.name.toUpperCase(), bx, ly, { scale: 2, color: P.p, shadow: P['0'] });
     drawBar(ctx, bx, 308, bw, 8, boss.hp / boss.maxHp, P.R, P.p, P['2']);

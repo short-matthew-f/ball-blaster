@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BASE_STATS, CASH_GROWTH } from '../src/core/tuning';
 import { CAPSTONE_NEEDS, MULT_IDS } from '../src/meta/upgrades';
-import type { RunResult, SaveData } from '../src/core/types';
+import type { CardState, RunResult, SaveData, TokenId } from '../src/core/types';
+import { TOKEN_OF_WORLD } from '../src/core/types';
+import { GEAR_TOKEN } from '../src/meta/upgrades';
 import {
   NODES, ROOT_ID, bankRun, buildStats, buy, buyState, distanceFromOwned, exportSave, importSave, isReachable, loadSave, newSave, nextCost,
   nodesFor, pathToOwned, cueSlotOpen, equip, gearOwned, ownedGear, relicSlots, trickSlotOpen, unequip,
@@ -9,8 +11,10 @@ import {
 
 const node = (id: string, sv: SaveData = newSave()) => nodesFor(sv).find((n) => n.id === id)!;
 const run = (o: Partial<RunResult> = {}): RunResult => ({
-  stage: 'w1s1', cash: 0, emeralds: 0, kills: 0, wave: 1, wavesCleared: 0, overtimeWaves: 0, bossKilled: false, shots: 0, bestCombo: 0, seconds: 0, ...o,
+  stage: 'w1s1', cash: 0, tokens: 0, tokenId: 'stripe', loot: 0, goblinHits: 0, tooth: false, kills: 0, wave: 1, wavesCleared: 0, bossKilled: false, shots: 0, bestCombo: 0, seconds: 0, ...o,
 });
+
+const card = (level = 0): CardState => ({ level, forks: [], fork: null, caps: [], cap: null });
 
 const store = new Map<string, string>();
 beforeEach(() => {
@@ -74,7 +78,7 @@ describe('purchasing', () => {
   it('fresh save: only ring-1 purchasable', () => {
     const sv = newSave();
     sv.cash = 1e9;
-    sv.emeralds = 1e9;
+    for (const id of TOKEN_OF_WORLD) sv.tokens[id] = 1e9;
     const ok = nodesFor(sv).filter((n) => buyState(sv, n) === 'ok').map((n) => n.id).sort();
     expect(ok).toEqual(['aim', 'damage', 'maxHp']);
     expect(nodesFor(sv).filter((n) => n.ring === 1).map((n) => n.id).sort()).toEqual(["aim", "damage", "maxHp"]);
@@ -107,9 +111,9 @@ describe('purchasing', () => {
   });
   it('ball type needs unlock', () => {
     const sv = newSave();
-    sv.ballType = 'heavy';
+    sv.loadout.ball = 'heavy';
     expect(buildStats(sv).ballType).toBe('standard');
-    sv.levels.ballHeavy = 1;
+    sv.cards.heavy = card(0);
     expect(buildStats(sv).ballType).toBe('heavy');
   });
 });
@@ -218,25 +222,32 @@ describe('loops and multipliers', () => {
 });
 
 describe('save', () => {
-  it('bankRun bestWave, unlock and emeralds', () => {
+  it('bankRun: bestWave, unlock, tokens by tokenId, bestLoot, teeth', () => {
     const sv = newSave();
     bankRun(sv, run({ wave: 3 }));
     expect(sv.bestWave.w1s1).toBe(2);
     bankRun(sv, run({ wave: 2 }));
     expect(sv.bestWave.w1s1).toBe(2);
-    const em: number[] = [];
     let unlocks = 0;
     for (let i = 0; i < 4; i++) {
-      const r = bankRun(sv, run({ bossKilled: true, cash: 10, emeralds: 1, kills: 4, shots: 3, wave: 4 }));
-      em.push(r.bossEmeralds);
+      const r = bankRun(sv, run({ bossKilled: true, cash: 10, tokens: i === 0 ? 3 : 1, loot: 40 + i, tooth: i === 1, kills: 4, shots: 3, wave: 4 }));
+      expect(r.tokenId).toBe('stripe');
+      expect(r.tokens).toBe(i === 0 ? 3 : 1);
       if (r.unlocked) { unlocks++; expect(r.unlocked).toBe('w1s2'); }
     }
     expect(unlocks).toBe(1);
     expect(sv.unlocked).toBe(1);
     expect(sv.bossKills.w1s1).toBe(4);
-    expect(em[0]).toBeGreaterThanOrEqual(em[3]);
+    expect(sv.tokens.stripe).toBe(6);
+    expect(sv.bestLoot.w1s1).toBe(43);
+    bankRun(sv, run({ bossKilled: true, loot: 5 }));
+    expect(sv.bestLoot.w1s1).toBe(43);
+    expect(sv.stats.teeth).toBe(1);
     expect(sv.bestWave.w1s1).toBe(4);
-    expect(sv.stats.runs).toBe(6);
+    expect(sv.stats.runs).toBe(7);
+    bankRun(sv, run({ stage: 'w2s1', tokenId: 'frost', tokens: 1, wave: 2 }));
+    expect(sv.tokens.frost).toBe(1);
+    expect(sv.tokens.stripe).toBe(6);
   });
   it('export/import', () => {
     const sv = newSave();
@@ -256,18 +267,20 @@ describe('save', () => {
     }));
     const sv = loadSave();
     expect(sv.cash).toBe(100); // wallet carries over; spent upgrades are NOT refunded (the tree is a grind)
-    expect(sv.emeralds).toBe(2);
+    expect(sv.tokens.stripe).toBe(2);
+    expect(sv.cards).toEqual({});
     expect(sv.levels).toEqual({});
     expect(sv.current).toBe('w2s1');
     expect(sv.unlocked).toBe(4);
     expect(sv.bestWave).toEqual({ w1s1: 4, w2s1: 2 });
     expect(sv.bossKills).toEqual({ w1s1: 3 });
-    expect(sv.ballType).toBe('standard');
+    expect(sv.loadout.ball).toBe('standard');
     expect(sv.settings.sound).toBe(false);
     expect(sv.hints.shotTaught).toBe(true);
     expect(sv.stats.runs).toBe(9);
     expect(store.has('ballblaster.save.v2')).toBe(false);
-    expect(store.has('ballblaster.save.v3')).toBe(true);
+    expect(store.has('ballblaster.save.v4')).toBe(true);
+    expect(store.has('ballblaster.save.v3')).toBe(false);
     expect(loadSave().cash).toBe(sv.cash);
   });
 });
@@ -279,17 +292,17 @@ describe('gear', () => {
     explosive: [1, 1], shrapnel: [3, 2], momentum: [4, 3], thorns: [4, 4], mirror: [4, 5],
     recall: [-1, 1], shockwave: [-3, 2], rackEm: [-4, 3], timeStop: [-4, 4],
   };
-  const price: Record<string, number> = { break: 3, jump: 5, draw: 6, follow: 8, poison: 3, explosive: 3, recall: 10, shockwave: 10, rackEm: 12, timeStop: 15 };
-  const owns = (sv: SaveData, ...ids: string[]) => { for (const i of ids) sv.levels[i] = 1; };
+  const GEARISH = new Set(['break', 'jump', 'draw', 'follow', 'lightning', 'split', 'spitter', 'poison', 'explosive', 'chill', 'shrapnel', 'static', 'ricochet', 'lantern', 'thorns', 'momentum', 'mirror', 'recall', 'timeStop', 'rackEm', 'shockwave', 'bogus']);
+  const owns = (sv: SaveData, ...ids: string[]) => { for (const i of ids) { if (GEARISH.has(i)) sv.cards[i] = card(0); else sv.levels[i] = 1; } };
 
-  it('gear nodes: emerald keystones at fixed cells, level nodes behind them', () => {
+  it('gear nodes: token keystones at fixed cells, level nodes behind them', () => {
     for (const [id, [gx, gy]] of Object.entries(GEAR)) {
       const n = node(id);
       expect([id, (n.x - 320) / 40, (n.y - 320) / 40]).toEqual([id, gx, gy]);
       expect(n.kind).toBe('keystone');
-      expect(n.currency).toBe('emerald');
+      expect(n.currency).toBe(GEAR_TOKEN[id]);
       expect(n.maxLevel).toBe(1);
-      if (price[id]) expect(n.cost(0)).toBe(price[id]);
+      expect(n.cost(0)).toBe(1);
       const lv = node(`${id}_lv`);
       expect(lv.links).toEqual([id]);
       expect(lv.currency).toBe('cash');
@@ -299,7 +312,7 @@ describe('gear', () => {
       expect(s.gearLevel[id]).toBe(1);
       expect(BASE_STATS.gearLevel).toEqual({});
     }
-    for (const id of ['lightning', 'split', 'spitter']) expect(node(id).maxLevel).toBeGreaterThan(1);
+    for (const id of ['lightning', 'split', 'spitter']) { expect(node(id).maxLevel).toBe(4); expect(node(id).currency).toBe('cash'); }
   });
   it('slots by unlocked', () => {
     const sv = newSave();
@@ -365,9 +378,9 @@ describe('gear', () => {
     sv.unlocked = 4;
     sv.levels.aim = 3;
     owns(sv, 'break', 'shockwave', 'poison');
-    sv.levels.shockwave_lv = 1;
-    sv.levels.poison_lv = 2;
-    sv.loadout = { cue: 'break', relics: ['poison'], trick: 'shockwave' };
+    sv.cards.shockwave.level = 1;
+    sv.cards.poison.level = 2;
+    sv.loadout = { ball: 'standard', cue: 'break', relics: ['poison'], trick: 'shockwave' };
     const s = buildStats(sv);
     expect(s.cue).toBe('break');
     expect(s.aimPreview).toBe(0);
@@ -386,37 +399,191 @@ describe('gear', () => {
     owns(sv, 'lightning', 'split', 'spitter');
     delete (sv as Partial<SaveData>).loadout;
     const a = importSave(exportSave(sv))!;
-    expect(a.loadout).toEqual({ cue: 'standard', relics: ['lightning', 'split', 'spitter'], trick: null });
+    expect(a.loadout).toEqual({ ball: 'standard', cue: 'standard', relics: ['lightning', 'split', 'spitter'], trick: null });
     a.loadout.relics = [];
     expect(importSave(exportSave(a))!.loadout.relics).toEqual([]); // deliberate unequip sticks
     sv.unlocked = 0;
     expect(importSave(exportSave(sv))!.loadout.relics).toEqual(['lightning']); // truncated to slots
   });
   it('sanitize drops unowned gear and truncates', () => {
-    const sv = { ...newSave(), unlocked: 4, levels: { poison: 1, chill: 1, static: 1, break: 1 } } as SaveData;
+    const sv = { ...newSave(), unlocked: 4, cards: { poison: card(), chill: card(), static: card(), break: card() } } as SaveData;
     (sv as unknown as { loadout: unknown }).loadout = { cue: 'jump', relics: ['poison', 'poison', 'lantern', 'chill', 'static', 'nope'], trick: 'recall' };
     const r = importSave(exportSave(sv))!;
-    expect(r.loadout).toEqual({ cue: 'standard', relics: ['poison', 'chill'], trick: null });
+    expect(r.loadout).toEqual({ ball: 'standard', cue: 'standard', relics: ['poison', 'chill'], trick: null });
     (sv as unknown as { loadout: unknown }).loadout = 7;
-    expect(importSave(exportSave(sv))!.loadout).toEqual({ cue: 'standard', relics: [], trick: null });
-    expect(newSave().loadout).toEqual({ cue: 'standard', relics: [], trick: null });
+    expect(importSave(exportSave(sv))!.loadout).toEqual({ ball: 'standard', cue: 'standard', relics: [], trick: null });
+    expect(newSave().loadout).toEqual({ ball: 'standard', cue: 'standard', relics: [], trick: null });
   });
-  it('chain entries are buyable with first emeralds, no Bumpers/Split needed', () => {
+  it('chain entries are buyable with a token of their world, no Bumpers/Split needed', () => {
     const sv = newSave();
-    sv.emeralds = 0;
     owns(sv, 'damage', 'maxHp', 'aim', 'speed', 'heavyHits', 'comboChain', 'armor', 'mass');
     for (const id of ['break', 'poison', 'explosive', 'recall']) expect(buyState(sv, node(id)), id).toBe('poor');
-    sv.emeralds = 3;
-    for (const id of ['break', 'poison', 'explosive']) expect(buyState(sv, node(id)), id).toBe('ok');
+    sv.tokens.stripe = 1;
+    expect(buyState(sv, node('break'))).toBe('ok');
+    expect(buyState(sv, node('recall'))).toBe('ok');
+    expect(buyState(sv, node('poison'))).toBe('poor'); // pearl, not stripe
+    sv.tokens.pearl = 1;
+    sv.tokens.ember = 1;
+    for (const id of ['poison', 'explosive']) expect(buyState(sv, node(id)), id).toBe('ok');
   });
   it('gear unlock reachable by buying along the tree', () => {
     const sv = newSave();
-    sv.emeralds = 100;
+    sv.tokens.stripe = 100;
+    sv.tokens.frost = 100; // Jump is a Frost card
     sv.cash = 1e9;
         buy(sv, node('damage'));
     expect(buyState(sv, node('break'))).toBe('ok');
     expect(buy(sv, node('break'))).toBe(true);
     expect(buy(sv, node('break_lv'))).toBe(true);
     expect(buyState(sv, node('jump'))).toBe('ok');
+  });
+});
+
+describe('save v4 and migration from v3', () => {
+  const v3 = (o: Record<string, unknown>) => ({ version: 1, ...o });
+  const migrate = (o: Record<string, unknown>) => importSave(btoa(JSON.stringify(v3(o))))!;
+  const zero = { stripe: 0, frost: 0, cog: 0, pearl: 0, ember: 0, house: 0 };
+
+  it('newSave has the full v4 shape', () => {
+    const sv = newSave();
+    expect(sv.version).toBe(4);
+    expect(sv.tokens).toEqual(zero);
+    expect(sv.cards).toEqual({});
+    expect(sv.bestLoot).toEqual({});
+    expect(sv.stats.teeth).toBe(0);
+    expect(sv.loadout.ball).toBe('standard');
+    expect('emeralds' in sv).toBe(false);
+    expect('ballType' in sv).toBe(false);
+  });
+  it("owner's v3 export: emeralds become stripe tokens, cash and levels kept", () => {
+    const sv = migrate({ cash: 60, emeralds: 12, levels: { damage: 2, maxHp: 2 }, unlocked: 4, bossKills: { w1s1: 4 } });
+    expect(sv.version).toBe(4);
+    expect(sv.tokens).toEqual({ ...zero, stripe: 12 });
+    expect(sv.cards).toEqual({});
+    expect(sv.cash).toBe(60);
+    expect(sv.levels).toEqual({ damage: 2, maxHp: 2 });
+    expect(sv.unlocked).toBe(4);
+    expect(sv.bossKills).toEqual({ w1s1: 4 });
+    expect(sv.bestLoot).toEqual({});
+    expect(sv.stats.teeth).toBe(0);
+    expect('emeralds' in sv).toBe(false);
+  });
+  it('emeralds split by share of boss kills, remainder to stripe; loops count for their world', () => {
+    const a = migrate({ emeralds: 10, bossKills: { w1s1: 1, w2s1: 2 } });
+    expect(a.tokens).toEqual({ ...zero, stripe: 4, frost: 6 });
+    const b = migrate({ emeralds: 7, bossKills: { w1s4: 1, l1w3s4: 1, w3s4: 1 } });
+    expect(b.tokens.stripe + b.tokens.cog).toBe(7);
+    expect(b.tokens.cog).toBe(4);
+    expect(migrate({ emeralds: 5, bossKills: {} }).tokens.stripe).toBe(5);
+  });
+  it('gear levels become cards; lightning / split / spitter fold to min(3, L-1) with refunds', () => {
+    const sv = migrate({
+      cash: 0, ballType: 'heavy',
+      levels: { break: 1, break_lv: 1, poison: 1, lightning: 5, spitter: 3, split: 3, ballHeavy: 1, jump_lv: 2, damage: 2, strayEmerald: 3 },
+      unlocked: 4,
+    });
+    expect(sv.cards.break).toEqual(card(1));
+    expect(sv.cards.poison).toEqual(card(0));
+    expect(sv.cards.lightning.level).toBe(3);
+    expect(sv.cards.spitter.level).toBe(2);
+    expect(sv.cards.split.level).toBe(2);
+    expect(sv.cards.heavy).toEqual(card(0));
+    expect(sv.cards.jump).toBeUndefined(); // _lv without the unlock is dropped
+    expect(sv.loadout.ball).toBe('heavy');
+    expect(sv.cash).toBe(1253);
+    expect(sv.levels).toEqual({ damage: 2 });
+    // the node view reads the card back
+    expect(buildStats(sv).ballType).toBe('heavy');
+    const lv5 = migrate({ levels: { spitter: 5 } });
+    expect(lv5.cash).toBe(2624);
+    expect(lv5.cards.spitter.level).toBe(3);
+  });
+  it('ball type without the card falls back to standard', () => {
+    expect(migrate({ ballType: 'sticky', levels: {} }).loadout.ball).toBe('standard');
+  });
+  it('migration is idempotent and round-trips through export/import', () => {
+    const sv = migrate({ cash: 5, emeralds: 9, levels: { break: 1, break_lv: 1, lightning: 5, ballLight: 1 }, ballType: 'light', unlocked: 4, bossKills: { w1s1: 1, w2s1: 1 } });
+    const again = importSave(exportSave(sv))!;
+    expect(again).toEqual(sv);
+    expect(importSave(exportSave(again))).toEqual(sv);
+    expect(again.cash).toBe(5 + 1253);
+    expect(again.tokens.stripe + again.tokens.frost).toBe(9);
+  });
+  it('loadSave migrates the v3 key, writes v4, removes v3', () => {
+    store.set('ballblaster.save.v3', JSON.stringify(v3({ cash: 60, emeralds: 12, levels: { damage: 2 }, unlocked: 4, bossKills: { w1s1: 4 } })));
+    const sv = loadSave();
+    expect(sv.tokens.stripe).toBe(12);
+    expect(store.has('ballblaster.save.v3')).toBe(false);
+    expect(store.has('ballblaster.save.v4')).toBe(true);
+    expect(loadSave()).toEqual(sv);
+  });
+  it('sanitize rejects other versions and repairs bad v4 fields', () => {
+    expect(importSave(btoa(JSON.stringify({ version: 3, cash: 1 })))).toBeNull();
+    const bad = importSave(btoa(JSON.stringify({
+      version: 4, cash: 3, tokens: { stripe: 2.7, frost: -1, zzz: 4 }, cards: { break: { level: 9, fork: 'x' }, nope: {} }, loadout: { ball: 'heavy' },
+    })))!;
+    expect(bad.tokens).toEqual({ ...zero, stripe: 2 });
+    expect(bad.cards).toEqual({ break: card(3) });
+    expect(bad.loadout.ball).toBe('standard');
+  });
+  it('buying spends the right token and writes the card', () => {
+    const sv = newSave();
+    sv.cash = 1e6;
+    sv.levels.damage = 1;
+    sv.tokens = { ...zero, frost: 1, stripe: 5 };
+    // Light ball is a Frost card: it needs the Heavy ball chain access, so buy Heavy (stripe) first.
+    for (const n of ['speed', 'heavyHits']) sv.levels[n] = 1;
+    expect(node('ballHeavy').currency).toBe('stripe');
+    expect(buy(sv, node('ballHeavy'))).toBe(true);
+    expect(sv.tokens.stripe).toBe(4);
+    expect(sv.cards.heavy).toEqual(card(0));
+    expect(nodesFor(sv).find((n) => n.id === 'ballLight')!.currency).toBe('frost');
+    expect(buy(sv, node('ballLight'))).toBe(true);
+    expect(sv.tokens).toEqual({ ...zero, frost: 0, stripe: 4 });
+    expect(sv.cards.light).toEqual(card(0));
+    expect(buyState(sv, node('ballSticky'))).toBe('poor'); // cog
+    expect(sv.levels.ballHeavy).toBeUndefined();
+  });
+  it('card levels: gear _lv buys bump card.level; lightning is cash and node level = card.level + 1', () => {
+    const sv = newSave();
+    sv.cash = 1e6;
+    sv.tokens.stripe = 3;
+    Object.assign(sv.levels, { damage: 1, maxHp: 1, comboChain: 1 });
+    expect(buy(sv, node('break'))).toBe(true);
+    expect(buy(sv, node('break_lv'))).toBe(true);
+    expect(sv.cards.break.level).toBe(1);
+    expect(sv.levels.break_lv).toBeUndefined();
+    const cash0 = sv.cash;
+    expect(buy(sv, node('lightning'))).toBe(true);
+    expect(sv.cards.lightning.level).toBe(0);
+    expect(cash0 - sv.cash).toBe(150);
+    expect(buy(sv, node('lightning'))).toBe(true);
+    expect(sv.cards.lightning.level).toBe(1);
+    for (let i = 0; i < 2; i++) expect(buy(sv, node('lightning'))).toBe(true);
+    expect(sv.cards.lightning.level).toBe(3);
+    expect(buyState(sv, node('lightning'))).toBe('maxed');
+  });
+  it('token pricing table: every token node and its world', () => {
+    const priced = NODES.filter((n) => n.currency !== 'cash').map((n) => `${n.id}:${n.currency}:${n.cost(0)}`).sort();
+    expect(priced).toEqual([
+      'ballHeavy:stripe:1', 'ballLight:frost:1', 'ballSticky:cog:1', 'break:stripe:1', 'chill:frost:1', 'draw:cog:1',
+      'explosive:ember:1', 'follow:pearl:1', 'jump:frost:1', 'lantern:stripe:1', 'mirror:frost:1', 'momentum:stripe:1', 'poison:pearl:1',
+      'rackEm:pearl:1', 'recall:stripe:1', 'ricochet:stripe:1', 'shockwave:frost:1', 'shrapnel:pearl:1', 'static:cog:1', 'thorns:pearl:1', 'timeStop:cog:1',
+    ].sort());
+    expect(['crates', 'chests', 'shrine'].map((id) => [node(id).currency, node(id).cost(0)])).toEqual([['cash', 60], ['cash', 120], ['cash', 240]]);
+    expect(NODES.some((n) => n.id === 'strayEmerald')).toBe(false);
+  });
+  it('buildStats sets tokenId from the stage world (loops reuse it) and empty mods', () => {
+    const sv = newSave();
+    expect(buildStats(sv).tokenId).toBe('stripe');
+    sv.current = 'w2s1';
+    expect(buildStats(sv).tokenId).toBe('frost');
+    sv.current = 'l1w3s4';
+    expect(buildStats(sv).tokenId).toBe('cog');
+    sv.current = 'w6s2';
+    expect(buildStats(sv).tokenId).toBe('house');
+    expect(buildStats(sv).mods).toEqual([]);
+    const ids: TokenId[] = TOKEN_OF_WORLD;
+    expect(ids.length).toBe(6);
   });
 });

@@ -5,7 +5,7 @@ import { MAX_PULL, SIM_DT, TABLE, type RelicId, type RunResult, type RunState, t
 import { bankRun, buildStats, buy, buyState, equip, newSave, nextCost, nodesFor, ownedGear, relicSlots, trickSlotOpen } from '../src/meta/index';
 import { BASE_STATS, TARGET_DEFS, TRICK_USES, stageById } from '../src/core/tuning';
 import { globalIndex, idFromIndex, nextStageId, stageId } from '../src/core/worlds';
-import { createRun, shoot, step, useTrick } from '../src/sim/index';
+import { createRun, previewShot, shoot, step, useTrick } from '../src/sim/index';
 import { maxOverlap } from '../src/sim/physics';
 import { Rng } from '../src/core/rng';
 // Env lookup without @types/node (CI typechecks tests without node types).
@@ -46,6 +46,7 @@ interface RunLog {
   seconds: number;
   cash: number;
   wave: number;
+  bossKilled: boolean;
   terminated: boolean;
   problems: string[];
 }
@@ -60,14 +61,15 @@ function checkSane(s: RunState, where: string, problems: string[]): void {
   }
   if (!Number.isFinite(s.hp)) problems.push(`${where}: NaN hp`);
   if (s.phase === 'aim' && s.targets.some((t) => !t.dead && t.shimmer > 0)) problems.push(`${where}: shimmering enemy at aim`);
-  if (s.phase === 'aim' && s.targets.filter((t) => !t.dead).length === 0) problems.push(`${where}: empty board at aim`);
+  // Only 'over' may have an empty board (the loot phase always has its goblin).
+  if (s.phase !== 'over' && s.targets.filter((t) => !t.dead).length === 0) problems.push(`${where}: empty board at ${s.phase}`);
   const ov = maxOverlap(s);
   if (ov > 0.5) problems.push(`${where}: overlap ${ov.toFixed(2)} at rest`);
 }
 
 function playRun(seed: number, stats: RunStats, bot: Bot): RunLog {
   const s = createRun('w1s1', stats, seed);
-  const log: RunLog = { hits: [], kills: [], jams: 0, knock: [], enemySec: [], resolveSec: [], dmgPerPhase: [], charges: 0, restGap: [], bumps: 0, direct: 0, connects: 0, blockedCharges: 0, attackAsAdvance: 0, shotsFired: 0, shots: 0, seconds: 0, cash: 0, wave: 0, terminated: false, problems: [] };
+  const log: RunLog = { hits: [], kills: [], jams: 0, knock: [], enemySec: [], resolveSec: [], dmgPerPhase: [], charges: 0, restGap: [], bumps: 0, direct: 0, connects: 0, blockedCharges: 0, attackAsAdvance: 0, shotsFired: 0, shots: 0, seconds: 0, cash: 0, wave: 0, bossKilled: false, terminated: false, problems: [] };
   checkSane(s, 'start', log.problems);
   while (s.phase === 'aim' && s.shots < SHOT_CAP) {
     const h = s.balls[0];
@@ -91,7 +93,7 @@ function playRun(seed: number, stats: RunStats, bot: Bot): RunLog {
     const hp0 = s.hp;
     let jamFrom: { x: number; y: number } | null = null;
     const attackers = new Set(s.targets.filter((t) => !t.dead && t.intent.t === 'attack').map((t) => t.id));
-    while ((s.phase as string) === 'enemy') {
+    while ((s.phase as string) === 'enemy' || (s.phase as string) === 'loot') {
       for (const f of step(s, SIM_DT)) {
         if (f.t === 'jam') jamFrom = { x: f.x0, y: f.y0 };
         if (f.t === 'launch' && f.intent === 'attack') log.charges++;
@@ -113,6 +115,7 @@ function playRun(seed: number, stats: RunStats, bot: Bot): RunLog {
   log.seconds = s.t;
   log.cash = s.cash;
   log.wave = s.wave;
+  log.bossKilled = s.bossKilled;
   return log;
 }
 
@@ -200,7 +203,7 @@ describe('v0.2 prototype bot (30 seeds per config)', () => {
         'cash mean': f1(mean(logs.map((l) => l.cash))),
         'wave mean': f2(mean(logs.map((l) => l.wave))),
         'wave max': max(logs.map((l) => l.wave)),
-        'boss kills': logs.filter((l) => l.wave > 4).length,
+        'boss kills': logs.filter((l) => l.bossKilled).length,
       };
     }
     console.log('Hits per shot');
@@ -229,6 +232,42 @@ describe('v0.2 prototype bot (30 seeds per config)', () => {
       expect(mean(logs.flatMap((l) => l.enemySec)), c.name).toBeLessThan(2.5);
       expect(mean(logs.map((l) => l.jams)), c.name).toBeLessThan(0.3);
     }
+  });
+});
+
+// ---------- v0.6 M1: Loot Goblin hits per pull (gates goblin mass / radius before loot tiers are tuned) ----------
+describe('loot goblin: hits per pull (perfect bot, 30 seeds, w1s1)', () => {
+  it('prints the distribution; mean in [1.3, 1.8]', () => {
+    if (ENV.GOB_MASS) TARGET_DEFS.goblin.mass = Number(ENV.GOB_MASS);
+    if (ENV.GOB_R) TARGET_DEFS.goblin.r = Number(ENV.GOB_R);
+    const pulls: number[] = [];
+    const strong: RunStats = { ...BASE_STATS, damage: 99, maxHp: 999 };
+    for (let i = 0; i < SEEDS; i++) {
+      const r = playForResult('w1s1', 500 + i, strong, 'perfect', 0, pulls);
+      expect(r.bossKilled).toBe(true);
+    }
+    const noisy: number[] = [];
+    for (let i = 0; i < SEEDS; i++) playForResult('w1s1', 500 + i, strong, 'noisy', 0, noisy);
+    const row = (a: number[]) => ({
+      pulls: a.length,
+      '0': `${Math.round((100 * a.filter((x) => x === 0).length) / a.length)}%`,
+      '1': `${Math.round((100 * a.filter((x) => x === 1).length) / a.length)}%`,
+      '2': `${Math.round((100 * a.filter((x) => x === 2).length) / a.length)}%`,
+      '3': `${Math.round((100 * a.filter((x) => x === 3).length) / a.length)}%`,
+      '4+': `${Math.round((100 * a.filter((x) => x >= 4).length) / a.length)}%`,
+      mean: f2(mean(a)),
+      'tooth %': '',
+    });
+    const perRun = (a: number[]) => Array.from({ length: a.length / 3 }, (_, k) => a[3 * k] + a[3 * k + 1] + a[3 * k + 2]);
+    const t = { perfect: row(pulls), noisy: row(noisy) };
+    t.perfect['tooth %'] = `${Math.round((100 * perRun(pulls).filter((x) => x >= 3).length) / SEEDS)}%`;
+    t.noisy['tooth %'] = `${Math.round((100 * perRun(noisy).filter((x) => x >= 3).length) / SEEDS)}%`;
+    console.log(`Loot Goblin hits per pull (w1s1, goblin r ${TARGET_DEFS.goblin.r} mass ${TARGET_DEFS.goblin.mass}, perfect aim ${LOOT_AIM})`);
+    console.table(t);
+    console.log('perfect mean by pull 1/2/3:', [0, 1, 2].map((k) => f2(mean(pulls.filter((_, i) => i % 3 === k)))).join(' / '), ' noisy:', [0, 1, 2].map((k) => f2(mean(noisy.filter((_, i) => i % 3 === k)))).join(' / '));
+    expect(pulls.length).toBe(3 * SEEDS);
+    expect(mean(pulls)).toBeGreaterThanOrEqual(1.3);
+    expect(mean(pulls)).toBeLessThanOrEqual(1.8);
   });
 });
 
@@ -299,7 +338,7 @@ function kitName(stats: RunStats): string {
 }
 
 function chooseLoadout(save: SaveData): void {
-  save.loadout = { cue: 'standard', relics: [], trick: null };
+  save.loadout = { ball: save.loadout?.ball ?? 'standard', cue: 'standard', relics: [], trick: null };
   if (!PROG_GEAR || DIAG) return;
   const st = stageById(save.current);
   const own = ownedGear(save);
@@ -330,15 +369,102 @@ function useTricks(s: RunState): void {
   if (want) useTrick(s);
 }
 
-function playForResult(stage: string, seed: number, stats: RunStats, bot: ProgBot = 'perfect'): RunResult {
-  const s = createRun(stage, stats, seed);
+/**
+ * Loot phase aim (both bots aim at the goblin). Noisy: direct, +-NOISE_DEG, NOISE_POWER.
+ * Perfect ('search', default): a full-information shooter. Every pull on a LOOT_ANGLES x LOOT_POWERS grid is played out
+ * on a copy of the state; the first pull with the most goblin hits is taken (the live rng is never advanced).
+ * Diagnostics (PROG_LOOT_AIM): 'bank' = the spec heuristic (the shortest of the four one-rail banks whose preview line,
+ * aimPreview forced to 1, ends on the goblin after exactly one rail point, else direct; full power): ~1.03 hits/pull,
+ * flat in goblin mass 1.0-2.5 and hit cooldown 0.05-0.25, because a goblin parked on a rail (every pull after the
+ * first) only returns into the hero on an along-the-rail line the heuristic never looks for. 'direct' = straight at it.
+ */
+const LOOT_AIM = ENV.PROG_LOOT_AIM ?? 'search';
+const LOOT_ANGLES = 48;
+const LOOT_POWERS = [1, 0.6];
+
+function cloneRun(s: RunState): RunState {
+  const c = structuredClone({ ...s, rng: undefined }) as unknown as RunState;
+  c.rng = Object.assign(Object.create(Rng.prototype), s.rng) as Rng;
+  return c;
+}
+
+function searchPull(s: RunState): { x: number; y: number } {
+  let best = { x: 0, y: -MAX_PULL };
+  let bestN = -1;
+  for (let i = 0; i < LOOT_ANGLES; i++) {
+    const a = (i / LOOT_ANGLES) * Math.PI * 2;
+    for (const p of LOOT_POWERS) {
+      const pull = { x: Math.cos(a) * MAX_PULL * p, y: Math.sin(a) * MAX_PULL * p };
+      const c = cloneRun(s);
+      const g0 = c.goblinHits;
+      shoot(c, pull);
+      while ((c.phase as string) === 'resolve') step(c, SIM_DT * 8);
+      if (c.goblinHits - g0 > bestN) ((bestN = c.goblinHits - g0), (best = pull));
+    }
+  }
+  return best;
+}
+
+function lootPull(s: RunState, bot: ProgBot, noise: Rng): { x: number; y: number } {
+  const h = s.balls[0];
+  const g = s.targets.find((t) => t.kind === 'goblin')!;
+  if (bot === 'noisy') {
+    const ang = Math.atan2(g.y - h.y, g.x - h.x) + (noise.range(-NOISE_DEG, NOISE_DEG) * Math.PI) / 180;
+    const p = noise.range(NOISE_POWER[0], NOISE_POWER[1]);
+    return { x: Math.cos(ang) * MAX_PULL * p, y: Math.sin(ang) * MAX_PULL * p };
+  }
+  const toward = (x: number, y: number) => {
+    const d = Math.hypot(x - h.x, y - h.y) || 1;
+    return { x: ((x - h.x) / d) * MAX_PULL, y: ((y - h.y) / d) * MAX_PULL };
+  };
+  if (LOOT_AIM === 'search') return searchPull(s);
+  if (LOOT_AIM === 'bank') {
+    const xl = TABLE.x + h.r;
+    const xr = TABLE.x + TABLE.w - h.r;
+    const yt = TABLE.y + h.r;
+    const yb = TABLE.y + TABLE.h - h.r;
+    const mirrors = [
+      { x: 2 * xl - g.x, y: g.y },
+      { x: 2 * xr - g.x, y: g.y },
+      { x: g.x, y: 2 * yt - g.y },
+      { x: g.x, y: 2 * yb - g.y },
+    ];
+    const keep = s.stats.aimPreview;
+    s.stats.aimPreview = 1;
+    let best: { x: number; y: number } | null = null;
+    let bestL = Infinity;
+    for (const m of mirrors) {
+      const pull = toward(m.x, m.y);
+      const pts = previewShot(s, pull);
+      if (pts.length !== 3) continue;
+      const end = pts[2];
+      if (Math.hypot(end.x - g.x, end.y - g.y) > g.r + h.r + 1) continue;
+      const L = Math.hypot(m.x - h.x, m.y - h.y);
+      if (L < bestL) ((bestL = L), (best = pull));
+    }
+    s.stats.aimPreview = keep;
+    if (best) return best;
+  }
+  return toward(g.x, g.y);
+}
+
+function playForResult(stage: string, seed: number, stats: RunStats, bot: ProgBot = 'perfect', bestWave = 0, pulls?: number[]): RunResult {
+  const s = createRun(stage, stats, seed, bestWave);
   const noise = new Rng(seed * 7919 + 17);
   while (s.phase === 'aim' && s.shots < 600) {
+    if (s.bossKilled) {
+      // Loot phase: three pulls at the goblin.
+      const before = s.goblinHits;
+      shoot(s, lootPull(s, bot, noise));
+      while ((s.phase as string) === 'resolve' || (s.phase as string) === 'loot') step(s, SIM_DT * 8);
+      pulls?.push(s.goblinHits - before);
+      continue;
+    }
     if (s.trickUsesLeft > 0) useTricks(s);
     if (!s.targets.some((t) => !t.dead)) {
       // A trick (shockwave + static) cleared the board during aim: fire a nudge to bring the next wave.
       shoot(s, { x: 0, y: -MAX_PULL * 0.3 });
-      while ((s.phase as string) === 'resolve' || (s.phase as string) === 'enemy') step(s, SIM_DT * 8);
+      while ((s.phase as string) === 'resolve' || (s.phase as string) === 'enemy' || (s.phase as string) === 'loot') step(s, SIM_DT * 8);
       continue;
     }
     const h = s.balls[0];
@@ -356,7 +482,7 @@ function playForResult(stage: string, seed: number, stats: RunStats, bot: ProgBo
       power = noise.range(NOISE_POWER[0], NOISE_POWER[1]);
     }
     shoot(s, { x: Math.cos(ang) * MAX_PULL * power, y: Math.sin(ang) * MAX_PULL * power });
-    while ((s.phase as string) === 'resolve' || (s.phase as string) === 'enemy') step(s, SIM_DT * 8);
+    while ((s.phase as string) === 'resolve' || (s.phase as string) === 'enemy' || (s.phase as string) === 'loot') step(s, SIM_DT * 8);
   }
   expect(s.phase, `${stage} seed ${seed} (${bot}): progression run hit the shot cap`).toBe('over');
   return s.result!;
@@ -421,7 +547,7 @@ function progression(seed: number, bot: ProgBot): ProgLog {
       log.stages[n] = cur;
       if (ENV.PROG_DUMP === save.current) console.log('STATS', JSON.stringify(st));
     }
-    const res = playForResult(save.current, seed * 1000 + r, diagStats(save, buildStats(save)), bot);
+    const res = playForResult(save.current, seed * 1000 + r, diagStats(save, buildStats(save)), bot, save.bestWave[save.current] ?? 0);
     bankRun(save, res);
     if (r <= 60) log.earned60 += res.cash;
     cur.runs++;

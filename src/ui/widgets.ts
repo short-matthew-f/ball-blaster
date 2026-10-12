@@ -3,6 +3,9 @@ import { PALETTE } from '../render/palette';
 import { drawText, textWidth } from '../render/text';
 import { drawSprite } from '../render/sprite-cache';
 import { buyState, nodesFor } from '../meta/index';
+import { TOKEN_OF_WORLD } from '../core/types';
+import type { SaveData, TokenId } from '../core/types';
+import { parseStageId } from '../core/worlds';
 import type { App } from './app';
 
 const P = PALETTE;
@@ -138,6 +141,21 @@ export function drawBar(ctx: CanvasRenderingContext2D, x: number, y: number, w: 
     ctx.fillStyle = P['5'];
     ctx.fillRect(gx, y - 2, 1, h + 4);
   }
+}
+
+/** Boss token of the world the save's current stage is in. */
+export function currentToken(save: SaveData): TokenId {
+  try {
+    return TOKEN_OF_WORLD[parseStageId(save.current).world - 1] ?? 'stripe';
+  } catch {
+    return 'stripe';
+  }
+}
+
+/** Token icon (9x9, centred on cx,cy) + count to its right; the count's text top is cy-3. */
+export function drawTokenCount(ctx: CanvasRenderingContext2D, id: string, n: number, cx: number, cy: number, color: string = P['5']): void {
+  drawSprite(ctx, `token_${id}`, cx, cy, { alpha: n > 0 ? 1 : 0.5 });
+  drawText(ctx, String(n), cx + 7, cy - 3, { color: n > 0 ? color : P['3'], shadow: P['0'] });
 }
 
 /** True when any revealed upgrade node is currently buyable. */

@@ -13,7 +13,8 @@ import { BREAK_SPEED_MULT, THIN_RAILS_BOUNCE } from '../src/core/tuning';
 import { makeEnemy, placeFormation } from '../src/sim/spawn';
 import { maxOverlap } from '../src/sim/physics';
 import { rageLevel } from '../src/sim/enemy';
-import { hasCorridor, jamRule } from '../src/sim/run';
+import { buildResult, hasCorridor, jamRule } from '../src/sim/run';
+import { endLootShot, goblinHit, scurryDest, startLoot } from '../src/sim/loot';
 import { kill, updateBossShield } from '../src/sim/damage';
 
 const SHOTS: Vec[] = [
@@ -494,7 +495,7 @@ describe('step 3: fx', () => {
   });
 });
 
-describe('step 4: arrivals and Overtime enrage', () => {
+describe('step 4: arrivals and the boss-wave enrage clock', () => {
   it('no live enemy is shimmering at any transition to aim (waves, boss, summons)', () => {
     for (let seed = 1; seed <= 6; seed++) {
       const s = createRun('w1s1', { ...BASE_STATS, damage: 4, maxHp: 40 }, seed);
@@ -509,12 +510,12 @@ describe('step 4: arrivals and Overtime enrage', () => {
       }
     }
   });
-  it('Overtime enrage starts at turn 6 of each Overtime wave', () => {
+  it('the boss wave keeps the stage clock (8 + 2 x 4 = turn 16); there is no wave after it', () => {
     const s = lab();
-    s.wave = 6;
-    s.waveTurn = 4; // turn 5
+    s.wave = 4;
+    s.waveTurn = 14; // turn 15
     expect(rageLevel(s)).toBe(0);
-    s.waveTurn = 5; // turn 6
+    s.waveTurn = 15; // turn 16
     expect(rageLevel(s)).toBe(1);
   });
   it('the boss takes its spot; a hero standing there is nudged clear', () => {
@@ -592,7 +593,7 @@ describe('v0.3 step 2: stage generator, scaling, modifiers, boss traits, hazards
     expect(makeStage('w2s3')).toBe(makeStage('w2s3')); // memoised
   });
 
-  it('slots: modifier counts, boss traits, elites from wave 2; loops: two modifiers, all traits, Overtime 1x', () => {
+  it('slots: modifier counts, boss traits, elites from wave 2; loops: two modifiers, all traits', () => {
     for (const loop of [0, 1, 2]) {
       for (let w = 1; w <= 6; w++) {
         const seen = new Set<string>();
@@ -605,7 +606,6 @@ describe('v0.3 step 2: stage generator, scaling, modifiers, boss traits, hazards
           }
           if (loop > 0 || k === 4) expect(st.bossTraits).toEqual(['phases', 'cadre', 'moves']);
           expect(st.bossTraits).toContain('phases');
-          expect(st.overtimeCash).toBe(loop > 0 ? 1 : 2);
           if (k >= 3 && !st.modifiers.includes('earlyBoss')) expect(st.waves[1].elites ?? 0).toBeGreaterThanOrEqual(1);
         }
       }
@@ -616,14 +616,13 @@ describe('v0.3 step 2: stage generator, scaling, modifiers, boss traits, hazards
     expect(makeStage('w1s1').boss.cadre).toBe(0);
   });
 
-  it('scaling: HP, attack and cash grow per global index; emeralds 3 + n', () => {
+  it('scaling: HP, attack and cash grow per global index', () => {
     const a = makeStage('w1s1');
     const b = makeStage('w1s4');
     expect(a.hpScale).toBe(1);
     expect(a.cashScale).toBe(0.5);
     expect(b.cashScale).toBeCloseTo(0.5 * CASH_GROWTH ** 3);
     expect(b.atkScale).toBeCloseTo(SLOT_ATK_MULT[3] * ATK_GROWTH ** 3);
-    expect(b.emeraldReward).toBe(6);
     expect(b.boss.hp).toBe(Math.round(60 * SLOT_HP_MULT[3] * HP_GROWTH ** 3));
     const s = createRun('w3s1', BASE_STATS, 1);
     const g = makeEnemy(s, 'grunt', 90, 90);
@@ -678,9 +677,13 @@ describe('v0.3 step 2: stage generator, scaling, modifiers, boss traits, hazards
     updateBossShield(s);
     kill(s, boss, 'main', []);
     expect(s.phase).toBe('aim');
-    s.stats.waveHeal = 0; // the Overtime wave's clear-heal would revive a 0-HP hero
-    s.hp = 0;
+    // The next shot ends in the loot phase (no enemy phase), then three pulls end the run.
     enemyPhaseOnly(s);
+    expect(s.targets.map((t) => t.kind)).toEqual(['goblin']);
+    for (let i = 0; i < 3 && s.phase === 'aim'; i++) {
+      shoot(s, { x: 0, y: -MAX_PULL });
+      untilSettled(s);
+    }
     expect(s.phase).toBe('over');
     expect(s.result?.wavesCleared).toBe(4);
     expect(s.result?.wave).toBe(4);
@@ -1193,7 +1196,8 @@ describe('v0.5 Clockwork: stage generator', () => {
     let h = 0;
     const str = JSON.stringify(Array.from({ length: 8 }, (_, n) => makeStage(idFromIndex(n))));
     for (let i = 0; i < str.length; i++) h = (Math.imul(h, 31) + str.charCodeAt(i)) | 0;
-    expect([h, str.length]).toEqual([70826863, 9446]);
+    // v0.6 M1 rebaseline: overtimeCash and emeraldReward left StageDef (nothing else changed: -35 chars per stage).
+    expect([h, str.length]).toEqual([1834690106, 9165]);
   });
   it('createRun: the gear becomes an unbreakable obstacle; hazards are a copy (a reversal never leaks into the stage)', () => {
     const a = createRun('w3s2', BASE_STATS, 3);
@@ -1521,6 +1525,307 @@ describe('v0.5 Clockwork: determinism', () => {
       const { t: _a, ...ff } = snapshot(go(SIM_DT * FAST_FORWARD_MULT, seed));
       const { t: _b, ...normal } = snapshot(go(SIM_DT, seed));
       expect(ff).toEqual(normal);
+    }
+  });
+});
+
+// ---------- v0.6 M1: the Loot Goblin (replaces Overtime) and boss tokens ----------
+
+/** Loot phase on an empty w1s1 table: hero at (hx,hy), goblin moved to (gx,gy), arrival hold run down (aim). */
+function lootLab(stats: RunStats = BASE_STATS, hx = 90, hy = 240, gx = 90, gy = 150, seed = 42) {
+  const s = createRun('w1s1', { ...stats }, seed);
+  s.targets = [];
+  s.obstacles = [];
+  s.balls[0].x = hx;
+  s.balls[0].y = hy;
+  s.bossKilled = true;
+  startLoot(s, []);
+  const g = s.targets[0];
+  g.x = gx;
+  g.y = gy;
+  untilSettled(s);
+  return { s, g };
+}
+
+/** Pull toward (x,y) from the hero at `power` (0..1). */
+function aimAt(s: RunState, x: number, y: number, power = 1): Vec {
+  const h = s.balls[0];
+  const d = Math.hypot(x - h.x, y - h.y) || 1;
+  return { x: ((x - h.x) / d) * MAX_PULL * power, y: ((y - h.y) / d) * MAX_PULL * power };
+}
+
+describe('v0.6 loot goblin', () => {
+  it('loot: boss death ends the waves', () => {
+    const s = lab(90, 240);
+    s.wave = 4;
+    s.bossSpawned = true;
+    const boss = put(s, 'boss', 90, 150);
+    boss.hp = 1;
+    const escort = put(s, 'grunt', 30, 60);
+    escort.intent = { t: 'attack', n: 3 };
+    const cash0 = s.cash;
+    shoot(s, { x: 0, y: -MAX_PULL });
+    const fx: FxEvent[] = [];
+    const phases = new Set<string>();
+    while (s.phase !== 'aim' && s.phase !== 'over') {
+      fx.push(...step(s, SIM_DT));
+      phases.add(s.phase);
+    }
+    const dead = fx.findIndex((f) => f.t === 'bossDead');
+    expect(dead).toBeGreaterThanOrEqual(0);
+    expect(phases.has('enemy')).toBe(false);
+    expect(fx.slice(dead).some((f) => f.t === 'waveStart')).toBe(false);
+    expect(s.targets.map((t) => t.kind)).toEqual(['goblin']);
+    expect(s.targets[0].intent.t).toBe('flee');
+    expect(s.pulls).toBe(3);
+    expect(fx.filter((f) => f.t === 'lootStart').length).toBe(1);
+    expect(fx.filter((f) => f.t === 'boardClear').length).toBe(1);
+    const killCash = fx.reduce((a, f) => a + (f.t === 'kill' ? f.cash : 0), 0);
+    expect(s.cash - cash0).toBe(killCash + WAVE_CASH * 4);
+    expect(s.wave).toBe(4);
+    // A boss killed in the enemy phase: the escort never acts again and the turn ends in the loot phase.
+    const e = lab(90, 240);
+    e.wave = 4;
+    e.bossSpawned = true;
+    const b2 = put(e, 'boss', 90, 100);
+    b2.hp = 1;
+    b2.poison = 3;
+    const g2 = put(e, 'grunt', 90, 180);
+    g2.intent = { t: 'attack', n: 3 };
+    e.stats = { ...e.stats, relics: ['poison'] };
+    const fx2 = enemyPhaseOnly(e);
+    expect(fx2.some((f) => f.t === 'bossDead')).toBe(true);
+    expect(fx2.some((f) => f.t === 'launch')).toBe(false);
+    expect(fx2.slice(fx2.findIndex((f) => f.t === 'bossDead')).some((f) => f.t === 'waveStart')).toBe(false);
+    expect(e.phase).toBe('aim');
+    expect(e.targets.map((t) => t.kind)).toEqual(['goblin']);
+  });
+
+  it('loot: hits debounce', () => {
+    // A press into a goblin parked on the rail: one hit.
+    {
+      const { s } = lootLab(BASE_STATS, 90, 90, 90, TABLE.y + 13);
+      shoot(s, aimAt(s, 90, 0, MIN_POWER));
+      untilSettled(s);
+      expect(s.goblinHits).toBe(1);
+    }
+    // Full power from below, near the top rail: the goblin returns off the rail into the hero: two hits.
+    {
+      const { s } = lootLab(BASE_STATS, 90, 200, 90, 100);
+      shoot(s, aimAt(s, 90, 100));
+      untilSettled(s);
+      expect(s.goblinHits).toBe(2);
+    }
+    // Relics and tricks never add hits, damage, stagger, statuses or combo hits.
+    const kit: RunStats = { ...BASE_STATS, relics: ['lightning', 'explosive', 'poison', 'chill', 'static'], lightningChance: 1, lightningArcs: 2, lightningRange: 200, lightningDamage: 3, trick: 'shockwave', trickUses: 2, heavyHits: 1 };
+    const { s, g } = lootLab(kit, 90, 240, 90, 200);
+    expect(useTrick(s)).toBe(false);
+    shoot(s, aimAt(s, 90, 200, MIN_POWER));
+    const fx: FxEvent[] = [];
+    while (s.phase === 'resolve') fx.push(...step(s, SIM_DT));
+    expect(s.goblinHits).toBe(1);
+    expect(s.combo.hits).toBe(0);
+    expect(g.stagger).toBe(0);
+    expect(g.poison ?? 0).toBe(0);
+    expect(g.chill ?? 0).toBe(0);
+    expect(g.hp).toBe(Infinity);
+    expect(fx.some((f) => f.t === 'lightning' || f.t === 'blast' || f.t === 'hit' || f.t === 'stagger')).toBe(false);
+  });
+
+  it('loot: scurry geometry', () => {
+    const go = (hx: number, hy: number, gx: number, gy: number, bumper?: [number, number]) => {
+      const { s, g } = lootLab(BASE_STATS, hx, hy, gx, gy);
+      if (bumper) s.obstacles.push({ id: s.nextId++, kind: 'bumper', x: bumper[0], y: bumper[1], r: 6, hp: Infinity, flash: 0, dead: false });
+      s.shotGoblinHits = 0;
+      s.goblinHits = 1;
+      const fx: FxEvent[] = [];
+      endLootShot(s, fx);
+      const sc = fx.find((f) => f.t === 'scurry');
+      return { s, g, sc };
+    };
+    const a = go(90, 240, 90, 150, [90, 100]);
+    expect([a.g.x, a.g.y]).toEqual([90, 47]);
+    expect(a.g.resting).toBe(true);
+    expect(a.sc).toEqual({ t: 'scurry', id: a.g.id, x: 90, y: 47, x0: 90, y0: 150 });
+    expect(a.s.phase).toBe('loot');
+    expect(canFastForward(a.s)).toBe(true);
+    const b = go(60, 240, 90, 47);
+    expect([b.g.x, b.g.y]).toEqual([157, 47]);
+    expect(scurryDest(90, 150, 13, 90, 150)).toEqual({ x: 90, y: 47 });
+    // Into a corner: stays (a 0 px scurry still emits its fx).
+    const c = go(120, 100, 23, 47);
+    expect([c.g.x, c.g.y]).toEqual([23, 47]);
+    expect(c.sc).toBeDefined();
+    // No hit this pull: no scurry.
+    const { s, g } = lootLab(BASE_STATS, 90, 240, 90, 150);
+    const fx: FxEvent[] = [];
+    s.shotGoblinHits = 0;
+    endLootShot(s, fx);
+    expect([g.x, g.y]).toEqual([90, 150]);
+    expect(fx.some((f) => f.t === 'scurry')).toBe(false);
+  });
+
+  it('loot: loot draw is seeded', () => {
+    const draw = (seed: number) => {
+      const { s, g } = lootLab(BASE_STATS, 90, 240, 90, 150, seed);
+      const fx: FxEvent[] = [];
+      for (let i = 0; i < 300; i++) goblinHit(s, g, fx);
+      return { s, cash: fx.flatMap((f) => (f.t === 'goblinHit' ? [f.cash] : [])), tiers: fx.flatMap((f) => (f.t === 'goblinHit' ? [f.tier] : [])) };
+    };
+    const a = draw(5);
+    const b = draw(5);
+    expect(a.s.loot).toBe(b.s.loot);
+    expect(a.cash).toEqual(b.cash);
+    expect(a.s.loot).not.toBe(draw(6).s.loot);
+    expect(new Set(a.cash)).toEqual(new Set([2, 6, 18]));
+    for (let i = 0; i < a.cash.length; i++) expect(a.cash[i]).toBe({ small: 2, big: 6, jackpot: 18 }[a.tiers[i]]);
+    expect(a.s.loot).toBe(a.cash.reduce((x, y) => x + y, 0));
+  });
+
+  it('loot: golden tooth on the 4th hit across pulls (one multi-hit needed)', () => {
+    const run = (perPull: number[]) => {
+      const s = lab(90, 240);
+      const boss = put(s, 'boss', 90, 100);
+      kill(s, boss, 'main', []);
+      expect(s.tokens).toBe(1);
+      s.targets = [];
+      const fx: FxEvent[] = [];
+      startLoot(s, fx);
+      untilSettled(s);
+      const g = s.targets[0];
+      for (const n of perPull) {
+        shoot(s, { x: 0, y: MAX_PULL });
+        // A dead pull (the hero never rolls); the hits are scored directly.
+        s.balls[0].vx = 0;
+        s.balls[0].vy = 0;
+        s.balls[0].resting = true;
+        for (let i = 0; i < n; i++) goblinHit(s, g, fx);
+        fx.push(...untilSettled(s));
+      }
+      return { s, fx };
+    };
+    const a = run([1, 3]);
+    expect(a.s.tokens).toBe(2);
+    expect(a.s.tooth).toBe(true);
+    expect(a.fx.filter((f) => f.t === 'tooth').length).toBe(1);
+    expect(a.fx.filter((f) => f.t === 'token').length).toBe(1);
+    const b = run([1, 1, 1]);
+    expect(b.s.tokens).toBe(1);
+    expect(b.s.tooth).toBe(false);
+    expect(b.fx.some((f) => f.t === 'tooth')).toBe(false);
+    expect(b.s.phase).toBe('over');
+    expect(b.s.result?.tooth).toBe(false);
+  });
+
+  it("loot: run ends after the third pull's balls stop", () => {
+    const stats: RunStats = { ...BASE_STATS, relics: ['split'], splitCount: 2 };
+    const { s, g } = lootLab(stats, 90, 240, 90, 150);
+    let sawSplit = false;
+    const fx: FxEvent[] = [];
+    for (let pull = 0; pull < 3; pull++) {
+      expect(s.phase).toBe('aim');
+      shoot(s, aimAt(s, g.x, g.y));
+      while (s.phase !== 'aim' && s.phase !== 'over') {
+        fx.push(...step(s, SIM_DT));
+        if (s.balls.some((b) => b.kind === 'split')) sawSplit = true;
+        if ((s.phase as string) === 'over') expect(s.balls.every((b) => b.kind === 'main')).toBe(true);
+      }
+    }
+    expect(sawSplit).toBe(true);
+    expect(s.phase).toBe('over');
+    expect(s.pulls).toBe(0);
+    expect(fx.filter((f) => f.t === 'lootEnd')).toEqual([{ t: 'lootEnd', cash: s.loot, hits: s.goblinHits }]);
+    expect(fx.some((f) => f.t === 'runOver')).toBe(false);
+    expect(s.result?.loot).toBe(s.loot);
+    expect(s.result?.goblinHits).toBe(s.goblinHits);
+    expect(s.result?.bossKilled).toBe(true);
+    expect(s.result?.wavesCleared).toBe(4);
+    expect(s.goblinHits).toBeGreaterThan(0);
+  });
+
+  it('tokens: drop rule', () => {
+    const killBoss = (stage: string, bestWave?: number) => {
+      const s = createRun(stage, { ...BASE_STATS, tokenId: 'frost' }, 1, bestWave);
+      const boss = makeEnemy(s, 'boss', 90, 100);
+      s.targets = [boss];
+      const fx: FxEvent[] = [];
+      kill(s, boss, 'main', fx);
+      return { s, fx };
+    };
+    expect(killBoss('w1s1').s.tokens).toBe(1);
+    expect(killBoss('w1s4', 0).s.tokens).toBe(3);
+    expect(killBoss('w1s4', 3).s.tokens).toBe(3);
+    expect(killBoss('w1s4', 4).s.tokens).toBe(1);
+    expect(killBoss('w1s3', 0).s.tokens).toBe(1);
+    expect(killBoss('w1s4', 0).fx.filter((f) => f.t === 'token')).toEqual([{ t: 'token', x: 90, y: 100, amount: 3 }]);
+    const { s } = killBoss('w1s4', 0);
+    const r = buildResult(s);
+    expect(r.tokenId).toBe(s.stats.tokenId);
+    expect(r.tokenId).toBe('frost');
+    expect(r.tokens).toBe(3);
+  });
+
+  it('loot: cue rules and fast-forward', () => {
+    const firstHit = (stats: RunStats, gy = 150) => {
+      const { s } = lootLab(stats, 90, 240, 90, gy);
+      shoot(s, aimAt(s, 90, gy));
+      const v0 = s.launch!.speed;
+      while (s.phase === 'resolve') {
+        const fx = step(s, SIM_DT);
+        if (fx.some((f) => f.t === 'goblinHit')) return { s, h: s.balls[0], v0 };
+      }
+      throw new Error('no goblin hit');
+    };
+    // Jump: the goblin is struck, never jumped.
+    const j = firstHit({ ...BASE_STATS, cue: 'jump' });
+    expect(j.h.jumpOver).toBeUndefined();
+    expect(j.s.goblinHits).toBe(1);
+    expect(j.s.firstHitDone).toBe(true);
+    // Sticky: the hero does not stop dead on the goblin.
+    const st = firstHit({ ...BASE_STATS, ballType: 'sticky' });
+    expect(Math.hypot(st.h.vx, st.h.vy)).toBeGreaterThan(20);
+    expect(st.s.stickyUsed).toBe(false);
+    // Draw: back toward the launch point at DRAW_RETURN x launch speed.
+    const d = firstHit({ ...BASE_STATS, cue: 'draw' });
+    expect(d.h.vy).toBeGreaterThan(0);
+    expect(Math.abs(d.h.vx)).toBeLessThan(1);
+    expect(Math.hypot(d.h.vx, d.h.vy) / d.v0).toBeCloseTo(0.5, 1);
+    // Tricks off; fast-forward through the holds.
+    const { s } = lootLab({ ...BASE_STATS, trick: 'recall', trickUses: 1 });
+    expect(useTrick(s)).toBe(false);
+    shoot(s, aimAt(s, 90, 150));
+    while (s.phase === 'resolve') step(s, SIM_DT);
+    expect(s.phase).toBe('loot');
+    expect(canFastForward(s)).toBe(true);
+  });
+});
+
+describe('v0.6 determinism across the loot phase', () => {
+  it('same seed + same shots through the boss kill and a scurry hold => identical state; fast-forward matches', () => {
+    const go = (dt: number, seed: number) => {
+      const s = createRun('w1s1', { ...BASE_STATS, damage: 99, maxHp: 999 }, seed);
+      let scurries = 0;
+      while ((s.phase === 'aim' || s.phase === 'loot') && s.shots < 120) {
+        if (s.phase === 'loot') {
+          step(s, dt);
+          continue;
+        }
+        const h = s.balls[0];
+        const tg = s.targets.filter((t) => !t.dead).reduce((a, b) => (Math.hypot(b.x - h.x, b.y - h.y) < Math.hypot(a.x - h.x, a.y - h.y) ? b : a));
+        shoot(s, aimAt(s, tg.x, tg.y));
+        for (const f of untilSettled(s, dt)) if (f.t === 'scurry') scurries++;
+      }
+      return { s, scurries };
+    };
+    for (const seed of [2, 9]) {
+      const a = go(SIM_DT, seed);
+      expect(a.s.phase).toBe('over');
+      expect(a.scurries).toBeGreaterThan(0);
+      expect(snapshot(a.s)).toEqual(snapshot(go(SIM_DT, seed).s));
+      const { t: _a, ...ff } = snapshot(go(SIM_DT * FAST_FORWARD_MULT, seed).s);
+      const { t: _b, ...normal } = snapshot(a.s);
+      expect(ff).toEqual(normal);
+      expect(go(SIM_DT * FAST_FORWARD_MULT, seed).s.loot).toBe(a.s.loot);
     }
   });
 });

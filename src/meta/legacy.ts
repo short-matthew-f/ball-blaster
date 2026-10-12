@@ -58,3 +58,20 @@ export function v2Refund(levels: Record<string, number>): { cash: number; emeral
   }
   return { cash, emeralds };
 }
+
+/** v3 cost curves of the cash nodes that fold into gallery cards at card level min(3, L - 1); used only to refund lost steps. [old max, cost(step)] */
+export const V3_CARD_CURVES: Record<string, [number, (l: number) => number]> = {
+  lightning: [5, geo(150, 1.7)],
+  split: [3, geo(200, 2)],
+  spitter: [5, geo(250, 1.8)],
+};
+
+/** Cash back for steps above node level 4 (card level 3) when a v3 lightning/split/spitter at level L becomes a card. */
+export function v3CardRefund(id: string, level: number): number {
+  const def = V3_CARD_CURVES[id];
+  if (!def) return 0;
+  const L = Math.min(Math.floor(level), def[0]);
+  let sum = 0;
+  for (let l = 4; l < L; l++) sum += def[1](l);
+  return sum;
+}

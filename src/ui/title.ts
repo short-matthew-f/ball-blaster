@@ -2,7 +2,7 @@ import { PALETTE } from '../render/palette';
 import { getFeltBg } from '../render/renderer';
 import { drawSprite } from '../render/sprite-cache';
 import { drawText } from '../render/text';
-import { Buttons, anyAffordable, drawBuyDot } from './widgets';
+import { Buttons, anyAffordable, currentToken, drawBuyDot, drawTokenCount } from './widgets';
 import type { App, Screen } from './app';
 
 const P = PALETTE;
@@ -76,6 +76,10 @@ export class TitleScreen implements Screen {
     ]);
     this.buttons.draw(ctx);
     if (anyAffordable(this.app)) drawBuyDot(ctx, this.buttons.list[1]);
+    const wt = currentToken(this.app.save);
+    drawSprite(ctx, 'coin', 9, 8);
+    drawText(ctx, String(Math.floor(this.app.save.cash)), 16, 5, { color: P.Y, shadow: P['0'] });
+    drawTokenCount(ctx, wt, 62, 8, this.app.save.tokens?.[wt] ?? 0);
     drawText(ctx, 'V0.1', 4, 314, { color: P['2'] });
   }
 

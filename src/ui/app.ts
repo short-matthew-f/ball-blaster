@@ -1,12 +1,14 @@
 // Shared app context handed to every screen.
-import type { MetaApi, RunResult, SaveData, SimApi, StageId } from '../core/types';
+import type { MetaApi, RunResult, SaveData, SimApi, StageId, TokenId } from '../core/types';
 import type { Sfx } from '../audio/sfx';
 
 export type ScreenId = 'title' | 'run' | 'summary' | 'shop' | 'map' | 'settings' | 'loadout';
 
 export interface SummaryInfo {
   result: RunResult;
-  bossEmeralds: number;
+  /** Boss tokens banked by this run (and of which kind). */
+  tokens: number;
+  tokenId: TokenId;
   unlocked: StageId | null;
   /** Best wave reached on this stage before this run was banked (the ghost marker). */
   prevBest: number;

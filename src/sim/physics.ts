@@ -41,11 +41,14 @@ import {
   GEAR_MIN_KICK,
   GEAR_SPIN_DEG,
   GEAR_EXIT_MAX_DEG,
+  GOBLIN_HIT_COOLDOWN,
+  GOBLIN_HIT_SPEED,
   gearVal,
   stageById,
 } from '../core/tuning';
 import { addPoison, addStagger, applyDamage, chainLightning, heal, heroDamage, hitEnemy, scaleAtk, scaleCash } from './damage';
 import { has, lv } from './gear';
+import { goblinHit } from './loot';
 
 export const MAX_BALL_SPEED = MAX_LAUNCH_SPEED * 1.5;
 const OBSTACLE_RESTITUTION = 0.8;
@@ -127,10 +130,10 @@ function mainDamage(s: RunState, speed: number): number {
 }
 
 /** True if this pair's contact may count as a new hit (separated since the last one, and the cooldown passed). */
-function eligible(s: RunState, key: string): boolean {
+function eligible(s: RunState, key: string, cooldown = HIT_COOLDOWN): boolean {
   if (s.touching[key]) return false;
   const last = s.lastHit[key];
-  return last === undefined || s.t - last >= HIT_COOLDOWN;
+  return last === undefined || s.t - last >= cooldown;
 }
 function markHit(s: RunState, key: string): void {
   s.lastHit[key] = s.t;
@@ -204,6 +207,24 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
   chainLightning(s, t, fx);
 }
 
+/**
+ * A counted ball contact on the Loot Goblin: the loot draw (sim/loot.ts). No damage, stagger, status, lightning,
+ * Explosive, Sticky stop or thorns; it never counts in s.combo. The hero's first contact of the shot fires Draw / Follow
+ * and releases Split.
+ */
+function ballHitsGoblin(s: RunState, b: Ball, g: Target, fx: FxEvent[], pvx: number, pvy: number): void {
+  goblinHit(s, g, fx);
+  if (b.kind !== 'main') return;
+  if (!s.firstHitDone) {
+    s.firstHitDone = true;
+    cueAfterContact(s, b, pvx, pvy);
+  }
+  if (s.stats.splitCount > 0 && !s.splitUsed && has(s, 'split')) {
+    s.splitUsed = true;
+    spawnSplit(s, b, fx);
+  }
+}
+
 /** Draw / Follow: replace the hero's post-impact velocity after the first contact of the shot. */
 function cueAfterContact(s: RunState, b: Ball, pvx: number, pvy: number): void {
   if (s.stats.cue === 'draw' && s.launch) {
@@ -255,6 +276,7 @@ export function onIce(s: RunState, x: number, y: number): boolean {
  * Clockwork cog: a charging cog is never the bumped body and keeps its charge; the other takes the flat bump.
  */
 function enemyBump(s: RunState, a: Target, b: Target, rel: number, spA: number, spB: number, fx: FxEvent[]): void {
+  if (a.kind === 'goblin' || b.kind === 'goblin') return;
   const cogA = a.kind === 'cog' && (a.chargeDmg ?? 0) > 0;
   const cogB = b.kind === 'cog' && (b.chargeDmg ?? 0) > 0;
   if (cogA !== cogB) {
@@ -294,11 +316,12 @@ function collidePair(s: RunState, A: Body, B: Body, fx: FxEvent[]): void {
   if (d2 >= min * min) return;
   const sum = A.im + B.im;
   if (sum <= 0) return;
-  // Jump cue: the hero's first enemy contact of the shot starts a jump over it instead of a collision.
+  // Jump cue: the hero's first enemy contact of the shot starts a jump over it instead of a collision (never the goblin:
+  // a hop would only waste a pull).
   {
     const ball = A.ball ?? B.ball;
     const en = A.en ?? B.en;
-    if (ball && en && ball.kind === 'main' && s.phase === 'resolve' && s.stats.cue === 'jump' && ball.jumpOver === undefined && !s.firstHitDone) {
+    if (ball && en && en.kind !== 'goblin' && ball.kind === 'main' && s.phase === 'resolve' && s.stats.cue === 'jump' && ball.jumpOver === undefined && !s.firstHitDone) {
       ball.jumpOver = en.id;
       return;
     }
@@ -342,10 +365,12 @@ function collidePair(s: RunState, A: Body, B: Body, fx: FxEvent[]): void {
   } else {
     const ball = (A.ball ?? B.ball)!;
     const en = (A.en ?? B.en)!;
-    if (impact > HIT_MIN_SPEED && eligible(s, key)) {
+    const gob = en.kind === 'goblin';
+    if (gob ? impact > GOBLIN_HIT_SPEED && eligible(s, key, GOBLIN_HIT_COOLDOWN) : impact > HIT_MIN_SPEED && eligible(s, key)) {
       markHit(s, key);
       const isA = ball === A.ball;
-      ballHitsEnemy(s, ball, en, isA ? spA : spB, fx, isA ? pre.avx : pre.bvx, isA ? pre.avy : pre.bvy);
+      if (gob) ballHitsGoblin(s, ball, en, fx, isA ? pre.avx : pre.bvx, isA ? pre.avy : pre.bvy);
+      else ballHitsEnemy(s, ball, en, isA ? spA : spB, fx, isA ? pre.avx : pre.bvx, isA ? pre.avy : pre.bvy);
       // Sticky stop / landed charges change velocities; refresh the views.
       for (const v of [A, B]) {
         const o = (v.ball ?? v.en)!;

@@ -11,7 +11,7 @@ Oct 12, 2026 · **Proposal, owner-directed.** Decisions so far: obvious roadbloc
 | Coin | Earned | Spends on |
 |---|---|---|
 | **Cash** (pooled, as now) | kills, waves, chests, the Loot Goblin; ×1.22 per stage | levels: island stat nodes, card base nodes |
-| **Boss tokens** (one kind per boss: Stripe chip, Frost shard, Brass cog, Bog pearl, Ember, House chip) | first kill of that boss **3**, every repeat kill **1**, the Loot Goblin's **golden tooth** (third hit in the three pulls) **+1** | the portal to the next world, island capstones, gallery cards, forks, capstones |
+| **Boss tokens** (one kind per boss: Stripe chip, Frost shard, Brass cog, Bog pearl, Ember, House chip) | first kill of that boss **3**, every repeat kill **1**, the Loot Goblin's **golden tooth** (fourth hit in the three pulls) **+1** | the portal to the next world, island capstones, gallery cards, forks, capstones |
 | ~~Emeralds~~ | retired | migrate 1:1 into Stripe chips |
 
 Tokens never cross worlds. A full boss run (kill + golden tooth) pays 2, so "I need five more chips" is three runs.
@@ -21,9 +21,9 @@ Tokens never cross worlds. A full boss run (kill + golden tooth) pays 2, so "I n
 The boss dies, the table clears, and a **golden goblin ball** waddles in with a sack. You get **three pulls**: three shots, and the phase ends when the third shot's balls stop. Every hit shakes loot out of it. It never dies and never attacks; it just runs.
 
 - **Hits are ball contacts.** Hero, split children, spat balls and shards each count once per contact. A rail bounce back into it is a second hit. Arcs, poison ticks and blasts do not count.
-- **Loot is random, the token isn't.** Each hit pays a seeded draw from three tiers, small / big / jackpot, weighted about 60 / 32 / 8, averaging about a sixth of a boss kill's cash per hit. The goblin's **golden tooth** drops on the third hit of the phase, whatever pull it lands on: the token is skill, luck only moves the cash.
+- **Loot is random, the token isn't.** Each hit pays a seeded draw from three tiers, small / big / jackpot, weighted about 60 / 32 / 8, averaging about a sixth of a boss kill's cash per hit. The goblin's **golden tooth** drops on the **fourth** hit of the phase, whatever pull it lands on, so three clean single hits are not enough: you need one multi-hit (a rail return, a split child, a bounce back through it). The token is skill, luck only moves the cash. (Built as 4 after the bots took a third-hit tooth in 100 % of runs.)
 - **Scurry.** When your balls stop, it rolls directly away from the hero at a fixed speed until it reaches a rail, then settles; if it is already on that rail it slides along it, away from you. It ignores obstacles and hazards (it's a goblin). It ends up on cushions and in corners, which is where bank shots live, and your leave after each hit decides the next geometry (Draw pulls you away from it, Follow chases it).
-- **Unkillable.** Its "HP" is a coin sack that shrinks with each hit; the third hit reads as emptied. No stagger, no intent beyond running.
+- **Unkillable.** Its "HP" is a coin sack that shrinks with each hit; the fourth hit reads as emptied and is the tooth. No stagger, no intent beyond running.
 - **Tricks off, full power allowed, seeded per run** (the bot plays it; the gate stays deterministic). A miss is on you.
 - **Feedback:** coins burst from it on every hit and fly to the HUD, a rising chime per hit, JACKPOT banner on the top tier, "3 PULLS" counter, and the stage pip remembers your best pull total.
 - **Removed:** Overtime waves, the Overtime enrage clock, `atkBonus`, the loop rule about Overtime cash. Summary line "Waves cleared" becomes "Boss · Loot n".

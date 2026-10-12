@@ -3,7 +3,7 @@ import { PALETTE } from '../render/palette';
 import { getMenuBg } from '../render/renderer';
 import { drawSprite } from '../render/sprite-cache';
 import { drawText } from '../render/text';
-import { Buttons, anyAffordable, drawBuyDot, drawPanel } from './widgets';
+import { Buttons, anyAffordable, currentToken, drawBuyDot, drawPanel } from './widgets';
 import type { App, Screen } from './app';
 
 const P = PALETTE;
@@ -36,38 +36,44 @@ export class SummaryScreen implements Screen {
     drawText(ctx, st.name.toUpperCase(), 90, st.modifiers.length ? 38 : 42, { align: 'center', color: P['3'] });
     if (st.modifiers.length) drawText(ctx, st.modifiers.map((m) => MODIFIER_NAMES[m]).join(' \u00b7 '), 90, 46, { align: 'center', color: P.o });
 
-    const em = r.emeralds + sum.bossEmeralds;
     drawPanel(ctx, 14, 54, 152, 124);
+    const save = this.app.save;
+    const tokenId = r.tokenId ?? currentToken(save);
+    const bestLoot = save.bestLoot?.[r.stage] ?? 0;
+    const newBestLoot = r.bossKilled && (r.loot ?? 0) > 0 && bestLoot === r.loot;
     const rows: [string, string, string][] = [
       ['KILLS', String(r.kills), P['4']],
       ['CASH EARNED', String(Math.floor(r.cash)), P.Y],
       ['BEST CHAIN', String(r.bestCombo), P.M],
       ['SHOTS', String(r.shots), P['4']],
-      ['BOSS', r.bossKilled ? 'KILLED' : 'NO', r.bossKilled ? P.Y : P['3']],
+      ['BOSS', r.bossKilled ? 'YES' : 'NO', r.bossKilled ? P.Y : P['3']],
     ];
-    if (r.bossKilled || r.overtimeWaves > 0) rows.push(['OVERTIME WAVES', String(r.overtimeWaves), P.o]);
+    if (r.bossKilled) rows.push(['LOOT', String(Math.floor(r.loot ?? 0)), P.o]);
     rows.forEach(([k, v, c], i) => {
       drawText(ctx, k, 22, 61 + i * 11, { color: P['3'] });
       drawText(ctx, v, 158, 61 + i * 11, { color: c, align: 'right', shadow: P['0'] });
     });
     let y = 61 + rows.length * 11;
-    drawText(ctx, 'EMERALDS', 22, y, { color: P['3'] });
-    drawSprite(ctx, 'emerald', 130, y + 3);
-    drawText(ctx, `+${em}`, 158, y, { color: P.E, align: 'right', shadow: P['0'] });
+    if (newBestLoot) drawText(ctx, 'NEW BEST', 62, y - 11, { color: Math.floor(now * 3) % 2 ? P.Y : P['5'] });
+    drawText(ctx, 'TOKENS', 22, y, { color: P['3'] });
+    drawSprite(ctx, `token_${tokenId}`, 130, y + 3);
+    drawText(ctx, `+${r.tokens ?? 0}`, 158, y, { color: (r.tokens ?? 0) > 0 ? P['5'] : P['3'], align: 'right', shadow: P['0'] });
     y += 11;
-    if (sum.bossEmeralds > 0) {
-      drawText(ctx, `(BOSS +${sum.bossEmeralds})`, 158, y - 1, { color: P.e, align: 'right' });
-      y += 7;
+    if (r.tooth) {
+      drawText(ctx, 'GOLDEN TOOTH', 22, y, { color: P.Y });
+      drawSprite(ctx, 'icon_tooth', 130, y + 3);
+      drawText(ctx, '+1', 158, y, { color: P.Y, align: 'right', shadow: P['0'] });
+      y += 11;
     }
 
     // waves cleared vs best: pip track with the previous-best marker
-    y += 3;
-    drawText(ctx, `WAVES CLEARED ${r.wavesCleared}/4`, 22, y, { color: P['3'] });
+    y += 1;
+    drawText(ctx, r.bossKilled ? 'BOSS DOWN' : `WAVES CLEARED ${r.wavesCleared}/4`, 22, y, { color: P['3'] });
     const shown = Math.min(r.wavesCleared, Math.floor(this.t * 6));
     const pipY = y + 14;
     for (let i = 0; i < 4; i++) {
       const cx = 30 + i * 18;
-      const done = i < shown;
+      const done = i < shown || (i === 3 && r.bossKilled);
       drawSprite(ctx, i === 3 ? 'pip_boss' : done ? 'pip_done' : 'pip_todo', cx, pipY, { alpha: i === 3 && !done ? 0.5 : 1 });
       if (prevBestMark(sum.prevBest) === i + 1) {
         ctx.fillStyle = P['5'];
@@ -94,8 +100,9 @@ export class SummaryScreen implements Screen {
     }
     drawSprite(ctx, 'coin', 70, 243);
     drawText(ctx, `${Math.floor(this.app.save.cash)}`, 78, 240, { color: P.Y, shadow: P['0'] });
-    drawSprite(ctx, 'emerald', 114, 243);
-    drawText(ctx, `${this.app.save.emeralds}`, 122, 240, { color: P.E, shadow: P['0'] });
+    const have = this.app.save.tokens?.[tokenId] ?? 0;
+    drawSprite(ctx, `token_${tokenId}`, 114, 243, { alpha: have > 0 ? 1 : 0.5 });
+    drawText(ctx, String(have), 121, 240, { color: have > 0 ? P['5'] : P['3'], shadow: P['0'] });
 
     this.buttons.set([
       { id: 'upgrade', x: 30, y: 252, w: 120, h: 22, label: 'UPGRADE', scale: 2, style: 'blue' },

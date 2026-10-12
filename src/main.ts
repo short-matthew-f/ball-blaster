@@ -54,7 +54,7 @@ const app: App = {
     const prevBest = save.bestWave[result.stage] ?? 0;
     const banked = meta.bankRun(save, result);
     meta.writeSave(save);
-    summary = { result, bossEmeralds: banked.bossEmeralds, unlocked: banked.unlocked, prevBest };
+    summary = { result, tokens: banked.tokens, tokenId: banked.tokenId, unlocked: banked.unlocked, prevBest };
     app.go('summary');
   },
   persist() {
@@ -161,4 +161,4 @@ document.addEventListener('visibilitychange', () => {
 if (import.meta.env.PROD) registerServiceWorker();
 
 // Dev-only handle for playtesting from the console.
-if (import.meta.env.DEV) (window as unknown as { __bb: unknown }).__bb = { app, screens, sim, forceUpdatePill: () => import('./update').then((m) => m.__forceReadyForDev()) };
+if (import.meta.env.DEV) (window as unknown as { __bb: unknown }).__bb = { app, screens, sim, migrate: (text: string) => meta.importSave(text), forceUpdatePill: () => import('./update').then((m) => m.__forceReadyForDev()) };

@@ -1,25 +1,22 @@
 import type { CueId, RelicId, SaveData, TrickId } from '../core/types';
 import { CUE_IDS, RELIC_IDS, TRICK_IDS } from './upgrades';
 
-const lvl = (save: SaveData, id: string) => {
-  const v = save.levels[id];
-  return typeof v === 'number' && v > 0 ? v : 0;
-};
+const owned = (save: SaveData, id: string): boolean => !!save.cards?.[id];
 
 /** Relic-slot count: 1, +1 from stage 4 (world 2), +1 from stage 12 (world 4). */
 export const relicSlots = (save: SaveData): number => 1 + (save.unlocked >= 4 ? 1 : 0) + (save.unlocked >= 12 ? 1 : 0);
 export const trickSlotOpen = (save: SaveData): boolean => save.unlocked >= 4;
-export const cueSlotOpen = (save: SaveData): boolean => CUE_IDS.some((id) => lvl(save, id) > 0);
+export const cueSlotOpen = (save: SaveData): boolean => CUE_IDS.some((id) => owned(save, id));
 
-/** Owned = the unlock node has a level. The 'standard' cue is always owned. */
+/** Owned = the card exists in save.cards. The 'standard' cue is always owned. */
 export const gearOwned = (save: SaveData, id: string): boolean =>
-  id === 'standard' || ((CUE_IDS as string[]).includes(id) || (RELIC_IDS as string[]).includes(id) || (TRICK_IDS as string[]).includes(id)) && lvl(save, id) > 0;
+  id === 'standard' || ((CUE_IDS as string[]).includes(id) || (RELIC_IDS as string[]).includes(id) || (TRICK_IDS as string[]).includes(id)) && owned(save, id);
 
 export function ownedGear(save: SaveData): { cues: CueId[]; relics: RelicId[]; tricks: TrickId[] } {
   return {
-    cues: CUE_IDS.filter((id) => lvl(save, id) > 0),
-    relics: RELIC_IDS.filter((id) => lvl(save, id) > 0),
-    tricks: TRICK_IDS.filter((id) => lvl(save, id) > 0),
+    cues: CUE_IDS.filter((id) => owned(save, id)),
+    relics: RELIC_IDS.filter((id) => owned(save, id)),
+    tricks: TRICK_IDS.filter((id) => owned(save, id)),
   };
 }
 
@@ -78,14 +75,15 @@ export function fixLoadout(save: SaveData, raw: unknown): SaveData['loadout'] {
     for (const x of r.relics) if (typeof x === 'string' && (RELIC_IDS as string[]).includes(x) && gearOwned(save, x) && !relics.includes(x as RelicId)) relics.push(x as RelicId);
   }
   const trick = typeof r.trick === 'string' && (TRICK_IDS as string[]).includes(r.trick) && trickSlotOpen(save) && gearOwned(save, r.trick) ? (r.trick as TrickId) : null;
-  save.loadout = { cue, relics: relics.slice(0, relicSlots(save)), trick };
+  const ball = r.ball === 'heavy' || r.ball === 'light' || r.ball === 'sticky' ? (owned(save, r.ball) ? r.ball : 'standard') : 'standard';
+  save.loadout = { ball, cue, relics: relics.slice(0, relicSlots(save)), trick };
   return save.loadout;
 }
 
 /** One-time migration: former always-on lightning/split/spitter owners keep them on (into free relic slots). */
 export function autoEquipLegacy(save: SaveData): void {
   if (save.hints.relicsMigrated || save.loadout.relics.length > 0) return;
-  const legacy = (['lightning', 'split', 'spitter'] as RelicId[]).filter((id) => lvl(save, id) > 0);
+  const legacy = (['lightning', 'split', 'spitter'] as RelicId[]).filter((id) => owned(save, id));
   if (!legacy.length) return;
   save.loadout.relics = legacy.slice(0, relicSlots(save));
   save.hints.relicsMigrated = true;

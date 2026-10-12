@@ -3,7 +3,7 @@ import type { SimApi } from '../core/types';
 import { canFastForward, createRun, previewShot, shoot, step, useTrick } from './run';
 
 export { canFastForward, createRun, previewShot, shoot, step, useTrick };
-export { heal, overtimeCashMult } from './damage';
+export { heal } from './damage';
 export { effectiveReach, intentVisible, rageLevel, rageStart } from './enemy';
 export { onIce } from './physics';
 

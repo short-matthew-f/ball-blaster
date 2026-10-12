@@ -1,15 +1,12 @@
 import { BASE_STATS, TRICK_USES } from '../core/tuning';
 import type { RelicId, RunStats, SaveData } from '../core/types';
+import { TOKEN_OF_WORLD } from '../core/types';
 import { nodesFor } from './tree';
 import { cueSlotOpen, gearOwned, relicSlots, trickSlotOpen } from './gear';
+import { nodeLevel } from './level';
 import { MULT_IDS, WORLD_ONLY } from './upgrades';
 
-export function nodeLevel(save: SaveData, id: string): number {
-  const v = save.levels[id];
-  return typeof v === 'number' && v > 0 ? Math.floor(v) : 0;
-}
-
-const BALL_NODE = { heavy: 'ballHeavy', light: 'ballLight', sticky: 'ballSticky' } as const;
+export { nodeLevel };
 
 /** World index of a stage id ('w2s1', 'l1w3s4'); 0 if unparseable. */
 export function worldOf(stage: string): number {
@@ -23,7 +20,7 @@ const GATED_RELICS = new Set<string>(['lightning', 'split', 'spitter']);
 
 export function buildStats(save: SaveData): RunStats {
   const s: RunStats = { ...BASE_STATS };
-  const lo = save.loadout ?? { cue: 'standard', relics: [], trick: null };
+  const lo = save.loadout ?? { ball: 'standard', cue: 'standard', relics: [], trick: null };
   const slots = relicSlots(save);
   const relics = lo.relics.filter((id, i, a) => i < slots && a.indexOf(id) === i && gearOwned(save, id));
   const world = worldOf(save.current);
@@ -46,8 +43,9 @@ export function buildStats(save: SaveData): RunStats {
     s.maxHp = Math.round(s.maxHp);
     s.waveHeal = Math.round(s.waveHeal);
   }
-  const bt = save.ballType;
-  s.ballType = bt !== 'standard' && nodeLevel(save, BALL_NODE[bt]) > 0 ? bt : 'standard';
+  s.ballType = lo.ball !== 'standard' && save.cards?.[lo.ball] ? lo.ball : 'standard';
+  s.tokenId = TOKEN_OF_WORLD[Math.max(1, world) - 1] ?? 'stripe';
+  s.mods = [];
   const cue = lo.cue !== 'standard' && cueSlotOpen(save) && gearOwned(save, lo.cue) ? lo.cue : 'standard';
   const trick = lo.trick && trickSlotOpen(save) && gearOwned(save, lo.trick) ? lo.trick : null;
   s.cue = cue;

@@ -68,7 +68,7 @@ export const TARGET_DEFS: Record<TargetKind, TargetDef> = {
   // Loot Goblin (loot phase; spec numbers, sim owner may retune within the hits-per-pull test)
   goblin: {
     hp: Infinity, r: 13, mass: 1.5, cash: 0, bounce: 1.3, staggerAt: Infinity, chargeSpeed: 0, reach: 0,
-    intents: [{ t: 'flee', weight: 100 }],
+    intents: [], // scripted: always Flee (rollIntent, no rng draw); never damaged, staggered or killed
   },
   boss: {
     hp: 40, r: 23, mass: 8, cash: 60, bounce: 0.9, staggerAt: 4, chargeSpeed: 240, chargedSpeed: 400, reach: 90,
@@ -140,14 +140,12 @@ export const CASCADE_R = 50;
 /** Bumper hit: +1 stagger to enemies within this radius. */
 export const BUMPER_STAGGER_R = 40;
 export const WAVES_PER_STAGE = 3;
-/** Wave-clear cash = WAVE_CASH x min(wave, WAVE_CASH_CAP_WAVE): Overtime waves do not keep climbing. */
+/** Wave-clear cash = WAVE_CASH x wave (the boss-wave clear, paid as the loot phase starts, is WAVE_CASH x 4). */
 export const WAVE_CASH = 8; // x wave number
 export const WAVE_CASH_CAP_WAVE = WAVES_PER_STAGE + 1;
 /** Enrage starts at turn ENRAGE_BASE + ENRAGE_PER_WAVE x wave; +1 attack per turn after. */
 export const ENRAGE_BASE = 8;
 export const ENRAGE_PER_WAVE = 2;
-/** Overtime: enrage starts at this turn of every Overtime wave (flat). */
-export const ENRAGE_OVERTIME_TURN = 6;
 /**
  * Enraged Attack beyond reach charges anyway (banking round cover); from this rage level a covered attacker's blow lands
  * as an instant strike. Liveness backstop: a brute caged behind bumpers made a 600-shot run (v0.3 step 2 bot).
@@ -155,14 +153,10 @@ export const ENRAGE_OVERTIME_TURN = 6;
 export const ENRAGE_STRIKE_LEVEL = 5;
 /** Unblockable (Shoot) damage per enemy phase is capped at this fraction of the hero's max HP; the excess is dropped. */
 export const RANGED_PHASE_CAP = 0.5;
-export const OVERTIME_CASH_MULT = 2;
-/** Only the first this-many Overtime waves pay OVERTIME_CASH_MULT; later ones pay 1x. */
-export const OVERTIME_CASH_WAVES = 5;
 /** Chain combo bonus cap (fraction of the shot's cash). */
 export const CHAIN_BONUS_CAP = 1;
-/** Enemy HP scaling (step 3): x(1 + WAVE_HP_STEP) per stage wave after the first; +OVERTIME_HP_PER_WAVE x k in Overtime wave k. */
+/** Enemy HP scaling (step 3): x(1 + WAVE_HP_STEP) per stage wave after the first. */
 export const WAVE_HP_STEP = 0.25;
-export const OVERTIME_HP_PER_WAVE = 2;
 export const ELITE_CASH_MULT = 2;
 /** Elite Swift: soft-roll distance (+25 %). Hardy: HP multiplier. */
 export const SWIFT_ADVANCE_DIST = 75;
@@ -206,7 +200,6 @@ export const BASE_STATS: RunStats = {
   crates: 0,
   chests: 0,
   shrineChance: 0,
-  strayEmeraldChance: 0,
   chestCash: 25,
   crateCash: 8,
   shrineHeal: 8,
@@ -229,10 +222,6 @@ export const BALL_TYPES = {
 } as const;
 
 export const SPIT_LIFE_CAP = 3;
-export const EMERALD_REPEAT_DECAY = 0.68; // reward = max(1, round(base * decay^priorKills)); felt 5 -> 5,3,2,2,1...
-
-/** Overtime waves reuse their wave's weights plus Scatter at this weight. */
-export const OVERTIME_SCATTER_WEIGHT = 20;
 
 // ---------- v0.3 scaling (DESIGN-v0.3.md "Scaling"; tuned by the multi-stage bot in tests/proto.test.ts) ----------
 /** Per global stage index n: enemy HP x HP_GROWTH^n (boss included), attack x ATK_GROWTH^n, cash x CASH_GROWTH^n. */
@@ -241,8 +230,6 @@ export const ATK_GROWTH = 1.15;
 export const CASH_GROWTH = 1.22;
 /** Cash per kill at n = 0 (Felt 1). */
 export const BASE_CASH_SCALE = 0.5;
-/** Emeralds for the first boss kill of stage n: EMERALD_BASE + n (repeats decay by EMERALD_REPEAT_DECAY). */
-export const EMERALD_BASE = 3;
 /** Modifier strengths. */
 export const HARDY_MOD_HP = 1;
 export const HARDY_MOD_COUNT = 0.2;
@@ -340,3 +327,23 @@ export const RECALL_Y_OFFSET = 24;
 export function gearVal(table: readonly number[], lv: number): number {
   return table[Math.max(0, Math.min(table.length - 1, lv))];
 }
+
+// ---------- v0.6 M1: the Loot Goblin (replaces Overtime) and boss tokens ----------
+/** Goblin rest spot when the loot phase starts (else the nearest free spot, findFreeNear). */
+export const GOBLIN_SPAWN = { x: 90, y: 106 } as const;
+/** Shots in the loot phase. */
+export const LOOT_PULLS = 3;
+/** Loot phase holds (s, sim time): the goblin's arrival before the first pull; after each pull (scurry animation). */
+export const LOOT_ARRIVE_HOLD = 0.5;
+export const SCURRY_HOLD = 0.35;
+/** A ball contact on the goblin counts as a hit above this approach speed (px/s), after separating and this cooldown (s). */
+export const GOBLIN_HIT_SPEED = 40;
+export const GOBLIN_HIT_COOLDOWN = 0.25;
+/** Loot per goblin hit: a seeded tier draw; cash = max(1, round(boss kill cash x LOOT_FRAC[tier])). */
+export const LOOT_WEIGHTS = { small: 60, big: 32, jackpot: 8 } as const;
+export const LOOT_FRAC = { small: 0.08, big: 0.2, jackpot: 0.6 } as const;
+/** The golden tooth (+1 token) drops on this goblin hit of the loot phase. */
+export const TOOTH_HIT = 4; // 3 pulls, 4 hits: the tooth needs one multi-hit (bots land 1 hit per pull nearly always)
+/** Boss tokens: first kill of a world's slot-4 stage (bestWave < 4) pays TOKENS_FIRST_SLOT4, every other kill TOKENS_KILL. */
+export const TOKENS_FIRST_SLOT4 = 3;
+export const TOKENS_KILL = 1;

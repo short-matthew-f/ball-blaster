@@ -119,8 +119,6 @@ export interface StageDef {
   advanceMult: number;
   /** Extra Shoot damage before scaling (ranged). */
   shootBonus: number;
-  /** Overtime cash multiplier for the first OVERTIME_CASH_WAVES Overtime waves (loops: 1). */
-  overtimeCash: number;
   /** Wave-clear cash multiplier (scaling). */
   waveCashScale: number;
   /** Hero proportional speed decay per second (v *= 1 - friction*dt). Enemies use ENEMY_FRICTION_MULT x this. */
@@ -137,8 +135,6 @@ export interface StageDef {
   /** Cash per kill multiplier. */
   cashScale: number;
   boss: BossDef;
-  /** Emeralds for first boss kill; repeats pay less (see tuning). */
-  emeraldReward: number;
 }
 
 export interface BossDef {
@@ -283,8 +279,6 @@ export interface Target {
   elite?: EliteMod;
   /** Summons (grubs) never count for wave clear. */
   summon?: boolean;
-  /** Overtime: extra attack per action. */
-  atkBonus?: number;
   /**
    * Dead but still rolling (s): a body killed mid-shot keeps its momentum for a moment and can still bump live
    * enemies (cascades survive kills). Invisible (dead); never touches balls; removed at shot end.
@@ -387,6 +381,12 @@ export interface RunState {
   tooth: boolean;
   /** Boss tokens earned this run (banked into save.tokens[stats.tokenId] at run end). */
   tokens: number;
+  /** save.bestWave[stage] at run start (createRun's 4th arg): the slot-4 first-kill token rule. */
+  bestWave: number;
+  /** Loot phase hold (s left): the goblin's arrival (LOOT_ARRIVE_HOLD) or scurry (SCURRY_HOLD). */
+  lootHold?: number;
+  /** goblinHits when the current loot shot was fired (scurry only after a shot that hit). */
+  shotGoblinHits?: number;
   seed: number;
   rng: Rng;
   stats: RunStats;
@@ -399,10 +399,9 @@ export interface RunState {
   /** Shared heal curve state: cumulative HP healed this run. */
   healed: number;
   cash: number;
-  emeralds: number;
   kills: number;
   shots: number;
-  /** Current wave: 1..wavesPerStage = regular waves, wavesPerStage+1 = boss wave, beyond = Overtime. */
+  /** Current wave: 1..wavesPerStage = regular waves, wavesPerStage+1 = boss wave (the boss's death ends the waves). */
   wave: number;
   /** Enemy phases completed in the current wave (enrage clock). */
   waveTurn: number;
@@ -474,14 +473,18 @@ export interface SimApi {
 export interface RunResult {
   stage: StageId;
   cash: number;
-  emeralds: number;
+  /** Boss tokens earned this run, of kind tokenId. */
+  tokens: number;
+  tokenId: TokenId;
+  /** Goblin cash taken in the loot phase, hits landed on it, and whether the golden tooth dropped. */
+  loot: number;
+  goblinHits: number;
+  tooth: boolean;
   kills: number;
   /** Highest stage wave reached, 1-4 (4 = boss wave). */
   wave: number;
   /** Stage waves cleared, 0-4 (4 = boss killed). */
   wavesCleared: number;
-  /** Overtime waves reached after the boss kill. */
-  overtimeWaves: number;
   bossKilled: boolean;
   shots: number;
   bestCombo: number;
@@ -505,7 +508,6 @@ export type FxEvent =
   | { t: 'bossArrive' }
   | { t: 'bossPhase'; phase: number }
   | { t: 'bossDead'; x: number; y: number }
-  | { t: 'emerald'; x: number; y: number; amount: number }
   | { t: 'shrine'; x: number; y: number }
   | { t: 'chest'; x: number; y: number; cash: number }
   | { t: 'shoot'; power: number }
@@ -527,7 +529,7 @@ export type FxEvent =
   /** Ranged shot tracer. */
   | { t: 'tracer'; x0: number; y0: number; x1: number; y1: number }
   | { t: 'blocked'; x: number; y: number }
-  | { t: 'waveStart'; wave: number; overtime: boolean }
+  | { t: 'waveStart'; wave: number }
   | { t: 'enrage'; level: number }
   /** An enemy just reached its stagger threshold (it will skip its intent). */
   | { t: 'stagger'; x: number; y: number }
@@ -560,7 +562,7 @@ export type FxEvent =
   /** Third goblin hit: the golden tooth (+1 token). */
   | { t: 'tooth'; x: number; y: number }
   /** The goblin scurried from its old spot to (x, y). */
-  | { t: 'scurry'; id: number; x: number; y: number }
+  | { t: 'scurry'; id: number; x: number; y: number; x0: number; y0: number }
   /** Loot phase over (after the third shot's balls stop). */
   | { t: 'lootEnd'; cash: number; hits: number }
   /** Boss token(s) earned (boss kill or tooth). */
@@ -614,7 +616,6 @@ export interface RunStats {
   crates: number;
   chests: number;
   shrineChance: number;
-  strayEmeraldChance: number; // per kill
   chestCash: number;
   crateCash: number;
   shrineHeal: number; // via shared curve
@@ -640,26 +641,30 @@ export interface RunStats {
 // ---------- Save ----------
 
 export interface SaveData {
-  version: 1;
+  version: 4;
   cash: number;
-  emeralds: number;
-  /** Upgrade node id -> level. Covers cash tree, emerald tree and stage sub-trees. */
+  /** Unspent boss tokens, per boss. */
+  tokens: Record<TokenId, number>;
+  /** Upgrade node id -> level. Island nodes (portals / capstones / keystones are level 1); gear lives in `cards`. */
   levels: Record<string, number>;
+  /** Gallery cards, keyed by gear id ('break', 'heavy', 'lightning', ...). Presence = unlocked. */
+  cards: Record<string, CardState>;
   /** Highest global stage index reached (see core/worlds.ts globalIndex). */
   unlocked: number;
   current: StageId;
   /** Keyed by stage id. 0 none, 1-3 waves cleared, 4 = boss killed. */
   bestWave: Record<StageId, number>;
   bossKills: Record<StageId, number>;
-  /** Equipped ball type (must be unlocked in emerald tree). */
-  ballType: BallType;
-  /** Equipped gear (owned on the tree, equipped pre-run). Slot counts: see meta relicSlots / trickSlotOpen / cueSlotOpen. */
-  loadout: { cue: CueId; relics: RelicId[]; trick: TrickId | null };
+  /** Best goblin cash total per stage. */
+  bestLoot: Record<StageId, number>;
+  /** Equipped gear (owned in the gallery, equipped pre-run). Slot counts: see meta relicSlots / trickSlotOpen / cueSlotOpen. */
+  loadout: { ball: BallType; cue: CueId; relics: RelicId[]; trick: TrickId | null };
   /** flash: false = reduced flashing (alpha fades, solid bolts, slow shimmer). Default from prefers-reduced-motion. */
   settings: { sound: boolean; shake: boolean; flash: boolean; fastEnemies?: boolean };
-  /** One-shot onboarding / disclosure flags, e.g. 'shotTaught', 'tab:combo', 'tab:emerald', 'tab:stage'. */
+  /** One-shot onboarding / disclosure flags, e.g. 'shotTaught', 'tab:combo', 'tab:stage'. */
   hints: Record<string, boolean>;
-  stats: { runs: number; kills: number; shots: number };
+  /** teeth = golden teeth taken. */
+  stats: { runs: number; kills: number; shots: number; teeth: number };
 }
 
 // ---------- Upgrade tree data (meta) ----------
@@ -680,7 +685,7 @@ export interface CardState {
   cap: string | null;
 }
 
-export type Currency = 'cash' | 'emerald' | TokenId;
+export type Currency = 'cash' | TokenId;
 export type NodeKind = 'stat' | 'unlock' | 'keystone' | 'capstone' | 'counter';
 export type Trunk = 'power' | 'vitality' | 'tactics' | 'combo';
 
@@ -753,9 +758,8 @@ export interface MetaApi {
   /** Mutates save; returns true on success. */
   buy(save: SaveData, node: UpgradeNode): boolean;
   /**
-   * Banks a finished run: adds cash, emeralds (sim already applied repeat decay? no: meta computes boss emeralds
-   * using bossKills + EMERALD_REPEAT_DECAY; sim's result.emeralds counts only stray drops), updates bestWave, bossKills,
-   * unlocks next stage on boss kill, stats. Returns emeralds awarded for the boss and whether a stage unlocked.
+   * Banks a finished run: cash, boss tokens (result.tokens into save.tokens[result.tokenId]), bestWave, bossKills, bestLoot,
+   * stats (runs, kills, shots, teeth), unlocks the next stage on a boss kill. Returns the tokens banked and the stage unlocked.
    */
-  bankRun(save: SaveData, result: RunResult): { bossEmeralds: number; unlocked: StageId | null };
+  bankRun(save: SaveData, result: RunResult): { tokens: number; tokenId: TokenId; unlocked: StageId | null };
 }

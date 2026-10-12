@@ -4,18 +4,26 @@ import type { FxEvent, TargetKind, Vec } from '../core/types';
 import { TABLE } from '../core/types';
 import { PALETTE } from './palette';
 import { drawText, textWidth } from './text';
+import { drawSprite } from './sprite-cache';
 
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; max: number; color: string; size: number; g: number }
-interface Floater { x: number; y: number; text: string; color: string; life: number; max: number }
+interface Floater { x: number; y: number; text: string; color: string; life: number; max: number; icon?: string }
 interface Banner { text: string; color: string; life: number; max: number; scale: number; keep?: boolean }
 interface Bolt { pts: Vec[]; life: number }
 interface Tracer { x0: number; y0: number; x1: number; y1: number; life: number }
-interface Afterimage { x: number; y: number; life: number; max: number }
+interface Afterimage { x: number; y: number; life: number; max: number; sprite?: string }
+/** A sprite that arcs from a burst to a HUD counter (negative t = launch delay). */
+interface Flyer { x0: number; y0: number; x1: number; y1: number; t: number; dur: number; sprite: string; bend: number }
+/** Goblin scurry slide, old -> new spot. */
+interface Slide { id: number; x0: number; y0: number; x1: number; y1: number; t: number }
 interface Ring { x: number; y: number; r: number; life: number; max: number; color?: string; color2?: string; inward?: boolean }
 
 const P = PALETTE;
-/** First Overtime wave number (stage waves + boss wave + 1). */
 const BANNER_CAP = 3;
+const SCURRY_T = 0.35;
+/** HUD anchors the loot coins / token icons fly to (run-screen row 2). */
+export const HUD_CASH = { x: 12, y: 21 };
+export const HUD_TOKEN = { x: 65, y: 21 };
 const KIND_COLORS: Record<TargetKind, string[]> = {
   frost: [P.c, P['5'], P.B],
   cadre: [P.B, P.c, P.b],
@@ -62,8 +70,12 @@ export class Fx {
   ballPos: Vec | null = null;
   /** Boss display name for the arrival banner (set by the run screen). */
   bossName = '';
-  /** Regular waves before the boss (stage.waves.length); Overtime starts two waves later. */
-  waves = 3;
+  /** Token the stage drops (token_<id> sprite), set by the run screen. */
+  tokenId = 'stripe';
+  /** Goblin position just before the current sim step (set by the run screen) so a scurry knows where it left. */
+  goblinPre: Vec | null = null;
+  flyers: Flyer[] = [];
+  private slides: Slide[] = [];
   private clock = 0;
   /** Where the ball was just before a trick fired (set by the run screen) for the Recall trail. */
   trickFrom: Vec | null = null;
@@ -76,6 +88,9 @@ export class Fx {
     this.rings.length = 0;
     this.tracers.length = 0;
     this.afterimages.length = 0;
+    this.flyers.length = 0;
+    this.slides.length = 0;
+    this.goblinPre = null;
     this.beltFlash = 0;
     this.heroFlash = 0;
     this.vignette = 0;
@@ -113,10 +128,26 @@ export class Fx {
     this.burst(x, y, [P.Y, P['5']], 6, 35, 0.4, 0, 2);
   }
 
-  private floater(x: number, y: number, text: string, color: string): void {
-    const w = textWidth(text);
+  private floater(x: number, y: number, text: string, color: string, icon?: string): void {
+    const w = textWidth(text) + (icon ? 10 : 0);
     const cx = Math.max(TABLE.x + w / 2, Math.min(TABLE.x + TABLE.w - w / 2, x));
-    this.floaters.push({ x: cx, y: y - 6, text, color, life: 0.9, max: 0.9 });
+    this.floaters.push({ x: cx, y: y - 6, text, color, life: 0.9, max: 0.9, icon });
+  }
+
+  /** `n` sprites arc from (x,y) to a HUD anchor, staggered. */
+  private fly(x: number, y: number, to: Vec, sprite: string, n: number): void {
+    for (let i = 0; i < n; i++) {
+      this.flyers.push({ x0: x + rnd(-4, 4), y0: y + rnd(-4, 4), x1: to.x, y1: to.y, t: -i * 0.05, dur: rnd(0.5, 0.7), sprite, bend: rnd(-40, 40) });
+    }
+  }
+
+  /** Eased position of the goblin while it scurries (null = not sliding). */
+  goblinAt(id: number): Vec | null {
+    const sl = this.slides.find((x) => x.id === id);
+    if (!sl) return null;
+    const k = Math.min(1, Math.max(0, sl.t / SCURRY_T));
+    const e = 1 - (1 - k) * (1 - k);
+    return { x: sl.x0 + (sl.x1 - sl.x0) * e, y: sl.y0 + (sl.y1 - sl.y0) * e };
   }
 
   /** Banners stack up to BANNER_CAP; the oldest non-`keep` one makes room (WAVE CLEAR is never dropped). */
@@ -181,11 +212,7 @@ export class Fx {
           this.burst(e.x, e.y, [P.Y, P['5'], P.E, P.c], 24, 90, 0.7, 20, 2);
           break;
         case 'waveStart':
-          this.pendingWave = e.overtime ? 0 : e.wave;
-          if (e.overtime) {
-            if (e.wave === this.waves + 2) this.banner('OVERTIME!', P.o, 3, 1.5);
-            else this.banner(`OVERTIME +${e.wave - (this.waves + 2) + 1}`, P.o, 2, 1.0);
-          }
+          this.pendingWave = e.wave;
           break;
         case 'heroHit': {
           this.heroFlash = this.flashEnabled ? 0.3 : 0.15;
@@ -282,7 +309,7 @@ export class Fx {
           break;
         case 'combo': {
           const text = e.mult === 1 ? e.name.toUpperCase() : `${e.name.toUpperCase()} x${Math.round(e.mult * 100) / 100}`;
-          // Banners are for WAVE / SWEEP / BOSS / OVERTIME / RAGE / YOU FELL; other combos float at the hero.
+          // Banners are for WAVE / SWEEP / BOSS / RAGE / YOU FELL; other combos float at the hero.
           if (e.name === 'SWEEP') this.banner(text, P.Y, 2, 1.1);
           else this.floater(e.x, e.y - 26 - 8 * combos++, text, P.Y);
           break;
@@ -305,8 +332,43 @@ export class Fx {
           this.burst(e.x, e.y, [P.Y, P['5'], P.o, P.R, P.E], 40, 110, 0.9, 100, 2);
           this.banner('BOSS DOWN!', P.Y, 3, 1.8);
           break;
-        case 'emerald':
-          this.floater(e.x, e.y, `+${fmt(e.amount)}`, P.E);
+        case 'lootStart':
+          this.banner('LOOT GOBLIN - 3 PULLS', P.Y, 2, 1.6);
+          break;
+        case 'goblinHit': {
+          const n = e.tier === 'jackpot' ? 20 : e.tier === 'big' ? 12 : 8;
+          this.burst(e.x, e.y, [P.Y, P.o, P['5'], P.y], n, e.tier === 'jackpot' ? 120 : 85, 0.6, 160, 2);
+          this.fly(e.x, e.y, HUD_CASH, 'coin', 6);
+          this.floater(e.x, e.y - 8, `+${fmt(e.cash)}`, P.Y);
+          if (e.tier === 'jackpot') {
+            this.banner('JACKPOT!', P.Y, 3, 1.2);
+            this.rings.push({ x: e.x, y: e.y, r: 36, life: 0.45, max: 0.45 });
+            this.addShake(1.4);
+            this.stop(4);
+          } else if (e.tier === 'big') this.banner('BIG', P.o, 2, 0.8);
+          break;
+        }
+        case 'tooth':
+          this.burst(e.x, e.y, [P.Y, P['5'], P.y], 18, 70, 0.8, -25, 2);
+          this.rings.push({ x: e.x, y: e.y, r: 22, life: 0.4, max: 0.4, color: P.Y, color2: P['5'] });
+          this.floater(e.x, e.y - 18, 'GOLDEN TOOTH', P.Y);
+          this.fly(e.x, e.y, HUD_TOKEN, `token_${this.tokenId}`, 1);
+          break;
+        case 'scurry': {
+          const from = this.goblinPre ?? { x: e.x, y: e.y };
+          this.slides.push({ id: e.id, x0: from.x, y0: from.y, x1: e.x, y1: e.y, t: 0 });
+          for (let k = 0; k < 3; k++) {
+            const f = (k + 1) / 4;
+            this.afterimages.push({ x: from.x + (e.x - from.x) * f, y: from.y + (e.y - from.y) * f, life: 0.3 - k * 0.04, max: 0.3, sprite: 'goblin' });
+          }
+          this.burst(from.x, from.y + 8, [P['4'], P['3'], P['5']], 6, 40, 0.35, 20, 2);
+          break;
+        }
+        case 'lootEnd':
+          this.banner(`LOOT ${fmt(e.cash)}`, P.Y, 3, 1.0);
+          break;
+        case 'token':
+          this.floater(e.x, e.y - 4, `+${fmt(e.amount)}`, P.Y, `token_${this.tokenId}`);
           break;
         case 'chest':
           this.floater(e.x, e.y, `+${fmt(e.cash)}`, P.Y);
@@ -394,6 +456,10 @@ export class Fx {
     this.tracers = this.tracers.filter((t) => t.life > 0);
     for (const a of this.afterimages) a.life -= dt;
     this.afterimages = this.afterimages.filter((a) => a.life > 0);
+    for (const f of this.flyers) f.t += dt;
+    this.flyers = this.flyers.filter((f) => f.t < f.dur);
+    for (const sl of this.slides) sl.t += dt;
+    this.slides = this.slides.filter((sl) => sl.t < SCURRY_T);
     this.beltFlash = Math.max(0, this.beltFlash - dt);
     this.heroFlash = Math.max(0, this.heroFlash - dt);
     this.vignette = Math.max(0, this.vignette - dt);
@@ -424,6 +490,10 @@ export class Fx {
       ctx.globalAlpha = 1;
     }
     for (const a of this.afterimages) {
+      if (a.sprite) {
+        drawSprite(ctx, a.sprite, a.x, a.y, { alpha: Math.max(0, a.life / a.max) * 0.45 });
+        continue;
+      }
       ctx.globalAlpha = Math.max(0, a.life / a.max) * 0.7;
       ctx.fillStyle = P['5'];
       for (let i = 0; i < 10; i++) {
@@ -474,9 +544,22 @@ export class Fx {
     }
     for (const f of this.floaters) {
       ctx.globalAlpha = Math.min(1, f.life / (f.max * 0.4));
-      drawText(ctx, f.text, f.x, f.y, { color: f.color, shadow: P['0'], align: 'center' });
+      if (f.icon) {
+        const w = textWidth(f.text) + 10;
+        drawSprite(ctx, f.icon, f.x - w / 2 + 4.5, f.y + 3);
+        drawText(ctx, f.text, f.x - w / 2 + 10, f.y, { color: f.color, shadow: P['0'] });
+      } else drawText(ctx, f.text, f.x, f.y, { color: f.color, shadow: P['0'], align: 'center' });
     }
     ctx.globalAlpha = 1;
+    for (const f of this.flyers) {
+      if (f.t < 0) continue;
+      const k = f.t / f.dur;
+      const e = k * k; // accelerate toward the counter
+      const mx = (f.x0 + f.x1) / 2 + f.bend, my = (f.y0 + f.y1) / 2 - 20;
+      const x = (1 - e) * (1 - e) * f.x0 + 2 * (1 - e) * e * mx + e * e * f.x1;
+      const y = (1 - e) * (1 - e) * f.y0 + 2 * (1 - e) * e * my + e * e * f.y1;
+      drawSprite(ctx, f.sprite, x, y, { alpha: Math.min(1, (1 - k) * 4) });
+    }
     this.banners.forEach((b, i) => {
       const age = b.max - b.life;
       if (b.life < 0.25) {

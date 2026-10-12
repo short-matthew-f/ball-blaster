@@ -1,5 +1,5 @@
 import { CASH_GROWTH, SPIT_LIFE_CAP } from '../core/tuning';
-import type { CueId, Currency, RelicId, TrickId, NodeKind, RunStats, Trunk, UpgradeNode } from '../core/types';
+import type { CueId, Currency, RelicId, TokenId, TrickId, NodeKind, RunStats, Trunk, UpgradeNode } from '../core/types';
 
 export const ROOT_ID = 'hero';
 const CX = 320;
@@ -55,7 +55,9 @@ const mk = (d: Def): UpgradeNode => ({
 });
 
 type Core = Omit<Def, 'id' | 'g' | 'links'>;
-const em = (c: Omit<Core, 'currency' | 'kind'> & { kind?: NodeKind }): Core => ({ ...c, kind: c.kind ?? 'keystone', currency: 'emerald' });
+/** A keystone paid in boss tokens (or cash when `currency` is 'cash'). */
+const tok = (currency: Currency, c: Omit<Core, 'currency' | 'kind'> & { kind?: NodeKind }): Core => ({ ...c, kind: c.kind ?? 'keystone', currency });
+const one = () => 1;
 
 // ---------------------------------------------------------------- core table
 // Grid coordinates are in 40 px steps from the root (x right, y down). [id, grid, links, def]
@@ -68,7 +70,7 @@ const CORE_ROWS: Array<[string, [number, number], string[], Core]> = [
   ['aim', [-1, 0], [ROOT_ID], { name: 'AIM LINE', desc: 'Preview {v} bounces', kind: 'stat', trunk: 'tactics', max: 3, cost: (l) => [25, 80, 200][l] ?? 200, icon: 'icon_aim',
     apply: (s, l) => { s.aimPreview = l; } }],
   // ---- POWER (north)
-  ['lightning', [0, -2], ['damage'], { name: 'LIGHTNING', desc: 'Arcs between targets', kind: 'stat', trunk: 'power', max: 5, cost: geo(150, 1.7), icon: 'icon_lightning',
+  ['lightning', [0, -2], ['damage'], { name: 'LIGHTNING', desc: 'Arcs between targets', kind: 'stat', trunk: 'power', max: 4, cost: geo(150, 1.7), icon: 'icon_lightning',
     apply: (s, l) => {
       s.lightningChance = 0.15 + 0.07 * l;
       s.lightningArcs = 1 + Math.floor(l / 2);
@@ -77,9 +79,9 @@ const CORE_ROWS: Array<[string, [number, number], string[], Core]> = [
     } }],
   ['speed', [-1, -2], ['lightning', 'heavyHits'], { name: 'VELOCITY', desc: 'Fast hits +{v} dmg', kind: 'stat', trunk: 'power', max: 5, cost: geo(60, 1.8), icon: 'icon_speed',
     apply: (s, l) => { s.speedDamage = l; } }],
-  ['split', [1, -2], ['lightning'], { name: 'SPLIT', desc: '{v} balls on 1st hit', kind: 'stat', trunk: 'power', max: 3, cost: geo(200, 2), icon: 'icon_split',
+  ['split', [1, -2], ['lightning'], { name: 'SPLIT', desc: '{v} balls on 1st hit', kind: 'stat', trunk: 'power', max: 4, cost: geo(200, 2), icon: 'icon_split',
     apply: (s, l) => { s.splitCount = l + 1; } }],
-  ['spitter', [1, -3], ['split'], { name: 'SPITTER', desc: 'Spits mini balls', kind: 'stat', trunk: 'power', max: 5, cost: geo(250, 1.8), icon: 'icon_spit',
+  ['spitter', [1, -3], ['split'], { name: 'SPITTER', desc: 'Spits mini balls', kind: 'stat', trunk: 'power', max: 4, cost: geo(250, 1.8), icon: 'icon_spit',
     apply: (s, l) => {
       s.spitInterval = 0.6 - 0.08 * (l - 1);
       s.spitLife = Math.min(SPIT_LIFE_CAP, 1.2 + 0.3 * l);
@@ -116,57 +118,68 @@ const CORE_ROWS: Array<[string, [number, number], string[], Core]> = [
     apply: (s, l) => { s.comboSweep = 25 * l; } }],
   ['comboLockdown', [3, 0], ['comboCascade'], { name: 'LOCKDOWN', desc: 'Stagger all: +{v} HP', kind: 'stat', trunk: 'combo', max: 4, cost: geo(120, 1.8), icon: 'icon_stagger',
     apply: (s, l) => { s.comboLockdown = 2 * l; } }],
-  // ---- EMERALD KEYSTONES (diagonals)
-  ['bumpers', [2, -2], ['comboBank', 'split'], em({ name: 'BUMPERS', desc: '{v} bumpers on table', trunk: 'combo', max: 3, cost: (l) => l + 1, icon: 'icon_bumper',
+  // ---- KEYSTONES (diagonals): bumpers and balls cost tokens, the table fixtures cost cash
+  ['bumpers', [2, -2], ['comboBank', 'split'], tok('cash', { name: 'BUMPERS', desc: '{v} bumpers on table', trunk: 'combo', max: 3, cost: (l) => [60, 120, 240][l] ?? 240, icon: 'icon_bumper',
     apply: (s, l) => { s.bumpers = l; } })],
-  ['crates', [2, 2], ['comboSweep', 'waveRest'], em({ name: 'CRATES', desc: '{v} cash crates', trunk: 'combo', max: 3, cost: (l) => 2 + l, icon: 'icon_crate',
+  ['crates', [2, 2], ['comboSweep', 'waveRest'], tok('cash', { name: 'CRATES', desc: '{v} cash crates', trunk: 'combo', max: 3, cost: (l) => [60, 120, 240][l] ?? 240, icon: 'icon_crate',
     apply: (s, l) => { s.crates = l; s.crateCash = 8 + 4 * l; } })],
-  ['chests', [3, 3], ['crates'], em({ name: 'CHESTS', desc: 'Richer chests', trunk: 'combo', max: 3, cost: (l) => 3 + l, icon: 'icon_chest',
+  ['chests', [3, 3], ['crates'], tok('cash', { name: 'CHESTS', desc: 'Richer chests', trunk: 'combo', max: 3, cost: (l) => [120, 240, 480][l] ?? 480, icon: 'icon_chest',
     apply: (s, l) => { s.chests = Math.min(l, 2); s.chestCash = 25 + 15 * l; } })],
-  ['shrine', [-2, 2], ['armor', 'cashBonus'], em({ name: 'SHRINE', desc: 'Shrine heals {v}', trunk: 'vitality', max: 4, cost: (l) => 3 + 2 * l, icon: 'icon_shrine',
+  ['shrine', [-2, 2], ['armor', 'cashBonus'], tok('cash', { name: 'SHRINE', desc: 'Shrine heals {v}', trunk: 'vitality', max: 4, cost: (l) => [240, 360, 540, 800][l] ?? 800, icon: 'icon_shrine',
     apply: (s, l) => { s.shrineChance = 0.3 + 0.15 * (l - 1); s.shrineHeal = 8 + 2 * l; } })],
-  ['strayEmerald', [-3, 3], ['shrine'], em({ name: 'STRAY GEMS', desc: 'Kills may drop gems', trunk: 'vitality', kind: 'stat', max: 5, cost: (l) => 10 + 5 * l, icon: 'icon_emerald',
-    apply: (s, l) => { s.strayEmeraldChance = 0.01 * l; } })],
-  ['ballHeavy', [-2, -2], ['speed', 'heavyHits'], em({ name: 'HEAVY BALL', desc: 'Unlock heavy ball', trunk: 'tactics', max: 1, cost: () => 3, icon: 'icon_ball', apply: () => {} })],
-  ['ballLight', [-3, -3], ['ballHeavy'], em({ name: 'LIGHT BALL', desc: 'Unlock light ball', trunk: 'tactics', max: 1, cost: () => 3, icon: 'icon_ball', apply: () => {} })],
-  ['ballSticky', [-2, -3], ['ballHeavy'], em({ name: 'STICKY BALL', desc: 'Unlock sticky ball', trunk: 'tactics', max: 1, cost: () => 4, icon: 'icon_ball', apply: () => {} })],
+  ['ballHeavy', [-2, -2], ['speed', 'heavyHits'], tok('stripe', { name: 'HEAVY BALL', desc: 'Unlock heavy ball', trunk: 'tactics', max: 1, cost: one, icon: 'icon_ball', apply: () => {} })],
+  ['ballLight', [-3, -3], ['ballHeavy'], tok('frost', { name: 'LIGHT BALL', desc: 'Unlock light ball', trunk: 'tactics', max: 1, cost: one, icon: 'icon_ball', apply: () => {} })],
+  ['ballSticky', [-2, -3], ['ballHeavy'], tok('cog', { name: 'STICKY BALL', desc: 'Unlock sticky ball', trunk: 'tactics', max: 1, cost: one, icon: 'icon_ball', apply: () => {} })],
 ];
 
 
 // ---------------------------------------------------------------- gear nodes
-// Gear unlocks are one-shot emerald keystones whose node id IS the gear id; `${id}_lv` cash nodes sit behind them.
-// lightning / split / spitter are existing cash nodes that double as the relic unlock (owned = level > 0).
+// Gear unlocks are one-shot token keystones whose node id IS the gear id (the card id); `${id}_lv` cash nodes sit behind them.
+// Ownership and levels live in save.cards, not save.levels (meta/stats.ts nodeLevel maps them).
+// lightning / split / spitter are cash stat nodes that double as the relic unlock: card.level + 1 = node level (max 4).
 export const CUE_IDS: CueId[] = ['break', 'jump', 'draw', 'follow'];
 export const RELIC_IDS: RelicId[] = ['lightning', 'split', 'spitter', 'poison', 'explosive', 'chill', 'shrapnel', 'static', 'ricochet', 'lantern', 'thorns', 'momentum', 'mirror'];
 export const TRICK_IDS: TrickId[] = ['recall', 'timeStop', 'rackEm', 'shockwave'];
+/** Relics that are cash stat nodes (card.level + 1 is the node level). */
+export const STAT_RELICS = ['lightning', 'split', 'spitter'] as const;
+/** Ball unlock node id -> card id. */
+export const BALL_CARD = { ballHeavy: 'heavy', ballLight: 'light', ballSticky: 'sticky' } as const;
+/** Whose boss token opens each gear keystone (DESIGN-v0.6 cards-by-world). */
+export const GEAR_TOKEN: Record<string, TokenId> = {
+  break: 'stripe', ballHeavy: 'stripe', ricochet: 'stripe', momentum: 'stripe', recall: 'stripe', lantern: 'stripe',
+  jump: 'frost', ballLight: 'frost', chill: 'frost', mirror: 'frost', shockwave: 'frost',
+  draw: 'cog', ballSticky: 'cog', static: 'cog', timeStop: 'cog',
+  follow: 'pearl', poison: 'pearl', thorns: 'pearl', shrapnel: 'pearl', rackEm: 'pearl',
+  explosive: 'ember',
+};
 
-/** [id, name, desc, icon, emerald price, grid, extra links]. Chains link each gear to the previous one. */
-type GearRow = [string, string, string, string, number, [number, number], string[]];
+/** [id, name, desc, icon, grid, extra links]. Chains link each gear to the previous one. */
+type GearRow = [string, string, string, string, [number, number], string[]];
 const CUE_ROWS: GearRow[] = [
-  ['break', 'BREAK CUE', '+35% speed, no aim', 'icon_speed', 3, [1, -1], ['damage', 'comboChain']],
-  ['jump', 'JUMP CUE', 'Hop 1st enemy', 'icon_reflex', 5, [2, -3], ['break']],
-  ['draw', 'DRAW CUE', 'Backspin pullback', 'icon_aim', 6, [2, -4], ['jump']],
-  ['follow', 'FOLLOW CUE', 'Topspin carry', 'icon_mass', 8, [2, -5], ['draw']],
+  ['break', 'BREAK CUE', '+35% speed, no aim', 'icon_speed', [1, -1], ['damage', 'comboChain']],
+  ['jump', 'JUMP CUE', 'Hop 1st enemy', 'icon_reflex', [2, -3], ['break']],
+  ['draw', 'DRAW CUE', 'Backspin pullback', 'icon_aim', [2, -4], ['jump']],
+  ['follow', 'FOLLOW CUE', 'Topspin carry', 'icon_mass', [2, -5], ['draw']],
 ];
 const RELIC_ROWS: GearRow[] = [
   // NW chain
-  ['poison', 'POISON', 'Hits add poison', 'icon_heal', 3, [-1, -1], ['aim', 'damage']],
-  ['chill', 'CHILL', 'Hits slow enemies', 'icon_wave', 5, [-4, -3], ['poison']],
-  ['static', 'STATIC', 'Stagger deals dmg', 'icon_stagger', 6, [-4, -4], ['chill']],
-  ['ricochet', 'RICOCHET', 'Rail bounces +dmg', 'icon_aim', 8, [-4, -5], ['static']],
-  ['lantern', 'LANTERN', 'Intents stay lit', 'icon_shrine', 8, [-4, -6], ['ricochet']],
+  ['poison', 'POISON', 'Hits add poison', 'icon_heal', [-1, -1], ['aim', 'damage']],
+  ['chill', 'CHILL', 'Hits slow enemies', 'icon_wave', [-4, -3], ['poison']],
+  ['static', 'STATIC', 'Stagger deals dmg', 'icon_stagger', [-4, -4], ['chill']],
+  ['ricochet', 'RICOCHET', 'Rail bounces +dmg', 'icon_aim', [-4, -5], ['static']],
+  ['lantern', 'LANTERN', 'Intents stay lit', 'icon_shrine', [-4, -6], ['ricochet']],
   // SE chain
-  ['explosive', 'EXPLOSIVE', 'First hit blasts', 'icon_bumper', 3, [1, 1], ['comboChain']],
-  ['shrapnel', 'SHRAPNEL', 'Kills fire shards', 'icon_spit', 5, [3, 2], ['explosive']],
-  ['momentum', 'MOMENTUM', 'Streaks add dmg', 'icon_combo', 6, [4, 3], ['shrapnel']],
-  ['thorns', 'THORNS', 'Chargers take dmg', 'icon_armor', 8, [4, 4], ['momentum']],
-  ['mirror', 'MIRROR', 'Reflect ranged', 'icon_mass', 8, [4, 5], ['thorns']],
+  ['explosive', 'EXPLOSIVE', 'First hit blasts', 'icon_bumper', [1, 1], ['comboChain']],
+  ['shrapnel', 'SHRAPNEL', 'Kills fire shards', 'icon_spit', [3, 2], ['explosive']],
+  ['momentum', 'MOMENTUM', 'Streaks add dmg', 'icon_combo', [4, 3], ['shrapnel']],
+  ['thorns', 'THORNS', 'Chargers take dmg', 'icon_armor', [4, 4], ['momentum']],
+  ['mirror', 'MIRROR', 'Reflect ranged', 'icon_mass', [4, 5], ['thorns']],
 ];
 const TRICK_ROWS: GearRow[] = [
-  ['recall', 'RECALL', 'Ball to safe spot', 'icon_ball', 10, [-1, 1], ['maxHp', 'armor']],
-  ['shockwave', 'SHOCKWAVE', 'Stagger nearby', 'icon_stagger', 10, [-3, 2], ['recall']],
-  ['rackEm', "RACK 'EM", 'Pull enemies in', 'icon_mass', 12, [-4, 3], ['shockwave']],
-  ['timeStop', 'TIME STOP', 'Skip enemy phase', 'icon_overtime', 15, [-4, 4], ['rackEm']],
+  ['recall', 'RECALL', 'Ball to safe spot', 'icon_ball', [-1, 1], ['maxHp', 'armor']],
+  ['shockwave', 'SHOCKWAVE', 'Stagger nearby', 'icon_stagger', [-3, 2], ['recall']],
+  ['rackEm', "RACK 'EM", 'Pull enemies in', 'icon_mass', [-4, 3], ['shockwave']],
+  ['timeStop', 'TIME STOP', 'Skip enemy phase', 'icon_overtime', [-4, 4], ['rackEm']],
 ];
 
 const lvRow = (id: string, name: string, icon: string, max: number, g: [number, number], base: number): [string, [number, number], string[], Core] => [
@@ -187,8 +200,8 @@ const LV_AT: Record<string, [number, number]> = {
 };
 const GEAR_ROWS: Array<[string, [number, number], string[], Core]> = [];
 for (const [rows, max, lvBase] of [[CUE_ROWS, 1, 150], [RELIC_ROWS, 2, 200], [TRICK_ROWS, 2, 300]] as const) {
-  for (const [id, name, desc, icon, price, g, links] of rows) {
-    GEAR_ROWS.push([id, g, links, em({ name, desc, trunk: trunkOf(id), ring: 3, max: 1, cost: () => price, icon, apply: () => {} })]);
+  for (const [id, name, desc, icon, g, links] of rows) {
+    GEAR_ROWS.push([id, g, links, tok(GEAR_TOKEN[id], { name, desc, trunk: trunkOf(id), ring: 3, max: 1, cost: one, icon, apply: () => {} })]);
     GEAR_ROWS.push(lvRow(id, `${name.replace(' CUE', '').slice(0, 9)} II`, icon, max, LV_AT[id] ?? [g[0] + (g[0] < 0 ? -1 : 1), g[1]], lvBase));
   }
 }

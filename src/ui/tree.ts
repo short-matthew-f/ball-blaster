@@ -1,5 +1,5 @@
 // The One Tree: pan/zoom web of upgrade nodes on a virtual 640x640 canvas, bottom inspect panel, path highlight.
-import type { BallType, RunStats, UpgradeNode } from '../core/types';
+import type { BallType, RunStats, TokenId, UpgradeNode } from '../core/types';
 import { BASE_STATS } from '../core/tuning';
 import { WORLDS, makeStage } from '../core/worlds';
 import { ROOT_ID, gearOwned, worldCleared, buy, buyState, distanceFromOwned, nextCost, nodeLevel, nodesFor, pathToOwned } from '../meta/index';
@@ -7,7 +7,7 @@ import { PALETTE } from '../render/palette';
 import { getMenuBg } from '../render/renderer';
 import { drawSprite, spriteSize } from '../render/sprite-cache';
 import { drawText, textWidth, wrapText } from '../render/text';
-import { Buttons, drawPanel } from './widgets';
+import { Buttons, currentToken, drawPanel, drawTokenCount } from './widgets';
 import type { Button } from './widgets';
 import type { App, Screen } from './app';
 
@@ -198,8 +198,8 @@ export class TreeScreen implements Screen {
     // header
     drawSprite(ctx, 'coin', 9, 8);
     drawText(ctx, String(Math.floor(save.cash)), 16, 5, { color: P.Y, shadow: P['0'] });
-    drawSprite(ctx, 'emerald', 82, 8);
-    drawText(ctx, String(save.emeralds), 89, 5, { color: P.E, shadow: P['0'] });
+    const wt = currentToken(save);
+    drawTokenCount(ctx, wt, 82, 8, save.tokens?.[wt] ?? 0);
     btns.push({ id: 'settings', x: 144, y: 1, w: 32, h: 16, label: 'SET', style: 'gray' });
     let stageName = '';
     try { stageName = makeStage(save.current).name.toUpperCase(); } catch { /* ignore */ }
@@ -258,7 +258,7 @@ export class TreeScreen implements Screen {
       const node = sv.n;
       const lvl = sv.lvl;
       const st = sv.st;
-      const gem = node.currency === 'emerald';
+      const gem = node.currency !== 'cash';
       const nameScale = textWidth(node.name, 2) <= 112 ? 2 : 1;
       drawText(ctx, node.name, 7, PANEL_Y + 5, { color: gem ? P.E : P.Y, shadow: P['0'], scale: nameScale });
       const lv = node.maxLevel <= 1 ? (lvl >= 1 ? 'OWNED' : 'ONE-SHOT') : lvl >= node.maxLevel ? `LV${lvl} MAX` : `LV${lvl}>${lvl + 1}`;
@@ -272,15 +272,16 @@ export class TreeScreen implements Screen {
       }
       const cost = nextCost(save, node);
       if (cost !== null) {
-        drawSprite(ctx, gem ? 'emerald' : 'coin', 11, PANEL_Y + 37);
-        drawText(ctx, String(cost), 18, PANEL_Y + 34, { color: gem ? P.E : P.Y, shadow: P['0'] });
+        const have = gem ? save.tokens?.[node.currency as TokenId] ?? 0 : save.cash;
+        drawSprite(ctx, gem ? `token_${node.currency}` : 'coin', 11, PANEL_Y + 37);
+        drawText(ctx, String(cost), 18, PANEL_Y + 34, { color: have >= cost ? (gem ? P['5'] : P.Y) : P.R, shadow: P['0'] });
       }
       if (hint) drawText(ctx, hint, 7, PANEL_Y + 38 + 0, { color: P.p });
       const bt = ballOf(node);
       if (node.id === ROOT_ID) {
         drawText(ctx, 'STANDARD BALL', 7, PANEL_Y + 38, { color: P['3'] });
       } else if (bt && lvl >= 1) {
-        drawText(ctx, save.ballType === bt ? 'EQUIPPED' : 'IN LOADOUT', 7, PANEL_Y + 38, { color: P['4'] });
+        drawText(ctx, save.loadout.ball === bt ? 'EQUIPPED' : 'IN LOADOUT', 7, PANEL_Y + 38, { color: P['4'] });
       } else if (!(node.id === ROOT_ID)) {
         const label = st === 'maxed' ? 'MAXED' : st === 'locked' ? 'LOCKED' : st === 'poor' ? 'NEED MORE' : 'BUY';
         btns.push({ id: 'buy', x: 100, y: PANEL_Y + 28, w: 74, h: 16, label, scale: st === 'ok' || st === 'maxed' ? 2 : 1, style: 'gold', disabled: st !== 'ok' });
@@ -337,9 +338,9 @@ export class TreeScreen implements Screen {
     fillLayer(ctx, n.kind, cx, cy, s, 1, border);
     if (n.kind === 'capstone' && big) fillLayer(ctx, n.kind, cx, cy, s, 2, P.Y === border ? P.y : P['0']);
     const fillL = n.kind === 'capstone' && big ? 3 : 2;
-    fillLayer(ctx, n.kind, cx, cy, s, fillL, locked ? P['0'] : n.currency === 'emerald' ? P.g : P['1']);
+    fillLayer(ctx, n.kind, cx, cy, s, fillL, locked ? P['0'] : n.currency !== 'cash' ? P.g : P['1']);
     const bt = ballOf(n);
-    if (bt && this.app.save.ballType === bt) {
+    if (bt && this.app.save.loadout.ball === bt) {
       ctx.fillStyle = P['0'];
       ctx.fillRect(cx + s / 2 - 5, cy - s / 2 - 1, 7, 8);
       drawText(ctx, 'E', cx + s / 2 - 4, cy - s / 2, { color: P.Y });
@@ -355,7 +356,7 @@ export class TreeScreen implements Screen {
     const by = cy + Math.floor(s / 2) + 3;
     let ty = by;
     if (n.maxLevel > 1) {
-      const gem = n.currency === 'emerald' ? P.E : P.Y;
+      const gem = n.currency !== 'cash' ? P.E : P.Y;
       if (n.maxLevel <= 6) {
         const w = n.maxLevel * 4 - 1;
         const px = cx - Math.floor(w / 2);
@@ -388,8 +389,9 @@ export class TreeScreen implements Screen {
       const txt = String(cost);
       const w = textWidth(txt) + 7;
       const x0 = Math.round(cx - w / 2);
-      drawSprite(ctx, n.currency === 'emerald' ? 'emerald' : 'coin', x0 + 2, ty + 3);
-      drawText(ctx, txt, x0 + 7, ty, { color: st === 'ok' ? P.Y : P['3'], shadow: P['0'] });
+      drawSprite(ctx, n.currency !== 'cash' ? `token_${n.currency}` : 'coin', x0 + 2, ty + 3);
+      const short = st !== 'ok' && st !== 'locked' && (n.currency !== 'cash' ? (this.app.save.tokens?.[n.currency as TokenId] ?? 0) : this.app.save.cash) < cost;
+      drawText(ctx, txt, x0 + 7, ty, { color: st === 'ok' ? P.Y : short ? P.R : P['3'], shadow: P['0'] });
     }
   }
 

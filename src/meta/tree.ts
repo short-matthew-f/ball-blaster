@@ -1,4 +1,5 @@
 import type { SaveData, UpgradeNode } from '../core/types';
+import { nodeLevel } from './level';
 import { CORE_NODES, FIRST_LOOP_NODES, GRAFT_NODES, ROOT_ID, loopNodes } from './upgrades';
 
 const LOOP_LEN = 24;
@@ -56,7 +57,7 @@ export function nodeById(save: SaveData, id: string): UpgradeNode | undefined {
   return graphOf(nodesFor(save)).byId.get(id);
 }
 
-const owned = (save: SaveData, id: string) => id === ROOT_ID || (typeof save.levels[id] === 'number' && save.levels[id] > 0);
+const owned = (save: SaveData, id: string) => id === ROOT_ID || nodeLevel(save, id) > 0;
 
 /** Multi-source BFS from owned nodes. Returns dist and parent maps. */
 function bfs(save: SaveData) {

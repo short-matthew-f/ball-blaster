@@ -46,7 +46,7 @@ export class RunScreen implements Screen {
     this.state = state;
     this.fx.clear();
     this.fx.bossName = stageById(state.stage).boss.name;
-    this.fx.waves = stageById(state.stage).waves.length;
+    this.fx.tokenId = state.stats.tokenId ?? 'stripe';
     this.bannerText = modifierLine(state.stage);
     this.bannerWait = true;
     this.bannerT = 0;
@@ -138,6 +138,8 @@ export class RunScreen implements Screen {
     let guard = 0;
     while (this.acc >= SIM_DT && guard++ < 1000) {
       this.acc -= SIM_DT;
+      const gob = s.targets.find((t) => t.kind === 'goblin' && !t.dead);
+      this.fx.goblinPre = gob ? { x: gob.x, y: gob.y } : null;
       const ev = sim.step(s, SIM_DT);
       if (ev.length) {
         this.fx.consume(ev);
@@ -166,7 +168,7 @@ export class RunScreen implements Screen {
     ctx.save();
     ctx.translate(sh.x, sh.y);
     const flash = this.app.save.settings.flash;
-    drawWorld(ctx, s, now, flash, { heroFlash: this.fx.heroFlash, beltFlash: this.fx.beltFlash });
+    drawWorld(ctx, s, now, flash, { heroFlash: this.fx.heroFlash, beltFlash: this.fx.beltFlash, goblinAt: (id) => this.fx.goblinAt(id) });
     drawBeltGhost(ctx, s, now);
     this.drawHint(ctx, s, now);
     this.drawAim(ctx, s);
@@ -195,7 +197,7 @@ export class RunScreen implements Screen {
   }
 
   private hasTrick(s: RunState): boolean {
-    return !!s.stats.trick;
+    return !!s.stats.trick && !s.bossKilled; // no tricks in the loot phase
   }
 
   private trickReady(s: RunState): boolean {
@@ -424,7 +426,8 @@ export class RunScreen implements Screen {
 
 function fallbackResult(s: RunState): RunResult {
   return {
-    stage: s.stage, cash: s.cash, emeralds: s.emeralds, kills: s.kills,
-    wave: Math.min(s.wave, 4), wavesCleared: Math.max(0, Math.min(s.wave, 4) - 1), overtimeWaves: Math.max(0, s.wave - 4),  bossKilled: s.bossKilled, shots: s.shots, bestCombo: s.bestCombo, seconds: s.t,
+    stage: s.stage, cash: s.cash, kills: s.kills,
+    wave: Math.min(s.wave, 4), wavesCleared: Math.max(0, Math.min(s.wave, 4) - 1), bossKilled: s.bossKilled, shots: s.shots, bestCombo: s.bestCombo, seconds: s.t,
+    tokens: s.tokens, tokenId: s.stats.tokenId, loot: s.loot, goblinHits: s.goblinHits, tooth: s.tooth,
   };
 }

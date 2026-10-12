@@ -1,6 +1,6 @@
 // Worlds (authored) x stages (generated) x loops (DESIGN-v0.3.md "Worlds x stages x loops", "Scaling").
 // A world owns physics, roster, base waves, hazard and boss archetype; makeStage(id) derives every stage from it:
-// global index n -> scaling, slot -> modifiers and boss traits, loop -> two modifiers + all traits + Overtime 1x.
+// global index n -> scaling, slot -> modifiers and boss traits, loop -> two modifiers + all traits.
 //
 // Import cycle note: tuning.ts imports makeStage from here and this file imports constants from tuning.ts. Nothing at
 // the top level of this file may read a tuning binding (only functions do, at call time).
@@ -10,11 +10,9 @@ import {
   BASE_CASH_SCALE,
   CASH_GROWTH,
   EARLY_BOSS_WAVES,
-  EMERALD_BASE,
   HARDY_MOD_COUNT,
   HARDY_MOD_HP,
   HP_GROWTH,
-  OVERTIME_CASH_MULT,
   SLOT_ATK_MULT,
   SLOT_HP_MULT,
   RANGED_EXTRA,
@@ -61,7 +59,7 @@ export interface WorldDef {
   bossWave: WaveDef;
 }
 
-// Formation weights by wave (step 3): racks break for 3-4 hits; Scatter appears only in Overtime.
+// Formation weights by wave (step 3): racks break for 3-4 hits. Scatter stays typed but is never picked (v0.6: no Overtime).
 const W1_FORM: Partial<Record<Formation, number>> = { rack: 1 };
 const W2_FORM: Partial<Record<Formation, number>> = { rack: 60, wall: 40 };
 const W3_FORM: Partial<Record<Formation, number>> = { rack: 30, wall: 30, pincer: 25, ring: 15 };
@@ -373,10 +371,8 @@ export function makeStage(id: StageId): StageDef {
     atkScale: world.atkMult * SLOT_ATK_MULT[slot - 1] * Math.pow(ATK_GROWTH, n),
     advanceMult: modifiers.includes('swift') ? SWIFT_MOD : 1,
     shootBonus: modifiers.includes('ranged') && (slot >= RANGED_SHOOT_SLOT || loop > 0) ? RANGED_SHOOT : 0,
-    overtimeCash: loop > 0 ? 1 : OVERTIME_CASH_MULT,
     cashScale: BASE_CASH_SCALE * cashGrowth,
     waveCashScale: cashGrowth,
-    emeraldReward: EMERALD_BASE + n,
     boss: {
       name: world.boss.name,
       hp: Math.round(world.boss.hp * SLOT_HP_MULT[slot - 1] * hpGrowth),

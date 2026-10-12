@@ -2,7 +2,7 @@
 import type { RunState, Target } from '../core/types';
 import { BOSS_ATTACK, BOSS_COG_CAP, BOSS_SLAM, REPAIR_RANGE, TARGET_DEFS, stageById } from '../core/tuning';
 
-/** Stage attack scaling (x ATK_GROWTH^n), applied before the Overtime bonus so the shown number is the hit. */
+/** Stage attack scaling (x ATK_GROWTH^n): the shown number is the hit. */
 function atk(s: RunState, n: number): number {
   return n > 0 ? Math.max(1, Math.round(n * stageById(s.stage).atkScale)) : n;
 }
@@ -34,30 +34,33 @@ export function repairTarget(s: RunState, e: Target): Target | undefined {
  * The Mainspring. Phase 1: Attack 4 (50) / Advance (25) / Wind (25). Phase 2: Slam 8 after a Charge; else Charge (40) /
  * Summon cog (30; 0 at BOSS_COG_CAP live boss cogs) / Attack 4 (30).
  */
-function mainspringIntent(s: RunState, e: Target, bonus: number): void {
+function mainspringIntent(s: RunState, e: Target): void {
   if (e.phase === 0) {
     const p = s.rng.pick([
       { t: 'attack' as const, weight: 50 },
       { t: 'advance' as const, weight: 25 },
       { t: 'wind' as const, weight: 25 },
     ]);
-    e.intent = p.t === 'attack' ? { t: 'attack', n: atk(s, BOSS_ATTACK) + bonus } : { t: p.t };
+    e.intent = p.t === 'attack' ? { t: 'attack', n: atk(s, BOSS_ATTACK) } : { t: p.t };
   } else if (e.charged) {
-    e.intent = { t: 'attack', n: atk(s, BOSS_SLAM) + bonus };
+    e.intent = { t: 'attack', n: atk(s, BOSS_SLAM) };
   } else {
     const p = s.rng.pick([
       { t: 'charge' as const, weight: 40 },
       { t: 'summon' as const, weight: bossCogs(s) >= BOSS_COG_CAP ? 0 : 30 },
       { t: 'attack' as const, weight: 30 },
     ]);
-    e.intent = p.t === 'attack' ? { t: 'attack', n: atk(s, BOSS_ATTACK) + bonus } : { t: p.t };
+    e.intent = p.t === 'attack' ? { t: 'attack', n: atk(s, BOSS_ATTACK) } : { t: p.t };
   }
 }
 
 export function rollIntent(s: RunState, e: Target): void {
   const def = TARGET_DEFS[e.kind];
-  const bonus = e.atkBonus ?? 0;
   switch (e.kind) {
+    case 'goblin':
+      // The Loot Goblin only ever flees (scurry is driven by the loot phase). No rng draw.
+      e.intent = { t: 'flee' };
+      return;
     case 'bomber': {
       // Fixed cycle: Advance, Advance, Detonate.
       const c = e.cycle ?? 0;
@@ -67,11 +70,11 @@ export function rollIntent(s: RunState, e: Target): void {
     }
     case 'brute':
       // Charge -> Attack 5, alternating; an out-of-reach Attack advances and keeps the charge.
-      e.intent = e.charged ? { t: 'attack', n: atk(s, def.chargedAttack ?? 5) + bonus } : { t: 'charge' };
+      e.intent = e.charged ? { t: 'attack', n: atk(s, def.chargedAttack ?? 5) } : { t: 'charge' };
       return;
     case 'boss':
       if (stageById(s.stage).boss.kit === 'mainspring') {
-        mainspringIntent(s, e, bonus);
+        mainspringIntent(s, e);
         return;
       }
       if (e.phase === 0) {
@@ -80,11 +83,11 @@ export function rollIntent(s: RunState, e: Target): void {
           { t: 'advance' as const, weight: 25 },
           { t: 'summon' as const, weight: 25 },
         ]);
-        e.intent = p.t === 'attack' ? { t: 'attack', n: atk(s, BOSS_ATTACK) + bonus } : { t: p.t };
+        e.intent = p.t === 'attack' ? { t: 'attack', n: atk(s, BOSS_ATTACK) } : { t: p.t };
       } else if (e.charged) {
-        e.intent = { t: 'attack', n: atk(s, BOSS_SLAM) + bonus };
+        e.intent = { t: 'attack', n: atk(s, BOSS_SLAM) };
       } else {
-        e.intent = s.rng.chance(0.5) ? { t: 'charge' } : { t: 'attack', n: atk(s, BOSS_ATTACK) + bonus };
+        e.intent = s.rng.chance(0.5) ? { t: 'charge' } : { t: 'attack', n: atk(s, BOSS_ATTACK) };
       }
       return;
   }
@@ -95,7 +98,7 @@ export function rollIntent(s: RunState, e: Target): void {
   if (n !== undefined) {
     if (p.t === 'attack' && e.charged) n = def.chargedAttack ?? n * 2;
     if (p.t === 'shoot') n += stageById(s.stage).shootBonus;
-    n = atk(s, n) + bonus;
+    n = atk(s, n);
   }
   e.intent = n === undefined ? { t: p.t } : { t: p.t, n };
 }

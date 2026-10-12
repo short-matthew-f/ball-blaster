@@ -13,7 +13,6 @@ import {
   RANGED_PHASE_CAP,
   DARK_REVEAL_R,
   ENRAGE_BASE,
-  ENRAGE_OVERTIME_TURN,
   ENRAGE_PER_WAVE,
   ENRAGE_STRIKE_LEVEL,
   HIVE_GRUB_CAP,
@@ -21,7 +20,6 @@ import {
   SWIFT_ADVANCE_DIST,
   TARGET_DEFS,
   WAVE_CASH,
-  WAVE_CASH_CAP_WAVE,
   WAVES_PER_STAGE,
   CHILL_ADVANCE_MULT,
   CHILL_CHARGE_MULT,
@@ -40,11 +38,10 @@ import { runSweep, scheduleSweep } from './belts';
 import { relaxAll } from './physics';
 import { liveRegulars, spawnWave, summonNear } from './spawn';
 
-/** Turn of the current wave at which enrage starts (stage waves: ENRAGE_BASE + ENRAGE_PER_WAVE x wave; Overtime: flat). */
+/** Turn of the current wave at which enrage starts: ENRAGE_BASE + ENRAGE_PER_WAVE x wave. */
 export function rageStart(s: RunState): number {
   // Early Boss stages keep the normal boss-wave clock (the boss wave counts as wave 4).
   const nw = stageWaves(s);
-  if (s.wave > nw + 1) return ENRAGE_OVERTIME_TURN;
   const w = s.wave === nw + 1 ? WAVES_PER_STAGE + 1 : s.wave;
   return ENRAGE_BASE + ENRAGE_PER_WAVE * w;
 }
@@ -74,6 +71,13 @@ export function startEnemyPhase(s: RunState, fx: FxEvent[]): void {
   }
   // Poison ticks before the wave check, so a tick that kills the last regular brings the next wave.
   poisonTick(s, fx);
+  if (s.bossKilled) {
+    // A tick killed the boss: the waves are over. Nobody acts; the phase ends once everything rests (-> loot).
+    s.enemyQueue = [];
+    s.timeStopped = false;
+    s.beltAt = undefined;
+    return;
+  }
 
   const fresh = advanceWave(s, fx);
   const rage = rageLevel(s);
@@ -113,22 +117,28 @@ export function effectiveReach(t: Target): number {
   return (t.chill ?? 0) > 0 ? r * CHILL_CHARGE_MULT : r;
 }
 
-/** Wave clear: no live regular (non-summon) enemy left, or the boss died (Overtime begins). Returns new ids. */
+/**
+ * Wave-clear rewards for clearing wave `w` (the boss wave pays as wave 4 when the loot phase starts): WAVE_CASH x w
+ * scaled, the boardClear fx, the wave heal and Sweep.
+ */
+export function payClear(s: RunState, fx: FxEvent[], w: number): void {
+  s.cash += scaleCash(s, WAVE_CASH * w);
+  const h = hero(s);
+  fx.push({ t: 'boardClear', x: h.x, y: h.y });
+  heal(s, s.stats.waveHeal, h.x, h.y, fx);
+  // Sweep: every regular of the wave died within one shot (the one just played).
+  if (s.stats.comboSweep > 0 && s.waveKillShot === s.shots && s.shots > 0) {
+    s.cash += scaleCash(s, s.stats.comboSweep * s.stats.cashMult);
+    fx.push({ t: 'combo', name: 'SWEEP', mult: 1, x: h.x, y: h.y });
+  }
+}
+
+/** Wave clear: no live regular (non-summon) enemy left. Returns new ids. Never after the boss died (loot follows). */
 function advanceWave(s: RunState, fx: FxEvent[]): Set<number> {
   const fresh = new Set<number>();
+  if (s.bossKilled) return fresh;
   if (!s.wavePending && liveRegulars(s) > 0) return fresh;
-  const cleared = s.wave;
-  if (cleared >= 1) {
-    s.cash += scaleCash(s, WAVE_CASH * Math.min(cleared, WAVE_CASH_CAP_WAVE));
-    const h = hero(s);
-    fx.push({ t: 'boardClear', x: h.x, y: h.y });
-    heal(s, s.stats.waveHeal, h.x, h.y, fx);
-    // Sweep: every regular of the wave died within one shot (the one just played).
-    if (s.stats.comboSweep > 0 && s.waveKillShot === s.shots && s.shots > 0) {
-      s.cash += scaleCash(s, s.stats.comboSweep * s.stats.cashMult);
-      fx.push({ t: 'combo', name: 'SWEEP', mult: 1, x: h.x, y: h.y });
-    }
-  }
+  if (s.wave >= 1) payClear(s, fx, s.wave);
   s.wave++;
   s.wavePending = false;
   for (const e of spawnWave(s, fx)) fresh.add(e.id);
@@ -139,6 +149,8 @@ function advanceWave(s: RunState, fx: FxEvent[]): Set<number> {
 /** One enemy-phase substep. Returns true when the phase has finished (intents rerolled, stagger cleared). */
 export function enemyStep(s: RunState, h: number, fx: FxEvent[], physics: (s: RunState, h: number, fx: FxEvent[]) => void): boolean {
   s.resolveTime += h;
+  // The boss died mid-phase (bump, blast, thorns, mirror): its escorts never act again.
+  if (s.bossKilled) s.enemyQueue = [];
   if (s.beltAt !== undefined && s.t + 1e-9 >= s.beltAt) runSweep(s, fx);
   while (s.enemyQueue.length > 0 && s.t + 1e-9 >= s.enemyNext) {
     const id = s.enemyQueue.shift()!;
@@ -174,6 +186,11 @@ export function enemyStep(s: RunState, h: number, fx: FxEvent[], physics: (s: Ru
   }
   if (s.enemyQueue.length > 0 || s.beltAt !== undefined) return false;
   if (!s.balls.every((b) => b.resting) || !s.targets.every((t) => t.dead || t.resting)) return false;
+  // The boss died: no refill and no arrival hold; the turn ends (endTurn -> death check -> loot phase).
+  if (s.bossKilled) {
+    endEnemyPhase(s, fx);
+    return true;
+  }
   // The last regular died during the enemy phase (bump, detonation): the next wave arrives now (it acts next phase).
   if (s.wavePending || liveRegulars(s) === 0) {
     s.targets = s.targets.filter((t) => !t.dead);

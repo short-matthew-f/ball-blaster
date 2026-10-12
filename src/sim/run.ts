@@ -1,5 +1,7 @@
 // Run state machine: createRun, step, shoot, previewShot, canFastForward.
 // aim -> (shoot) resolve -> (everything stopped) enemy -> (everything stopped) [death check] -> jam rule -> aim.
+// The boss's death ends the waves: resolve/enemy -> loot (goblin arrives, hold) -> aim -> resolve -> loot ... -> over
+// after the third pull (sim/loot.ts).
 import {
   CANCEL_RADIUS,
   MAX_LAUNCH_SPEED,
@@ -37,6 +39,7 @@ import { Rng } from '../core/rng';
 import { physicsStep, relaxAll, spawnSpat } from './physics';
 import { emptyCombo, evaluateCombos } from './combos';
 import { enemyStep, startEnemyPhase } from './enemy';
+import { endLootShot, inLoot, lootStep, startLoot } from './loot';
 import { OBSTACLE_R, spawnObstacle, spawnWave } from './spawn';
 import { hero, stageWaves } from './damage';
 
@@ -44,7 +47,7 @@ export function mainBall(s: RunState): Ball {
   return hero(s);
 }
 
-export function createRun(stage: StageId, stats: RunStats, seed: number, _bestWave?: number): RunState {
+export function createRun(stage: StageId, stats: RunStats, seed: number, bestWave = 0): RunState {
   const st = stageById(stage);
   const bt = BALL_TYPES[stats.ballType];
   const s: RunState = {
@@ -61,7 +64,6 @@ export function createRun(stage: StageId, stats: RunStats, seed: number, _bestWa
     maxHp: stats.maxHp,
     healed: 0,
     cash: 0,
-    emeralds: 0,
     kills: 0,
     shots: 0,
     wave: 1,
@@ -93,10 +95,12 @@ export function createRun(stage: StageId, stats: RunStats, seed: number, _bestWa
     shotBounces: 0,
     firstHitDone: false,
     lanternOn: (stats.relics ?? []).includes('lantern'),
+    pulls: 0,
     loot: 0,
     goblinHits: 0,
     tooth: false,
     tokens: 0,
+    bestWave,
   };
   s.balls.push({
     id: s.nextId++,
@@ -152,12 +156,18 @@ export function shoot(s: RunState, pull: Vec): boolean {
   s.resolveTime = 0;
   s.lastHit = {};
   s.touching = {};
+  if (inLoot(s)) {
+    s.pulls = Math.max(0, (s.pulls ?? 0) - 1);
+    s.shotGoblinHits = s.goblinHits;
+  }
   s.phase = 'resolve';
   (s.pendingFx ??= []).push({ t: 'shoot', power });
   return true;
 }
 
 export function canFastForward(s: RunState): boolean {
+  // Loot holds (arrival, scurry) are sim time: safe to fast-forward.
+  if (s.phase === 'loot') return true;
   if (s.phase !== 'resolve') return false;
   let mainResting = false;
   let otherMoving = false;
@@ -195,6 +205,7 @@ function substep(s: RunState, h: number, fx: FxEvent[]): void {
 
   if (s.phase === 'resolve') resolveStep(s, h, fx);
   else if (s.phase === 'enemy' && enemyStep(s, h, fx, physicsStep)) endTurn(s, fx);
+  else if (s.phase === 'loot') lootStep(s, h, fx);
 }
 
 function resolveStep(s: RunState, h: number, fx: FxEvent[]): void {
@@ -226,6 +237,11 @@ function endShot(s: RunState, fx: FxEvent[]): void {
   // Jump cue: a hero that stopped on top of the enemy it jumped is separated by relaxAll below.
   main.jumpOver = undefined;
   main.jumpLanded = false;
+  // A loot pull: no combos, no Momentum (goblin hits never touch s.combo); scurry and hold.
+  if (inLoot(s)) {
+    endLootShot(s, fx);
+    return;
+  }
   evaluateCombos(s, main.x, main.y, fx);
   // Momentum relic: a shot with >= MOMENTUM_HITS hits builds it (capped); fewer resets it.
   if (has(s, 'momentum')) {
@@ -234,15 +250,24 @@ function endShot(s: RunState, fx: FxEvent[]): void {
   s.targets = s.targets.filter((t) => !t.dead);
   s.obstacles = s.obstacles.filter((o) => !o.dead);
   relaxAll(s);
+  // The boss died this shot: no enemy phase, the loot phase starts.
+  if (s.bossKilled) {
+    startLoot(s, fx);
+    return;
+  }
   startEnemyPhase(s, fx);
 }
 
-/** After the enemy phase: death check, then the jam rule, then aim. */
+/** After the enemy phase: death check (a dead hero still banks a boss kill), then loot or the jam rule, then aim. */
 function endTurn(s: RunState, fx: FxEvent[]): void {
   if (s.hp <= 0) {
     s.phase = 'over';
     s.result = buildResult(s);
     fx.push({ t: 'runOver' });
+    return;
+  }
+  if (s.bossKilled) {
+    startLoot(s, fx);
     return;
   }
   jamRule(s, fx);
@@ -314,7 +339,8 @@ export function jamRule(s: RunState, fx: FxEvent[]): boolean {
  */
 export function useTrick(s: RunState): boolean {
   const id = s.stats.trick;
-  if (s.phase !== 'aim' || !id || s.trickUsesLeft <= 0) return false;
+  // No tricks in the loot phase.
+  if (s.phase !== 'aim' || !id || s.trickUsesLeft <= 0 || s.bossKilled) return false;
   const fx = (s.pendingFx ??= []);
   const h = mainBall(s);
   switch (id) {
@@ -353,6 +379,8 @@ export function useTrick(s: RunState): boolean {
   }
   s.trickUsesLeft--;
   fx.push({ t: 'trick', id });
+  // Shockwave + Static killed the boss during aim: the waves are over, the goblin arrives now.
+  if (s.bossKilled) startLoot(s, fx);
   return true;
 }
 
@@ -360,17 +388,20 @@ export function useTrick(s: RunState): boolean {
  * Result waves are normalised to the 3 + boss track (boss wave = 4) whatever the stage's wave count, so an Early Boss
  * stage (boss after 2 waves) still banks bestWave 4 for a kill.
  */
-function buildResult(s: RunState): RunResult {
+export function buildResult(s: RunState): RunResult {
   const nw = stageWaves(s);
   const bossWave = WAVES_PER_STAGE + 1;
   return {
     stage: s.stage,
     cash: s.cash,
-    emeralds: s.emeralds,
+    tokens: s.tokens,
+    tokenId: s.stats.tokenId,
+    loot: s.loot,
+    goblinHits: s.goblinHits,
+    tooth: s.tooth,
     kills: s.kills,
     wave: s.wave > nw ? bossWave : Math.min(s.wave, WAVES_PER_STAGE),
     wavesCleared: s.bossKilled ? bossWave : Math.min(s.wave - 1, nw),
-    overtimeWaves: s.bossKilled ? Math.max(0, s.wave - (nw + 1)) : 0,
     bossKilled: s.bossKilled,
     shots: s.shots,
     bestCombo: s.bestCombo,

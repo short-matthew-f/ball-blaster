@@ -7,7 +7,7 @@ import { PALETTE } from '../render/palette';
 import { getMenuBg } from '../render/renderer';
 import { drawSprite } from '../render/sprite-cache';
 import { drawText, textWidth, wrapText } from '../render/text';
-import { Buttons, drawPanel, inRect } from './widgets';
+import { Buttons, currentToken, drawPanel, drawTokenCount, inRect } from './widgets';
 import type { Button } from './widgets';
 import type { App, Screen } from './app';
 
@@ -60,7 +60,7 @@ export class LoadoutScreen implements Screen {
 
   private equippedId(kind: SlotKind, index: number): string | null {
     const { save } = this.app;
-    if (kind === 'ball') return save.ballType;
+    if (kind === 'ball') return save.loadout.ball;
     if (kind === 'cue') return save.loadout.cue === 'standard' ? null : save.loadout.cue;
     if (kind === 'trick') return save.loadout.trick;
     return save.loadout.relics[index] ?? null;
@@ -147,8 +147,8 @@ export class LoadoutScreen implements Screen {
     // header
     drawSprite(ctx, 'coin', 9, 8);
     drawText(ctx, String(Math.floor(save.cash)), 16, 5, { color: P.Y, shadow: P['0'] });
-    drawSprite(ctx, 'emerald', 62, 8);
-    drawText(ctx, String(save.emeralds), 69, 5, { color: P.E, shadow: P['0'] });
+    const wt = currentToken(save);
+    drawTokenCount(ctx, wt, 62, 8, save.tokens?.[wt] ?? 0);
     drawText(ctx, 'LOADOUT', 175, 5, { align: 'right', color: P['5'], shadow: P['0'] });
     this.drawStageLine(ctx);
 
@@ -234,7 +234,7 @@ export class LoadoutScreen implements Screen {
   private isEquipped(id: string): boolean {
     const { save } = this.app;
     const k = this.sel.kind;
-    if (k === 'ball') return save.ballType === id;
+    if (k === 'ball') return save.loadout.ball === id;
     if (k === 'cue') return save.loadout.cue === id;
     if (k === 'trick') return save.loadout.trick === id;
     return save.loadout.relics.includes(id as never);
@@ -280,7 +280,7 @@ export class LoadoutScreen implements Screen {
       const gid = this.picked;
       let ok = false;
       if (kind === 'ball') {
-        save.ballType = gid as BallType;
+        save.loadout.ball = gid as BallType;
         ok = true;
       } else if (this.isEquipped(gid)) {
         ok = unequip(save, kind, kind === 'relic' ? save.loadout.relics.indexOf(gid as never) : undefined);
