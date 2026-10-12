@@ -300,7 +300,7 @@ const NOISE_DEG_BREAK = Number(ENV.PROG_BREAK_DEG ?? NOISE_DEG);
 
 // ---------- v0.6 bot loadout policy (DESIGN-v0.4-loadout "Balance notes", v0.6 M2 spec §6) ----------
 // Four fixed sets over owned cards; the best = most of its relics owned within the slot count (ties: listed order).
-// Empty slots are back-filled with any owned relic. Cue: Break if owned, unless Thin Rails + damage set. Trick: the
+// Empty slots are back-filled with any owned relic. Cue: Break if owned, unless Thin Rails + Explosive. Trick: the
 // first owned of shockwave / timeStop / recall, used greedily (see useTricks). Ball: heavy with the damage set, light
 // with the chain set, else standard (owned only). PROG_GEAR=0: empty loadout.
 const PROG_GEAR = ENV.PROG_GEAR !== '0';
@@ -371,8 +371,12 @@ function chooseLoadout(save: SaveData): void {
   const score = (set: RelicId[]) => Math.min(n, set.filter((id) => own.relics.includes(id)).length);
   const best = order.reduce((a, b) => (score(b) > score(a) ? b : a));
   for (const id of [...best, ...BACKFILL]) if (own.relics.includes(id) && save.loadout.relics.length < n) equip(save, 'relic', id);
-  // Break everywhere except Thin Rails with the damage set (a slam into a soft rail overshoots the rack).
-  if (ENV.PROG_NO_BREAK !== '1' && own.cues.includes('break') && !(st.modifiers.includes('thinRails') && best === sets.damage)) equip(save, 'cue', 'break');
+  // Break everywhere except Thin Rails with Explosive equipped (a slam into a soft rail overshoots the rack). v0.4 skipped
+  // it for the whole damage set (then Explosive+Momentum); with M2's Momentum/Ricochet set that cost w2s4/w3s3 many runs
+  // (16 seeds, same src and ISLAND_PRICE_MULT: w2s4 13 -> 6, w3s3 17 -> 7, w3s4 1 -> 4). PROG_THIN_BREAK=0 restores v0.4.
+  const thin = st.modifiers.includes('thinRails');
+  const thinSkip = thin && (ENV.PROG_THIN_BREAK === '0' ? best === sets.damage : save.loadout.relics.includes('explosive'));
+  if (ENV.PROG_NO_BREAK !== '1' && own.cues.includes('break') && !thinSkip) equip(save, 'cue', 'break');
   if (trickSlotOpen(save)) {
     const t = TRICK_PREF.find((id) => own.tricks.includes(id));
     if (t) equip(save, 'trick', t);
