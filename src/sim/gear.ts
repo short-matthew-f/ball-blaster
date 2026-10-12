@@ -9,3 +9,8 @@ export function has(s: RunState, id: RelicId): boolean {
 export function lv(s: RunState, id: string): number {
   return s.stats.gearLevel[id] ?? 0;
 }
+
+/** True when an equipped card's active fork/capstone choice `id` (e.g. 'break.slam') is in play this run (v0.6 M3). */
+export function mod(s: RunState, id: string): boolean {
+  return s.stats.mods.includes(id);
+}
