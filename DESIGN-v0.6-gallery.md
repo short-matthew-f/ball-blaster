@@ -1,20 +1,31 @@
-# Ball Blaster — v0.6 Proposal: Islands, Tokens and the Gear Gallery
+# Ball Blaster — v0.6 Proposal: Islands, Tokens, the Gear Gallery and the Payout
 
-Oct 12, 2026 · **Proposal** (owner direction: obvious roadblocks; boss-locked currency; cash stays pooled; gear moves to a gallery where every item has its own tree: base → fork → base → terminal fork; forks exclusive but switchable). Replaces the v0.3 one-tree layout and the v0.4 loadout screen. Combat rules are unchanged except where a fork says otherwise.
+Oct 12, 2026 · **Proposal, owner-directed.** Decisions so far: obvious roadblocks; boss-locked currency; cash stays pooled; gear moves to a gallery where every item has its own tree (base → fork → base → terminal fork); forks exclusive but switchable; two choices per fork by default, three only where a third idea is real; a world's power-up is tied to the world you've beaten and world 1 has none; Overtime is replaced by the Payout. Replaces the v0.3 one-tree layout and the v0.4 loadout screen. Combat rules are unchanged except where a fork says otherwise.
 
 ## The idea in one line
 
-**Stats live on world islands, gear lives in a gallery, and every wall is a boss's face.** Cash levels things; a boss's own token opens them.
+**Stats live on world islands, gear lives in a gallery, every wall is a boss's face, and every boss kill ends with one shot at a table full of coins.**
 
 ## Currencies
 
 | Coin | Earned | Spends on |
 |---|---|---|
-| **Cash** (pooled, as now) | kills, waves, Overtime, chests; ×1.22 per stage | levels: island stat nodes, card base nodes |
-| **Boss tokens** (one kind per boss: Stripe chip, Frost shard, Brass cog, Bog pearl, Ember, House chip) | first kill of that boss **3**, every repeat kill **1**, surviving that stage's Overtime **+1** | the portal to the next world, island capstones, gallery cards, card forks |
+| **Cash** (pooled, as now) | kills, waves, chests, the Payout; ×1.22 per stage | levels: island stat nodes, card base nodes |
+| **Boss tokens** (one kind per boss: Stripe chip, Frost shard, Brass cog, Bog pearl, Ember, House chip) | first kill of that boss **3**, every repeat kill **1**, the **gold coin** in that stage's Payout **+1** | the portal to the next world, island capstones, gallery cards, forks, capstones |
 | ~~Emeralds~~ | retired | migrate 1:1 into Stripe chips |
 
-Tokens never cross worlds: Stripe chips buy world 1's things only. A full boss run (kill + Overtime) pays 2, so "I need five more chips" is two or three runs, and Overtime finally has a reason beyond cash.
+Tokens never cross worlds. A full boss run (kill + gold coin) pays 2, so "I need five more chips" is three runs.
+
+## The Payout (replaces Overtime)
+
+The boss dies, the table clears, coins scatter, and you get **one shot**. Whatever your balls touch, you keep. Then the summary. Nothing is trying to kill you; that is the point.
+
+- **The layout is a puzzle.** The generator picks a secret ideal shot from where the hero rests (angle + power), traces it with the preview code through 2–3 rails, and lays a line of coins along that path. Then it scatters a handful more. There is always a great shot on the table; reading rails is how you find it (Aim nodes matter twice).
+- **The gold coin** sits at the far end of the ideal line. Taking it is +1 boss token. Only the hero ball can take it.
+- **Cash coins** are taken by any player ball: hero, split children, spat balls. Draw comes back through the line; Break fires blind.
+- **Numbers to start:** 12–16 cash coins worth about half a boss kill's cash in total, 1 gold coin, full power allowed, tricks disabled, layout seeded per run (the bot plays it; the gate stays deterministic).
+- **Feedback:** coin counter on the HUD, a chime per coin that rises in pitch, CLEAN SWEEP banner for all of them, the stage pip remembers your best sweep.
+- **Removed:** Overtime waves, the Overtime enrage clock, `atkBonus`, the loop rule about Overtime cash. Summary line "Waves cleared" becomes "Boss · Payout n/m".
 
 ## The island tree (stats)
 
@@ -40,7 +51,7 @@ A grid of cards, four across, grouped Cues · Balls · Relics · Tricks, "n of 2
         [ base I ]           cash
         [ base II ]          cash
             |
-   { fork: A | B | C }       1 token each; one ACTIVE at a time; switch free in the gallery
+   { fork: A | B (| C) }     1 token each; one ACTIVE at a time; switch free in the gallery
             |
         [ base III ]         cash (requires any fork choice owned)
             |
@@ -48,99 +59,97 @@ A grid of cards, four across, grouped Cues · Balls · Relics · Tricks, "n of 2
 ```
 
 - **Base nodes** are "more": arcs, radius, duration, uses. They are what cash buys.
-- **Forks are behaviour modifiers.** Owning two choices is allowed; exactly one is active per fork; switching the active choice is free and pre-run only. That is the owner's "exclusive but can be changed" and it is the only respec-like thing in the game.
-- **Capstones are the build-defining choice** behind the second base node. Same rules as forks, pricier.
+- **Forks are behaviour modifiers.** Owning several choices is allowed; exactly one is active per fork; switching the active choice is free and pre-run only. That is the only respec-like thing in the game.
+- **Two choices by default, three only where the third is a real idea.**
+- **Capstones** are the build-defining choice behind the second base node. Same rules, pricier.
 - The bot must play every fork at least once; a fork that trivialises a gated stage gets its number cut, not its idea.
 
 ### Cards by world (which boss's token opens them)
 
-| World · token | Cards introduced |
-|---|---|
-| 1 Felt Hall · Stripe chip | Break cue, Heavy ball, Lightning, Poison, Ricochet, Recall, Lantern |
-| 2 Ice Cavern · Frost shard | Jump cue, Light ball, Split, Chill, Mirror, Shockwave |
-| 3 Clockwork · Brass cog | Draw cue, Sticky ball, Spitter, Explosive, Momentum, Time Stop |
-| 4 Bog · Bog pearl | Follow cue, Shrapnel, Thorns, Static, Rack 'Em |
-| 5 Ember Pit · Ember | Comet ball, **Fire** (new), Magnet |
-| 6 Neon Casino · House chip | Greed, Decoy, Bulwark |
+A world's power-up belongs to the world you beat to get it. **World 1 has no power-up**: its cards change how the ball feels, not what it does. The first elemental effect arrives with Ice.
 
-Worlds 4–6 cards exist today (except Fire, Magnet, Greed, Decoy, Bulwark); their forks ship with v0.6, their worlds later.
+| World · token | Cards | The world's power-up |
+|---|---|---|
+| 1 Felt Hall · Stripe chip | Break cue, Heavy ball, Ricochet, Momentum, Recall, Lantern | none |
+| 2 Ice Cavern · Frost shard | Jump cue, Light ball, **Chill**, Mirror, Split, Shockwave | Chill |
+| 3 Clockwork · Brass cog | Draw cue, Sticky ball, **Lightning**, Static, Spitter, Time Stop | Lightning |
+| 4 Bog · Bog pearl | Follow cue, **Poison**, Thorns, Shrapnel, Rack 'Em | Poison |
+| 5 Ember Pit · Ember | Comet ball, **Fire** (new), Explosive, Magnet | Fire |
+| 6 Neon Casino · House chip | Greed, Decoy, Bulwark | Greed |
+
+Lightning and Poison move later than today. Anyone who owns them keeps them (migration below). Worlds 4–6 cards' forks ship with v0.6; the worlds themselves later.
 
 ### Fork catalogue (first draft: pick, cut, rename)
 
 Format: base → **fork** → base → **capstone**. Numbers are starting points for the bot.
 
-**Lightning** (w1): +1 arc, +20 range → **Chain** (arcs jump twice more at 1 dmg) · **Thunder** (one arc at full damage, +1 stagger) · **Static Field** (an arc on every rail bounce, not only contacts) → +1 arc damage → **Storm** (every kill emits an arc) · **Conductor** (bumpers and obstacles arc too).
+**World 1 (feel, no element)**
 
-**Poison** (w1): +1 stack per contact, cap +1 → **Plague** (poison spreads when a poisoned enemy touches another) · **Rot** (stacks never decay) · **Venom** (a poisoned enemy also ticks when hit) → tick +1 → **Blight** (a poisoned enemy that dies leaves a cloud that stacks anyone inside at the next phase) · **Leech** (poison ticks heal you 1 per 3 damage, through the heal curve).
+- **Break cue**: +5 % speed → **Slam** (+15 % more, no preview) · **Crack** (normal speed, first hit +1 stagger) → min power 40 % → **Breaker** (first hit shoves 2×) · **Steady** (preview back on).
+- **Heavy ball**: +1 mass → **Anvil** (stops dead on first hit, 2× damage) · **Wrecking** (shoves 2×, no damage bonus) → … → **Juggernaut** (immune to the first charge each phase) · **Avalanche** (every enemy it moves takes 1).
+- **Ricochet**: max +1 → **Bank** (+2 per rail) · **Carom** (enemy-to-enemy bounces count as rails) → max +1 → **Pocket** (a 3-rail first hit pays cash ×2) · **Ghost Rail** (rails return 20 % speed).
+- **Momentum**: max +1 → **Streak** (threshold 1 hit) · **Snowball** (also +5 % cash per step) → … → **Unstoppable** (a streak of 3 makes the next shot ignore shields) · **Overdrive** (at max, +20 % speed).
+- **Recall**: +1 use → **Blink** (recall to the nearest safe spot, not the start) · **Rewind** (recall to where the shot was taken from) → +1 use → **Encore** (a recall used during the enemy phase skips the next charge) · **Anchor** (after a recall your next shot is +2).
+- **Lantern** (counters dark): reach glyph +1 → **Beacon** (intents visible; enemies in your reach glow) · **Glare** (shooters within reach lose their shot) → … → **Sunrise** (dark is off for the first two waves) · **Moth** (shooters aim at the lantern spot, not you).
 
-**Ricochet** (w1): max +1 → **Bank** (+2 per rail) · **Trick Shot** (a first hit after 2+ rails staggers) · **Carom** (enemy-to-enemy bounces count as rails) → max +1 → **Pocket** (a 3-rail first hit pays cash ×2) · **Ghost Rail** (rails return 20 % speed).
+**World 2 (Chill)**
 
-**Lantern** (w1, counters dark): reach glyph +1 → **Beacon** (intents visible; enemies in your reach glow) · **Glare** (shooters within reach lose their shot) · **Nightlight** (dark stages pay +15 % cash) → … → **Sunrise** (dark is off for the first two waves) · **Moth** (shooters aim at the lantern spot, not you).
+- **Chill**: +1 phase → **Deep Freeze** (two chills = frozen) · **Brittle** (chilled take +1) · **Frostbite** (chill spreads on contact) → … → **Glacier** (chilled enemies block charges: cover) · **Icebreaker** (killing a chilled enemy chills its neighbours).
+- **Jump cue**: −1 damage penalty → **Long Jump** (passes two) · **Stomp** (landing staggers the passed enemy) → … → **Skip** (passes rails too: one wrap) · **Pounce** (landing hit is doubled).
+- **Light ball**: +speed → **Zip** (+15 % speed, no shove) · **Feather** (ignores belts, mud and ice) → … → **Phase** (passes through staggered enemies) · **Flurry** (two shots per turn at half damage).
+- **Split**: +1 child → **Twins** (2 children at full damage, short life) · **Swarm** (4 at 1 damage) · **Mitosis** (children split once more) → child life → **Rally** (children that return to the hero add +1 to the next shot) · **Shatter** (children shatter frozen/staggered for double).
+- **Mirror**: +10 % → **Full Mirror** (50 %) · **Lens** (reflected shots deal your damage) → … → **Hall of Mirrors** (every reflection also staggers) · **Polish** (shooters that miss you take 1).
+- **Shockwave**: +1 use → **Quake** (radius 90) · **Pulse** (shoves 30 px, no stagger) → … → **Aftershock** (a second wave next phase) · **Epicentre** (enemies touching you take 2).
 
-**Break cue** (w1): +5 % speed → **Slam** (+15 % more, no preview) · **Crack** (normal speed, first hit +1 stagger) · **Rocket** (every shot is 100 % power, +1 damage) → min power 40 % → **Breaker** (first hit shoves 2×) · **Steady** (preview back on).
+**World 3 (Lightning)**
 
-**Heavy ball** (w1): +1 mass → **Anvil** (stops dead on first hit, 2× damage) · **Wrecking** (shoves 2×, no damage bonus) · **Lead** (+1 damage, −10 % speed) → … → **Juggernaut** (immune to the first charge each phase) · **Avalanche** (every enemy it moves takes 1).
+- **Lightning**: +1 arc, +20 range → **Chain** (arcs jump twice more at 1 dmg) · **Thunder** (one arc at full damage, +1 stagger) · **Static Field** (an arc on every rail bounce) → +1 arc damage → **Storm** (every kill emits an arc) · **Conductor** (bumpers and obstacles arc too).
+- **Static**: +1 → **Overload** (2, chains to one neighbour) · **Paralysis** (staggered enemies stay staggered next phase) → … → **Grounded** (staggered enemies can't be healed) · **Tesla** (3 staggers in a shot: a free arc).
+- **Draw cue**: −power penalty → **Snap Back** (returns faster, hits on the way) · **Screw** (returns at an angle: side-spin) → … → **Masse** (the return path is previewed) · **Pull** (the enemy is dragged 20 px with you).
+- **Sticky ball**: +1 stagger → **Glue** (the enemy is held: skips next intent) · **Web** (neighbours within 30 px also +1 stagger) → … → **Trap** (a held enemy takes double from the next hit) · **Cling** (you take no charge damage from the held enemy).
+- **Spitter**: interval → **Gatling** (fast, 1 dmg) · **Mortar** (slow, each spat ball is a small blast) → life → **Sentry** (keeps spitting at chargers during the enemy phase) · **Bandolier** (spat balls stay as mines until the phase starts).
+- **Time Stop**: +1 use → **Freeze** (nobody even Advances) · **Slow** (two phases at half) → … → **Clockwork** (belts and hazards also stop) · **Haste** (you get a second shot in the stopped phase).
 
-**Recall** (w1): +1 use → **Blink** (recall to the nearest safe spot, not the start) · **Rewind** (recall to where the shot was taken from) · **Decoy** (leaves a dummy that chargers target this phase) → +1 use → **Encore** (a recall used during the enemy phase skips the next charge) · **Anchor** (after a recall your next shot is +2).
+**World 4 (Poison)**
 
-**Jump cue** (w2): −1 damage penalty → **Long Jump** (passes two) · **Stomp** (landing staggers the passed enemy) · **Hop** (keeps the preview, passes only grunts) → … → **Skip** (passes rails too: one wrap) · **Pounce** (landing hit is doubled).
+- **Poison**: +1 stack per contact, cap +1 → **Plague** (poison spreads when a poisoned enemy touches another) · **Rot** (stacks never decay) → tick +1 → **Blight** (a poisoned enemy that dies leaves a cloud that stacks anyone inside at the next phase) · **Leech** (poison ticks heal you 1 per 3 damage, through the heal curve).
+- **Thorns**: +1 → **Spikes** (3) · **Barbs** (the charger is poisoned 2) → … → **Bulwark-lite** (first charge each phase halved) · **Riposte** (a charger that hits you is shoved back 40 px).
+- **Follow cue**: keep 70 % → **Plow** (80 %, +1 to the second hit) · **Roll** (no charge penalty) → … → **Cannon** (third contact too) · **Topspin** (rails after the first hit return full speed).
+- **Shrapnel**: +1 shard → **Flak** (5 shards, 1 dmg) · **Spear** (one shard at your damage) → life → **Fragmentation** (shard kills release shards) · **Plating** (unused shards orbit you as a 1-hit shield).
+- **Rack 'Em**: +1 use → **Tight** (30 px) · **Scatter** (away from the centre: breaks cover) → … → **Re-rack** (also resets intents) · **Table Roll** (enemies pulled across a hazard take it).
 
-**Light ball** (w2): +speed → **Zip** (+15 % speed, no shove) · **Feather** (ignores belts, mud and ice) · **Dart** (first hit +1, bounces lose less) → … → **Phase** (passes through staggered enemies) · **Flurry** (two shots per turn at half damage).
+**World 5 (Fire)**
 
-**Split** (w2): +1 child → **Twins** (2 children at full damage, short life) · **Swarm** (4 at 1 damage) · **Mitosis** (children split once more) → child life → **Rally** (children that return to the hero add +1 to the next shot) · **Shatter** (children shatter frozen/staggered for double).
+- **Fire** (new): burn 2 phases, 1/phase → **Wildfire** (spreads when a burning enemy touches another) · **Puddle** (impact leaves a pool; anyone through it burns) → burn +1 → **Inferno** (burn damage doubles each phase, max 4) · **Firewalk** (lava heals you; bomber blasts don't burn you).
+- **Explosive**: radius → **Cluster** (three small blasts along the path) · **Delayed** (sticks, explodes at phase start) → keep speed → **Chain Reaction** (blast kills explode) · **Shockproof** (blasts stagger +2).
+- **Comet ball**: trail length → **Tail** (trail burns) · **Meteor** (impact blast) → … → **Impact** (first hit ×2 if above 80 % power) · **Halo** (trail is cover).
+- Magnet: base only until Ember ships.
 
-**Chill** (w2): +1 phase → **Deep Freeze** (two chills = frozen) · **Brittle** (chilled take +1) · **Frostbite** (chill spreads on contact) → … → **Glacier** (chilled enemies block charges: cover) · **Icebreaker** (killing a chilled enemy chills its neighbours).
-
-**Mirror** (w2): +10 % → **Full Mirror** (50 %) · **Lens** (reflected shots deal your damage) · **Prism** (reflected to a random enemy) → … → **Hall of Mirrors** (every reflection also staggers) · **Polish** (shooters that miss you take 1).
-
-**Shockwave** (w2): +1 use → **Quake** (radius 90) · **Pulse** (shoves 30 px, no stagger) · **Tremor** (+1 stagger, obstacles too) → … → **Aftershock** (a second wave next phase) · **Epicentre** (enemies touching you take 2).
-
-**Draw cue** (w3): −power penalty → **Snap Back** (returns faster, hits on the way) · **Screw** (returns at an angle: side-spin) · **Stun Draw** (first hit +1 stagger) → … → **Masse** (the return path is previewed) · **Pull** (the enemy is dragged 20 px with you).
-
-**Sticky ball** (w3): +1 stagger → **Glue** (the enemy is held: skips next intent) · **Web** (neighbours within 30 px also +1 stagger) · **Tar** (the enemy is slowed: chill) → … → **Trap** (a held enemy takes double from the next hit) · **Cling** (you take no charge damage from the held enemy).
-
-**Spitter** (w3): interval → **Gatling** (fast, 1 dmg) · **Mortar** (slow, each spat ball is a small blast) · **Seeker** (spat balls curve to the nearest enemy) → life → **Sentry** (keeps spitting at chargers during the enemy phase) · **Bandolier** (spat balls stay as mines until the phase starts).
-
-**Explosive** (w3): radius → **Cluster** (three small blasts along the path) · **Shaped** (a cone along the travel direction, 1.5× radius) · **Delayed** (sticks, explodes at phase start) → keep speed → **Chain Reaction** (blast kills explode) · **Shockproof** (blasts stagger +2).
-
-**Momentum** (w3): max +1 → **Streak** (threshold 1 hit) · **Heavy** (max +2 more) · **Snowball** (also +5 % cash per step) → … → **Unstoppable** (a streak of 3 makes the next shot ignore shields) · **Overdrive** (at max, +20 % speed).
-
-**Time Stop** (w3): +1 use → **Freeze** (nobody even Advances) · **Slow** (two phases at half) · **Rewind** (also undoes this phase's damage to you) → … → **Clockwork** (belts and hazards also stop) · **Haste** (you get a second shot in the stopped phase).
-
-**Follow cue** (w4): keep 70 % → **Plow** (80 %, +1 to the second hit) · **Drive** (second contact at full damage) · **Roll** (no charge penalty) → … → **Cannon** (third contact too) · **Topspin** (rails after the first hit return full speed).
-
-**Shrapnel** (w4): +1 shard → **Flak** (5 shards, 1 dmg) · **Spear** (one shard at your damage) · **Boomerang** (shards return through the kill point) → life → **Fragmentation** (shard kills release shards) · **Plating** (unused shards orbit you as a 1-hit shield).
-
-**Thorns** (w4): +1 → **Spikes** (3) · **Reflect** (the charger is staggered) · **Barbs** (the charger is poisoned 2) → … → **Bulwark-lite** (first charge each phase halved) · **Riposte** (a charger that hits you is shoved back 40 px).
-
-**Static** (w4): +1 → **Overload** (2, chains to one neighbour) · **Discharge** (stagger also strips a shield) · **Paralysis** (staggered enemies stay staggered next phase) → … → **Grounded** (staggered enemies can't be healed) · **Tesla** (3 staggers in a shot: a free arc).
-
-**Rack 'Em** (w4): +1 use → **Tight** (30 px) · **Pull** (toward you, not the centre) · **Scatter** (away from the centre: breaks cover) → … → **Re-rack** (also resets intents) · **Table Roll** (enemies pulled across a hazard take it).
-
-**Fire** (w5, new): burn 2 phases, 1/phase → **Wildfire** (spreads when a burning enemy touches another) · **Puddle** (impact leaves a pool; anyone through it burns) · **Cinder** (burning enemies that die blast 1) → burn +1 → **Inferno** (burn damage doubles each phase, max 4) · **Firewalk** (lava heals you, bombers' blasts don't burn you).
-
-**Comet ball** (w5): trail length → **Tail** (trail burns) · **Meteor** (impact blast) · **Streak** (+speed on rails) → … → **Impact** (first hit ×2 if above 80 % power) · **Halo** (trail is cover).
-
-Magnet, Greed, Decoy, Bulwark (w5–6): base only until their worlds ship.
+**World 6**: Greed, Decoy, Bulwark: base only until Casino ships.
 
 ## Migration (v3 → v4 save)
 
 - Emeralds → Stripe chips 1:1. Cash and stats kept.
 - Island stat ids (`damage`, `maxHp`, `aim`, `mass`, `cashBonus`, grafts' `g{w}_*`) keep their ids and levels. Core nodes that move islands keep their ids. Any node that no longer exists refunds its spend (small, nothing like the v2 refund).
-- Owned gear stays owned wherever its card lands; `${id}_lv` becomes the card's base I. Nobody owns a fork at migration.
+- Owned gear stays owned wherever its card lands (a save with Lightning keeps Lightning); `${id}_lv` becomes the card's base I. Nobody owns a fork at migration.
 - `unlocked` becomes "portals owned": a save with `unlocked ≥ 4` owns ICE CAVERN; ≥ 8 owns CLOCKWORK WORKS.
 
 ## Build order
 
-1. Tokens: drop, HUD, summary line, save field; Overtime token. Emerald retirement.
+1. Tokens: drop, HUD, summary line, save field. Emerald retirement. The Payout (sim phase, generator, coins, gold coin, HUD, summary) and Overtime removal; gate re-run.
 2. Island tree: node tables per island, spiral layout, portals/capstones, tree screen (mostly the v0.3 screen with new data).
 3. Gallery: card model (base/fork/capstone, active choice), gallery screen replacing loadout, card page, `RunStats` gains per-card fork/capstone ids.
 4. Forks in the sim: world 1–3 cards first (18 cards), bot fork policy, gate; then worlds 4–6 cards.
 5. Fable review; migrate; ship.
 
-## Open questions
+## Decision log
 
-1. **Overtime token**: in (my recommendation; it gives the bonus phase a reason) or out?
-2. **Card placement**: the table above is a draft. Lantern on world 1 (dark can roll from stage 2) or world 3?
-3. **Fire now or with Ember Pit?** Forks for it are cheap; the relic itself is a new status (burn) in the sim.
-4. **Three choices at every fork, or two at most forks and three where it earns it?** I'd allow both: the shape is the rule, the count isn't.
+| Decision | Reason |
+|---|---|
+| Boss tokens, one kind per boss, never cross worlds | the wall is a face; farming a boss is always the answer |
+| Cash stays pooled | per-world cash punishes grinding and needs an exchange rate (Darkest Dungeon's heirloom trading) |
+| Gear in a gallery with per-card trees; stats on islands | gear is a collection, stats are geography |
+| Forks exclusive but switchable, free, pre-run | behaviour modifiers are the point; the switch is the only respec |
+| Two fork choices by default | a third only when it is a real idea |
+| A world's power-up belongs to the world you beat; world 1 has none | Chill at Ice, Lightning at Clockwork, Poison at Bog, Fire at Ember |
+| The Payout replaces Overtime | Overtime could only end in a death; a coin sweep ends in a number you earned, and the gold coin is the token |
