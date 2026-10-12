@@ -9,7 +9,8 @@ All art (sprites, bitmap font, icons) and all sound (WebAudio synthesis) are ori
 ```sh
 npm install
 npm run dev      # http://localhost:5173
-npm test         # sim determinism, rules and balance tests
+npm test         # sim determinism, rules and tree tests (fast; runs in CI)
+npm run balance  # multi-stage progression bots: the tuning gate (slow; local only — drifts by a step across Node versions)
 npm run build    # production PWA in dist/
 ```
 
