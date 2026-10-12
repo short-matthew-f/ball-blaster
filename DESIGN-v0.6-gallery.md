@@ -1,6 +1,6 @@
 # Ball Blaster — v0.6 Proposal: Islands, Tokens, the Gear Gallery and the Loot Goblin
 
-Oct 12, 2026 · **Proposal, owner-directed.** Decisions so far: obvious roadblocks; boss-locked currency; cash stays pooled; gear moves to a gallery where every item has its own tree (base → fork → base → terminal fork); forks exclusive but switchable; two choices per fork by default, three only where a third idea is real; a world's power-up is tied to the world you've beaten and world 1 has none; Overtime is replaced by the Loot Goblin (three pulls; the phase ends when the third shot ends). Replaces the v0.3 one-tree layout and the v0.4 loadout screen. Combat rules are unchanged except where a fork says otherwise.
+Oct 12, 2026 · **Owner-directed; M1 and M2 shipped 2026-10-12, M3 (forks) pending.** Decisions so far: obvious roadblocks; boss-locked currency; cash stays pooled; gear moves to a gallery where every item has its own tree (base → fork → base → terminal fork); forks exclusive but switchable; two choices per fork by default, three only where a third idea is real; a world's power-up is tied to the world you've beaten and world 1 has none; Overtime is replaced by the Loot Goblin (three pulls; the phase ends when the third shot ends). Replaces the v0.3 one-tree layout and the v0.4 loadout screen. Combat rules are unchanged except where a fork says otherwise.
 
 ## The idea in one line
 
