@@ -79,7 +79,7 @@ export class TitleScreen implements Screen {
     const wt = currentToken(this.app.save);
     drawSprite(ctx, 'coin', 9, 8);
     drawText(ctx, String(Math.floor(this.app.save.cash)), 16, 5, { color: P.Y, shadow: P['0'] });
-    drawTokenCount(ctx, wt, 62, 8, this.app.save.tokens?.[wt] ?? 0);
+    drawTokenCount(ctx, wt, this.app.save.tokens?.[wt] ?? 0, 62, 8);
     drawText(ctx, 'V0.1', 4, 314, { color: P['2'] });
   }
 

@@ -148,7 +148,7 @@ export class LoadoutScreen implements Screen {
     drawSprite(ctx, 'coin', 9, 8);
     drawText(ctx, String(Math.floor(save.cash)), 16, 5, { color: P.Y, shadow: P['0'] });
     const wt = currentToken(save);
-    drawTokenCount(ctx, wt, 62, 8, save.tokens?.[wt] ?? 0);
+    drawTokenCount(ctx, wt, save.tokens?.[wt] ?? 0, 62, 8);
     drawText(ctx, 'LOADOUT', 175, 5, { align: 'right', color: P['5'], shadow: P['0'] });
     this.drawStageLine(ctx);
 

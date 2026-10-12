@@ -199,7 +199,7 @@ export class TreeScreen implements Screen {
     drawSprite(ctx, 'coin', 9, 8);
     drawText(ctx, String(Math.floor(save.cash)), 16, 5, { color: P.Y, shadow: P['0'] });
     const wt = currentToken(save);
-    drawTokenCount(ctx, wt, 82, 8, save.tokens?.[wt] ?? 0);
+    drawTokenCount(ctx, wt, save.tokens?.[wt] ?? 0, 82, 8);
     btns.push({ id: 'settings', x: 144, y: 1, w: 32, h: 16, label: 'SET', style: 'gray' });
     let stageName = '';
     try { stageName = makeStage(save.current).name.toUpperCase(); } catch { /* ignore */ }
