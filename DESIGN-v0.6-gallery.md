@@ -11,7 +11,7 @@ Oct 12, 2026 · **Proposal, owner-directed.** Decisions so far: obvious roadbloc
 | Coin | Earned | Spends on |
 |---|---|---|
 | **Cash** (pooled, as now) | kills, waves, chests, the Loot Goblin; ×1.22 per stage | levels: island stat nodes, card base nodes |
-| **Boss tokens** (one kind per boss: Stripe chip, Frost shard, Brass cog, Bog pearl, Ember, House chip) | first kill of that boss **3**, every repeat kill **1**, the Loot Goblin's **golden tooth** (fourth hit in the three pulls) **+1** | the portal to the next world, island capstones, gallery cards, forks, capstones |
+| **Boss tokens** (one kind per boss: Stripe chip, Frost shard, Brass cog, Bog pearl, Ember, House chip) | **3** on the first kill of a world's last stage (slot 4; loops too), **1** on every other boss kill, the Loot Goblin's **golden tooth** (fourth hit in the three pulls) **+1** | the portal to the next world, island capstones, gallery cards, forks, capstones |
 | ~~Emeralds~~ | retired | migrate 1:1 into Stripe chips |
 
 Tokens never cross worlds. A full boss run (kill + golden tooth) pays 2, so "I need five more chips" is three runs.
