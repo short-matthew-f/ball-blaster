@@ -1,6 +1,6 @@
 # Ball Blaster — v0.4 Proposal: Gear and Loadouts
 
-Oct 12, 2026 · PROPOSAL, not yet approved. Builds on v0.3 (one tree, worlds). Nothing here changes combat rules; it changes what the player brings to a run.
+Oct 12, 2026 · **Approved** (owner: "this is good"; recommendations on the six questions taken as decided; Poison, Explosive and more passives added at the owner's request). Builds on v0.3 (one tree, worlds). Nothing here changes combat rules; it changes what the player brings to a run.
 
 ## The idea in one line
 
@@ -40,15 +40,27 @@ A fresh player has nothing to equip and never sees the loadout screen; the first
 
 **Relics** — the always-on effects become relics (this is the big change): **Lightning**, **Split**, **Spitter** move off the tree's passive list into relic unlocks, with their level nodes behind them. New relics:
 
-| Relic | Effect |
-|---|---|
-| Ricochet | +1 damage per rail bounce before the first hit (max +3) |
-| Lantern | counters *dark*: intents always visible; +1 reach shown on glyphs |
-| Magnet | enemies within 50 px of where the ball stops are pulled 12 px toward it (sets up the next break) |
-| Decoy | a dummy ball spawns at the hero's start spot each wave; melee charges target the nearer of the two |
-| Thorns | an enemy that lands a charge on you takes 2 |
-| Momentum | each consecutive shot that hits ≥ 2 enemies adds +1 damage (resets on a miss) |
-| Bulwark | the first charge each enemy phase is blocked (counters *ranged* poorly, *big rack* well) |
+Each relic anchors a build. Launch set (13):
+
+| Relic | Effect | Upgrade (cash level nodes) | Build |
+|---|---|---|---|
+| Lightning | (existing) arcs to nearby enemies | arcs, range, damage | chain |
+| Split | (existing) ball splits on first contact | children | chain |
+| Spitter | (existing) emits spat balls while rolling | interval, life | chain |
+| **Poison** | every ball contact adds 1 poison stack; at the start of each enemy phase a poisoned enemy takes damage equal to its stacks, then loses 1 stack. Ignores shields; never staggers. Max 5 stacks | +1 stack per contact; stacks don't decay | attrition — hit many things lightly |
+| **Explosive** | the first hit of each shot explodes: half your damage (rounded up) to every enemy within 40 px of the impact, +1 stagger each. The blast costs the ball half its speed | radius 50 → 60; keep full speed | racks — one slam into the cluster |
+| **Chill** | a hit chills an enemy for the next enemy phase: charge speed and reach −40 %, Advance halved | lasts 2 phases | control — buy time against brutes |
+| **Shrapnel** | every kill by the ball releases 2 shards (0.8 s, 1 damage, free hits) | 3 shards | kill chains |
+| **Static** | an enemy that becomes staggered takes 1 damage | 2 damage | stagger builds (Heavy Hits, Sticky) |
+| Ricochet | +1 damage per rail bounce before the first hit (max +3) | max +5 | bank shots |
+| Lantern | counters *dark*: intents always visible | +1 reach on the glyph colouring | dark stages |
+| Thorns | an enemy that lands a charge on you takes 2 | 3 | tank |
+| Momentum | each consecutive shot that hits ≥ 2 enemies adds +1 damage (max +3; resets on a shot with fewer) | max +5 | consistency |
+| **Mirror** | 30 % of ranged shots are reflected: no damage to you, 1 to the shooter | 50 % | ranged stages |
+
+Later (not launch): Magnet (pull enemies toward where the ball stops), Decoy (a dummy ball charges target), Bulwark (first charge each phase blocked), Greed (+30 % cash, −2 max HP), Impact (hard hits shove 2×).
+
+**Status rendering:** poison = green bubbles + a stack digit under the HP pips; chill = pale-blue outline + a snowflake over the intent glyph; explosions reuse the blast ring.
 
 **Tricks** — one button on the run HUD, no targeting, N uses per run, usable only during aim.
 
@@ -93,7 +105,7 @@ A fresh player has nothing to equip and never sees the loadout screen; the first
 2. **Tricks in or out?** A single no-target button fits "one thumb, one shot"; targeting would not. I recommend in, with 1 slot.
 3. **Cues: outcome-only** (as above) or allow one new gesture later (a curve/masse shot by dragging an arc)? I recommend outcome-only for v0.4.
 4. **Emeralds for gear unlocks** (bosses matter) vs cash? I recommend emeralds, cash for levels.
-5. Launch size: the catalogue above is 5 cues, 10 relics, 4 tricks, 4 balls. Half of that would still work. Trim?
+5. Launch size: 4 cues, 13 relics, 4 tricks, 4 balls. (Owner added Poison/Explosive; Magnet/Decoy/Bulwark deferred.)
 6. **"Weapons":** I read it as *cues* — how the shot behaves — because the ball is the weapon in billiards. If you pictured something that fires (turrets, projectiles, a hero that shoots between shots), that's a different system and worth saying now.
 
 ## Build order (if approved)
