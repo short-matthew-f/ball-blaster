@@ -220,7 +220,7 @@ describe('purchasing', () => {
     expect(distanceFromOwned(sv, 'g1_dmg')).toBe(2);
     expect(distanceFromOwned(sv, 'portal_w2')).toBe(3);
     expect(buyState(sv, node('g1_dmg'))).toBe('locked');
-    expect(buyState(sv, node('portal_w2'))).toBe('hidden');
+    expect(buyState(sv, node('portal_w2'))).toBe('locked'); // portals are never hidden: the wall is always drawn
     expect(pathToOwned(sv, 'portal_w2')).toEqual([ROOT_ID, 'damage', 'g1_dmg', 'portal_w2']);
     sv.levels.damage = 1;
     expect(distanceFromOwned(sv, 'damage')).toBe(0);

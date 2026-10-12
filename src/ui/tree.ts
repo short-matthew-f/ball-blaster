@@ -171,7 +171,7 @@ export class TreeScreen implements Screen {
       const lvl0 = nodeLevel(save, n.id) === 0;
       const beat = lvl0 ? beats.get(n.id) ?? '' : '';
       if (n.kind !== 'portal' && n.island !== undefined && fog.has(n.island) && lvl0) continue;
-      if (!beat && st === 'locked' && lvl0 && distanceFromOwned(save, n.id) >= 2) sil = true;
+      if (n.kind !== 'portal' && !beat && st === 'locked' && lvl0 && distanceFromOwned(save, n.id) >= 2) sil = true;
       x0 = Math.min(x0, n.x); y0 = Math.min(y0, n.y); x1 = Math.max(x1, n.x); y1 = Math.max(y1, n.y);
       out.push({ n, st, lvl: n.id === ROOT_ID ? 1 : nodeLevel(save, n.id), sil, beat, sx: 0, sy: 0 });
     }

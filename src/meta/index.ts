@@ -66,12 +66,14 @@ export function buyState(save: SaveData, node: UpgradeNode): 'ok' | 'locked' | '
   const level = nodeLevel(save, node.id);
   if (node.id === ROOT_ID || level >= node.maxLevel) return 'maxed';
   const dist = distanceFromOwned(save, node.id);
-  if (dist > 2) return 'hidden';
-  if (node.loop !== undefined && node.loop > currentLoop(save)) return 'locked';
-  if (dist > 1 && level === 0) return 'locked';
+  // Portals are the walls of the tree: never hidden by disclosure. Gated or far -> 'locked' (drawn with "BEAT ... 4").
   if (node.kind === 'portal') {
     if (!portalOpen(save, node)) return 'locked';
-  } else if (!islandOpen(save, node.island)) {
+    if (dist > 1) return 'locked';
+  } else if (dist > 2) return 'hidden';
+  if (node.loop !== undefined && node.loop > currentLoop(save)) return 'locked';
+  if (dist > 1 && level === 0) return 'locked';
+  if (node.kind !== 'portal' && !islandOpen(save, node.island)) {
     // Nodes owned before their island moved behind a portal (v3/M1 saves) are BFS sources; further buys still wait for the portal.
     return 'locked';
   }
