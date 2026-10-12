@@ -1,6 +1,6 @@
 # Ball Blaster — v0.6 Proposal: Islands, Tokens, the Gear Gallery and the Loot Goblin
 
-Oct 12, 2026 · **Owner-directed; M1 and M2 shipped 2026-10-12, M3 (forks) pending.** Decisions so far: obvious roadblocks; boss-locked currency; cash stays pooled; gear moves to a gallery where every item has its own tree (base → fork → base → terminal fork); forks exclusive but switchable; two choices per fork by default, three only where a third idea is real; a world's power-up is tied to the world you've beaten and world 1 has none; Overtime is replaced by the Loot Goblin (three pulls; the phase ends when the third shot ends). Replaces the v0.3 one-tree layout and the v0.4 loadout screen. Combat rules are unchanged except where a fork says otherwise.
+Oct 12, 2026 · **Owner-directed; M1, M2 and M3 world 1 shipped 2026-10-12; forks for worlds 2–6 pending.** Decisions so far: obvious roadblocks; boss-locked currency; cash stays pooled; gear moves to a gallery where every item has its own tree (base → fork → base → terminal fork); forks exclusive but switchable; two choices per fork by default, three only where a third idea is real; a world's power-up is tied to the world you've beaten and world 1 has none; Overtime is replaced by the Loot Goblin (three pulls; the phase ends when the third shot ends). Replaces the v0.3 one-tree layout and the v0.4 loadout screen. Combat rules are unchanged except where a fork says otherwise.
 
 ## The idea in one line
 
@@ -84,14 +84,7 @@ Lightning and Poison move later than today. Anyone who owns them keeps them (mig
 
 Format: base → **fork** → base → **capstone**. Numbers are starting points for the bot.
 
-**World 1 (feel, no element)**
-
-- **Break cue**: +5 % speed → **Slam** (+15 % more, no preview) · **Crack** (normal speed, first hit +1 stagger) → min power 40 % → **Breaker** (first hit shoves 2×) · **Steady** (preview back on).
-- **Heavy ball**: +1 mass → **Anvil** (stops dead on first hit, 2× damage) · **Wrecking** (shoves 2×, no damage bonus) → … → **Juggernaut** (immune to the first charge each phase) · **Avalanche** (every enemy it moves takes 1).
-- **Ricochet**: max +1 → **Bank** (+2 per rail) · **Carom** (enemy-to-enemy bounces count as rails) → max +1 → **Pocket** (a 3-rail first hit pays cash ×2) · **Ghost Rail** (rails return 20 % speed).
-- **Momentum**: max +1 → **Streak** (threshold 1 hit) · **Snowball** (also +5 % cash per step) → … → **Unstoppable** (a streak of 3 makes the next shot ignore shields) · **Overdrive** (at max, +20 % speed).
-- **Recall**: +1 use → **Blink** (recall to the nearest safe spot, not the start) · **Rewind** (recall to where the shot was taken from) → +1 use → **Encore** (a recall used during the enemy phase skips the next charge) · **Anchor** (after a recall your next shot is +2).
-- **Lantern** (counters dark): reach glyph +1 → **Beacon** (intents visible; enemies in your reach glow) · **Glare** (shooters within reach lose their shot) → … → **Sunrise** (dark is off for the first two waves) · **Moth** (shooters aim at the lantern spot, not you).
+**World 1 (feel, no element)** — SHIPPED as built; the rules are in DECISIONS.md "v0.6 M3". Break: SLAM / CRACK → BREAKER / STEADY · Heavy: ANVIL / WRECKING → JUGGERNAUT (one block per wave) / AVALANCHE (bumps deal 2) · Ricochet: BANK / CAROM (contacts count as rails) → POCKET / GHOST RAIL · Momentum: STREAK / SNOWBALL → UNSTOPPABLE / OVERDRIVE · Recall: BLINK / REWIND → ENCORE (first recall each wave is free) / ANCHOR · Lantern (reach in px by base level): BEACON (lit kills pay on any stage) / GLARE → SUNRISE (reach = table) / MOTH (shooters in reach advance instead).
 
 **World 2 (Chill)**
 
