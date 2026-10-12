@@ -248,15 +248,15 @@ describe('save', () => {
     expect(importSave(btoa('{"foo":1}'))).toBeNull();
     expect(importSave(btoa('{"cash":5}'))?.settings.sound).toBe(true);
   });
-  it('migrates v2: refund, clear levels, re-key stages, drop v2 key', () => {
+  it('migrates v2: no refund, clear levels, re-key stages, drop v2 key', () => {
     store.set('ballblaster.save.v2', JSON.stringify({
       version: 1, cash: 100, emeralds: 2, levels: { damage: 3, maxHp: 1, bumpers: 2, ice_master: 1, bogus: 4 }, unlocked: 1, current: 'ice',
       bestWave: { felt: 4, ice: 2 }, bossKills: { felt: 3 }, ballType: 'heavy', settings: { sound: false, shake: true, flash: true },
       hints: { shotTaught: true }, stats: { runs: 9, kills: 8, shots: 7 },
     }));
     const sv = loadSave();
-    expect(sv.cash).toBe(100 + (5 + 9 + 16) + 6 + 1500); // damage 5+9+16, maxHp 6, ice_master 1500
-    expect(sv.emeralds).toBe(2 + 1 + 2);
+    expect(sv.cash).toBe(100); // wallet carries over; spent upgrades are NOT refunded (the tree is a grind)
+    expect(sv.emeralds).toBe(2);
     expect(sv.levels).toEqual({});
     expect(sv.current).toBe('w2s1');
     expect(sv.unlocked).toBe(4);

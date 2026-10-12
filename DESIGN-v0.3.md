@@ -78,7 +78,7 @@ Worlds as rows (name, tint), four stage pips each (locked / open / best wave 0�
 
 ## Save
 
-`current` becomes a stage id string (`w1s1` … `w6s4`, loops `l1w1s1`), `unlocked` the highest global index reached, `bestWave` keyed by stage id, `levels` keyed by node id. **Migration from v0.2:** keep cash, emeralds, stats and settings; refund every owned node at its total paid cost and clear levels (the tree is new, the grind restarts from a fat wallet). Ice unlock carries over as `unlocked ≥ 4`.
+`current` becomes a stage id string (`w1s1` … `w6s4`, loops `l1w1s1`), `unlocked` the highest global index reached, `bestWave` keyed by stage id, `levels` keyed by node id. **Migration from v0.2:** keep cash, emeralds, stats and settings; clear levels with **no refund** (owner: a refund of 1,700 on run 3 was "too much" — the tree is a grind). Ice unlock carries over as `unlocked ≥ 4`.
 
 ## Build order
 
@@ -96,4 +96,4 @@ Worlds as rows (name, tint), four stage pips each (locked / open / best wave 0�
 | One tree with adjacency, levels on stat nodes, no respec, separate map **[decided]** | routing is the meta-game; permanence makes it a grind by design |
 | Grafts grow the tree per world | progression is visible on the tree itself; sub-trees stop being tabs |
 | Rings priced in stage cash | the tree's geography carries the scaling, not infinite level counters |
-| Migration refunds node spend | the tree is new; the player keeps what they earned |
+| Migration does not refund node spend | first tried a refund; 1,700 cash on run 3 short-circuited the grind |

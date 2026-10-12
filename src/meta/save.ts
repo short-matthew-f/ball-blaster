@@ -85,8 +85,9 @@ function migrateV2(r: Record<string, unknown>): Record<string, unknown> {
   };
   return {
     ...r,
-    cash: num(r.cash, 0) + refund.cash,
-    emeralds: num(r.emeralds, 0) + refund.emeralds,
+    // No refund of spent upgrades (owner: "that's too much" — the tree is a grind). Wallet carries over as-is.
+    cash: num(r.cash, 0) + refund.cash * 0,
+    emeralds: num(r.emeralds, 0) + refund.emeralds * 0,
     levels: {},
     ballType: 'standard',
     unlocked: Math.floor(num(r.unlocked, 0)) >= 1 ? 4 : 0,
