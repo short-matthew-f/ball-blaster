@@ -19,7 +19,7 @@ import {
   type Vec,
 } from '../core/types';
 import {
-  BALL_TYPES,
+  ballSpec,
   BREAK_MIN_POWER,
   BREAK_SPEED_MULT,
   DRAW_POWER,
@@ -49,7 +49,7 @@ export function mainBall(s: RunState): Ball {
 
 export function createRun(stage: StageId, stats: RunStats, seed: number, bestWave = 0): RunState {
   const st = stageById(stage);
-  const bt = BALL_TYPES[stats.ballType];
+  const bt = ballSpec(stats.ballType, stats.gearLevel?.[stats.ballType] ?? 0);
   const s: RunState = {
     stage: st.id,
     // Deep copy (hazards are flat): the Mainspring's reversal negates dx/dy on the run's copy, never the StageDef.
@@ -138,7 +138,7 @@ export function shoot(s: RunState, pull: Vec): boolean {
   const cue = s.stats.cue;
   const power = Math.max(cue === 'break' ? BREAK_MIN_POWER : MIN_POWER, Math.min(len, MAX_PULL) / MAX_PULL);
   const cueMult = cue === 'break' ? BREAK_SPEED_MULT : cue === 'draw' ? DRAW_POWER : 1;
-  const speed = power * MAX_LAUNCH_SPEED * BALL_TYPES[s.stats.ballType].speedMult * cueMult;
+  const speed = power * MAX_LAUNCH_SPEED * ballSpec(s.stats.ballType, s.stats.gearLevel[s.stats.ballType] ?? 0).speedMult * cueMult;
   b.vx = (pull.x / len) * speed;
   b.vy = (pull.y / len) * speed;
   b.resting = false;

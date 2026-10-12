@@ -1,5 +1,8 @@
-import type { CueId, RelicId, SaveData, TrickId } from '../core/types';
-import { CUE_IDS, RELIC_IDS, TRICK_IDS } from './upgrades';
+import type { BallType, CueId, RelicId, SaveData, TrickId } from '../core/types';
+import { BALL_IDS, CUE_IDS, RELIC_IDS, TRICK_IDS } from './cards';
+
+/** Gallery slots a card can be equipped into. The world counter is never in the loadout (it comes from the portal). */
+export type GearSlot = 'ball' | 'cue' | 'relic' | 'trick';
 
 const owned = (save: SaveData, id: string): boolean => !!save.cards?.[id];
 
@@ -8,20 +11,29 @@ export const relicSlots = (save: SaveData): number => 1 + (save.unlocked >= 4 ? 
 export const trickSlotOpen = (save: SaveData): boolean => save.unlocked >= 4;
 export const cueSlotOpen = (save: SaveData): boolean => CUE_IDS.some((id) => owned(save, id));
 
-/** Owned = the card exists in save.cards. The 'standard' cue is always owned. */
-export const gearOwned = (save: SaveData, id: string): boolean =>
-  id === 'standard' || ((CUE_IDS as string[]).includes(id) || (RELIC_IDS as string[]).includes(id) || (TRICK_IDS as string[]).includes(id)) && owned(save, id);
+const GEAR_IDS = new Set<string>([...CUE_IDS, ...RELIC_IDS, ...TRICK_IDS, ...BALL_IDS]);
 
-export function ownedGear(save: SaveData): { cues: CueId[]; relics: RelicId[]; tricks: TrickId[] } {
+/** Owned = the card exists in save.cards (stubs are never owned). The 'standard' cue/ball is always owned. */
+export const gearOwned = (save: SaveData, id: string): boolean => id === 'standard' || (GEAR_IDS.has(id) && owned(save, id));
+
+/** Owned cards by slot, in CARDS order (world, then table). `balls` excludes 'standard'. */
+export function ownedGear(save: SaveData): { cues: CueId[]; relics: RelicId[]; tricks: TrickId[]; balls: BallType[] } {
   return {
     cues: CUE_IDS.filter((id) => owned(save, id)),
     relics: RELIC_IDS.filter((id) => owned(save, id)),
     tricks: TRICK_IDS.filter((id) => owned(save, id)),
+    balls: BALL_IDS.filter((id) => owned(save, id)),
   };
 }
 
-export function equip(save: SaveData, slot: 'cue' | 'relic' | 'trick', id: string, index?: number): boolean {
+export function equip(save: SaveData, slot: GearSlot, id: string, index?: number): boolean {
   const lo = save.loadout;
+  if (slot === 'ball') {
+    if (id !== 'standard' && !(BALL_IDS as string[]).includes(id)) return false;
+    if (!gearOwned(save, id)) return false;
+    lo.ball = id as BallType;
+    return true;
+  }
   if (slot === 'cue') {
     if (!(CUE_IDS as string[]).includes(id) && id !== 'standard') return false;
     if (!gearOwned(save, id) || (id !== 'standard' && !cueSlotOpen(save))) return false;
@@ -47,9 +59,14 @@ export function equip(save: SaveData, slot: 'cue' | 'relic' | 'trick', id: strin
   return true;
 }
 
-/** Cue -> 'standard', trick -> null, relic -> removes slot `index` (default: the last one). */
-export function unequip(save: SaveData, slot: 'cue' | 'relic' | 'trick', index?: number): boolean {
+/** Ball / cue -> 'standard', trick -> null, relic -> removes slot `index` (default: the last one). */
+export function unequip(save: SaveData, slot: GearSlot, index?: number): boolean {
   const lo = save.loadout;
+  if (slot === 'ball') {
+    if (lo.ball === 'standard') return false;
+    lo.ball = 'standard';
+    return true;
+  }
   if (slot === 'cue') {
     if (lo.cue === 'standard') return false;
     lo.cue = 'standard';
@@ -75,7 +92,7 @@ export function fixLoadout(save: SaveData, raw: unknown): SaveData['loadout'] {
     for (const x of r.relics) if (typeof x === 'string' && (RELIC_IDS as string[]).includes(x) && gearOwned(save, x) && !relics.includes(x as RelicId)) relics.push(x as RelicId);
   }
   const trick = typeof r.trick === 'string' && (TRICK_IDS as string[]).includes(r.trick) && trickSlotOpen(save) && gearOwned(save, r.trick) ? (r.trick as TrickId) : null;
-  const ball = r.ball === 'heavy' || r.ball === 'light' || r.ball === 'sticky' ? (owned(save, r.ball) ? r.ball : 'standard') : 'standard';
+  const ball: BallType = typeof r.ball === 'string' && (BALL_IDS as string[]).includes(r.ball) && owned(save, r.ball) ? (r.ball as BallType) : 'standard';
   save.loadout = { ball, cue, relics: relics.slice(0, relicSlots(save)), trick };
   return save.loadout;
 }

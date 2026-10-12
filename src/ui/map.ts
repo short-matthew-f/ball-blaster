@@ -146,7 +146,7 @@ export class MapScreen implements Screen {
       btns.push({ id: 'loopNext', x: 22, y: 3, w: 16, h: 13, label: '>', style: 'gray', disabled: this.loop >= this.maxLoop() });
     }
     btns.push({ id: 'tree', x: 4, y: 297, w: 34, h: 20, label: 'TREE', style: 'blue' });
-    btns.push({ id: 'loadout', x: 40, y: 297, w: 52, h: 20, label: 'LOADOUT', style: 'gold' });
+    btns.push({ id: 'gallery', x: 40, y: 297, w: 52, h: 20, label: 'GEAR', style: 'gold' });
     btns.push({ id: 'start', x: 94, y: 297, w: 82, h: 20, label: 'START RUN', scale: 1, style: 'green' });
     this.buttons.set(btns);
     this.buttons.draw(ctx);
@@ -178,7 +178,7 @@ export class MapScreen implements Screen {
     if (!id) return;
     app.sfx.ui();
     if (id === 'tree') app.go('shop');
-    else if (id === 'loadout') app.go('loadout');
+    else if (id === 'gallery') app.go('gallery');
     else if (id === 'start') app.startRun();
     else if (id === 'loopPrev') this.loop = Math.max(0, this.loop - 1);
     else if (id === 'loopNext') this.loop = Math.min(this.maxLoop(), this.loop + 1);

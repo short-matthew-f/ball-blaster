@@ -3,6 +3,7 @@ import { PALETTE } from '../render/palette';
 import { drawText, textWidth } from '../render/text';
 import { drawSprite } from '../render/sprite-cache';
 import { buyState, nodesFor } from '../meta/index';
+import { CARDS, cardBuyState } from '../meta/cards';
 import { TOKEN_OF_WORLD } from '../core/types';
 import type { SaveData, TokenId } from '../core/types';
 import { parseStageId } from '../core/worlds';
@@ -158,7 +159,29 @@ export function drawTokenCount(ctx: CanvasRenderingContext2D, id: string, n: num
   drawText(ctx, String(n), cx + 7, cy - 3, { color: n > 0 ? color : P['3'], shadow: P['0'] });
 }
 
-/** True when any revealed upgrade node is currently buyable. */
+/** Token colours (portal borders, headers). */
+export const TOKEN_COLOR: Record<TokenId, string> = { stripe: P.p, frost: P.c, cog: P.Y, pearl: P.S, ember: P.o, house: P.E };
+
+/** Header token strip: one token per reached world (world k reached at unlocked >= 4(k-1)), from x 60. */
+export function drawTokenStrip(ctx: CanvasRenderingContext2D, save: SaveData, x0 = 62): void {
+  const reached = TOKEN_OF_WORLD.filter((_, i) => i === 0 || save.unlocked >= 4 * i);
+  const pitch = reached.length > 4 ? 16 : 20;
+  reached.forEach((id, i) => drawTokenCount(ctx, id, save.tokens?.[id] ?? 0, x0 + i * pitch, 8));
+}
+
+/** True when any card can be bought (token in hand) or any owned card's next base level is affordable. */
+export function anyCardAffordable(save: SaveData): boolean {
+  for (const c of CARDS) {
+    if (cardBuyState(save, c.id) === 'open') return true;
+    const st = save.cards?.[c.id];
+    if (!st || c.stub || st.level >= 3) continue;
+    if (st.level === 2 && c.forks.length > 0 && st.fork === null) continue;
+    if (save.cash >= c.base[st.level].cost(st.level as 0 | 1 | 2)) return true;
+  }
+  return false;
+}
+
+/** True when any revealed upgrade node is currently buyable (cash or token). */
 export function anyAffordable(app: App): boolean {
   return nodesFor(app.save).some((n) => buyState(app.save, n) === 'ok');
 }

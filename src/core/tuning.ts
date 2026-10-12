@@ -220,6 +220,17 @@ export const BALL_TYPES = {
   light: { r: HERO_R, mass: 0.6, speedMult: 1.25, dmgBonus: 0 },
   sticky: { r: HERO_R, mass: 1, speedMult: 1, dmgBonus: 0 }, // stops dead on first enemy contact, +1 stagger
 } as const;
+/** v0.6 ball cards, by card level (base I..III): Heavy mass, Light speed, Sticky stagger (STICKY_STAGGER: data only until the sim reads it). */
+export const HEAVY_MASS = [2, 2.25, 2.5, 2.75];
+export const LIGHT_SPEED = [1.25, 1.3, 1.35, 1.4];
+export const STICKY_STAGGER = [1, 2, 3, 4];
+/** BALL_TYPES entry for a ball at card level `lv` (Heavy mass and Light speed grow with the card). */
+export function ballSpec(type: keyof typeof BALL_TYPES, lv = 0): { r: number; mass: number; speedMult: number; dmgBonus: number } {
+  const b = BALL_TYPES[type] ?? BALL_TYPES.standard;
+  if (type === 'heavy') return { ...b, mass: gearVal(HEAVY_MASS, lv) };
+  if (type === 'light') return { ...b, speedMult: gearVal(LIGHT_SPEED, lv) };
+  return b;
+}
 
 export const SPIT_LIFE_CAP = 3;
 
@@ -281,42 +292,52 @@ export function stageById(id: StageId): StageDef {
 /** Break cue: launch speed x this (doc 1.35; bot-tuned v0.4: it was the first emerald buy and trivialised w2/w3); every shot fires at >= BREAK_MIN_POWER. */
 export const BREAK_SPEED_MULT = 1.2;
 export const BREAK_MIN_POWER = 0.5;
-/** Jump cue: damage penalty on the first contact after landing (min 1). */
-export const JUMP_PENALTY = [1, 0];
+/**
+ * v0.6 cue cards by level. The sim still reads the scalars above (level 0); these per-level tables are data only until
+ * the sim reads them (owner: sim touches limited in M2).
+ */
+export const BREAK_SPEED_MULT_LV = [1.2, 1.25, 1.25, 1.3];
+export const BREAK_MIN_POWER_LV = [0.5, 0.5, 0.4, 0.4];
+/** Jump cue: damage penalty on the first contact after landing (min 1; negative = bonus). */
+export const JUMP_PENALTY = [1, 0, -1, -2];
 /** Draw cue: launch power x DRAW_POWER (doc trade); after the first contact the ball heads back to the launch point at DRAW_RETURN x launch speed. */
 export const DRAW_POWER = 0.8;
 export const DRAW_RETURN = 0.5;
+export const DRAW_POWER_LV = [0.8, 0.85, 0.9, 0.95];
 /** Follow cue: after the first contact the ball keeps FOLLOW_KEEP x its pre-impact velocity; charges deal +FOLLOW_CHARGE_EXTRA. */
 export const FOLLOW_KEEP = 0.6;
 export const FOLLOW_CHARGE_EXTRA = 1;
+export const FOLLOW_KEEP_LV = [0.6, 0.7, 0.75, 0.8];
 /** Poison: stacks per ball contact (+1 per level), cap by level; level >= POISON_NO_DECAY_LV: stacks never decay. */
-export const POISON_MAX = [4, 4, 5];
+export const POISON_MAX = [4, 4, 5, 6];
 export const POISON_NO_DECAY_LV = 2;
 /** Explosive: blast radius (px, edge gap from the impact point) and ball speed kept, by level. Blast = floor(dmg/2), min 1. */
-export const EXPLOSIVE_R = [36, 46, 56];
-export const EXPLOSIVE_KEEP = [0.5, 0.5, 1];
+export const EXPLOSIVE_R = [36, 46, 56, 66];
+export const EXPLOSIVE_KEEP = [0.5, 0.5, 1, 1];
 /** Chill: phases, charge speed / reach multiplier, Advance multiplier. */
-export const CHILL_PHASES = [1, 2];
+export const CHILL_PHASES = [1, 2, 3, 4];
 export const CHILL_CHARGE_MULT = 0.6;
 export const CHILL_ADVANCE_MULT = 0.5;
 /** Shrapnel: shards per ball kill, shard life (s), damage, launch speed (px/s). */
-export const SHRAPNEL_COUNT = [2, 3];
+export const SHRAPNEL_COUNT = [2, 3, 4, 5];
 export const SHARD_LIFE = 0.8;
 export const SHARD_DMG = 1;
 export const SHARD_SPEED = 220;
 /** Static: damage when an enemy crosses its stagger threshold. */
-export const STATIC_DMG = [1, 2];
+export const STATIC_DMG = [1, 2, 3, 4];
 /** Ricochet: +1 damage per main-ball rail bounce before the first hit, capped. */
-export const RICOCHET_MAX = [3, 5];
+export const RICOCHET_MAX = [3, 5, 6, 7];
 /** Thorns relic: damage to an enemy whose charge lands on the hero. */
-export const THORNS_RELIC_DMG = [2, 3];
+export const THORNS_RELIC_DMG = [2, 3, 4, 5];
 /** Momentum: cap; a shot with >= MOMENTUM_HITS hits adds +1, fewer resets. */
-export const MOMENTUM_MAX = [2, 4];
+export const MOMENTUM_MAX = [2, 4, 5, 6];
 export const MOMENTUM_HITS = 2;
 /** Mirror: chance a Shoot is reflected (no damage to the hero, MIRROR_DMG to the shooter). */
-export const MIRROR_CHANCE = [0.3, 0.5];
+export const MIRROR_CHANCE = [0.3, 0.5, 0.6, 0.7];
+/** Lantern reach by card level (data only until the sim reads it; the sim's Lantern is on/off). */
+export const LANTERN_REACH = [0, 1, 2, 3];
 export const MIRROR_DMG = 1;
-/** Tricks: base uses per run (level node: +1, applied by meta into RunStats.trickUses). */
+/** Tricks: base uses per run (+1 per card base level, applied by meta into RunStats.trickUses). */
 export const TRICK_USES: Record<'recall' | 'timeStop' | 'rackEm' | 'shockwave', number> = { recall: 1, timeStop: 1, rackEm: 1, shockwave: 2 };
 export const RACK_PULL = 20;
 export const SHOCKWAVE_R = 60;
@@ -347,3 +368,9 @@ export const TOOTH_HIT = 4; // 3 pulls, 4 hits: the tooth needs one multi-hit (b
 /** Boss tokens: first kill of a world's slot-4 stage (bestWave < 4) pays TOKENS_FIRST_SLOT4, every other kill TOKENS_KILL. */
 export const TOKENS_FIRST_SLOT4 = 3;
 export const TOKENS_KILL = 1;
+
+// ---------- v0.6 M2: islands and gallery cards ----------
+/** Price lever per island: [k] multiplies every cash node of island k ([0] unused). Read lazily by the cost functions. */
+export const ISLAND_PRICE_MULT: number[] = [1, 1, 1, 1, 1, 1, 1];
+/** Card base price (cash) before x CASH_GROWTH^(4(world-1)) x 2^level. */
+export const CARD_BASE_PRICE = { cue: 150, ball: 150, relic: 200, trick: 300 } as const;

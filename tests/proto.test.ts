@@ -1,9 +1,11 @@
 // v0.2 build step 1: physics + sizes + formations + enemy charges, bot-measured.
 // Two bots (nearest enemy / largest cluster, always full power) x two stat lines (run 1 base, mid-game) x 30 seeds.
 import { describe, expect, it } from 'vitest';
-import { MAX_PULL, SIM_DT, TABLE, type RelicId, type RunResult, type RunState, type RunStats, type SaveData, type Target, type TrickId } from '../src/core/types';
-import { bankRun, buildStats, buy, buyState, equip, newSave, nextCost, nodesFor, ownedGear, relicSlots, trickSlotOpen } from '../src/meta/index';
-import { BASE_STATS, TARGET_DEFS, TRICK_USES, stageById } from '../src/core/tuning';
+import { MAX_PULL, SIM_DT, TABLE, TOKEN_OF_WORLD, type RelicId, type RunResult, type RunState, type RunStats, type SaveData, type Target, type TokenId, type TrickId, type UpgradeNode } from '../src/core/types';
+import { bankRun, buildStats, buy, buyState, equip, newSave, nodeLevel, nodesFor, ownedGear, relicSlots, trickSlotOpen } from '../src/meta/index';
+import { CARDS, buyBase, buyCard, cardBuyState, cardById, cardOwned } from '../src/meta/cards';
+import { nodeById } from '../src/meta/tree';
+import { BASE_STATS, ISLAND_PRICE_MULT, TARGET_DEFS, TRICK_USES, stageById } from '../src/core/tuning';
 import { globalIndex, idFromIndex, nextStageId, stageId } from '../src/core/worlds';
 import { createRun, previewShot, shoot, step, useTrick } from '../src/sim/index';
 import { maxOverlap } from '../src/sim/physics';
@@ -277,12 +279,12 @@ describe('loot goblin: hits per pull (perfect bot, 30 seeds, w1s1)', () => {
 // Env overrides for tuning: PROG_SEEDS, PROG_RUNS.
 
 const PROG_SEEDS = Number(ENV.PROG_SEEDS ?? 16);
+// Diagnostic lever search (never for the gate): PROG_ISLAND_MULT=a,b,c,... sets ISLAND_PRICE_MULT[1..] for this process.
+if (ENV.PROG_ISLAND_MULT) ENV.PROG_ISLAND_MULT.split(',').forEach((v, i) => (ISLAND_PRICE_MULT[i + 1] = Number(v)));
 const PROG_RUNS = Number(ENV.PROG_RUNS ?? 160);
 const GATE_STAGES = 12; // w1s1 .. w3s4: asserted
 const SMOKE_STAGES = Number(ENV.PROG_STAGES ?? 16); // + w4s1 .. w4s4: reported only
 const GATE: [number, number] = [4, 9];
-/** Per-stage lower-bound waivers (DECISIONS.md "Gate v0.6 M1"): w3s4 at 2 until M2's cards/shopping rewrite re-gates it. */
-const GATE_WAIVER: Record<number, number> = { 11: 2 };
 const LAST_STAGE_MAX = 20; // stage 11: worst seed
 const BUY_WINDOW = 3;
 const PERFECT_MIN = 2; // perfect bot: no stage may be a 1-run clear (median) // runs after arrival within which at least one node must be affordable
@@ -296,66 +298,88 @@ const NOISE_SECOND = 0.15;
 /** Diagnostic: aim error with Break (it turns the preview off; the bot never reads it). Default = NOISE_DEG (±10 made the gate worse). */
 const NOISE_DEG_BREAK = Number(ENV.PROG_BREAK_DEG ?? NOISE_DEG);
 
-// ---------- v0.4 bot loadout policy (DESIGN-v0.4-loadout "Balance notes") ----------
-// Four fixed loadouts; the best = most of its relics owned (ties: listed order). Empty slots are back-filled with any
-// owned relic (so owned Lightning/Split/Spitter keep working). Cue: Break if owned, unless Thin Rails + damage loadout.
-// Trick: the first owned of shockwave / timeStop / recall, used greedily (see useTricks). PROG_GEAR=0: empty loadout.
+// ---------- v0.6 bot loadout policy (DESIGN-v0.4-loadout "Balance notes", v0.6 M2 spec §6) ----------
+// Four fixed sets over owned cards; the best = most of its relics owned within the slot count (ties: listed order).
+// Empty slots are back-filled with any owned relic. Cue: Break if owned, unless Thin Rails + damage set. Trick: the
+// first owned of shockwave / timeStop / recall, used greedily (see useTricks). Ball: heavy with the damage set, light
+// with the chain set, else standard (owned only). PROG_GEAR=0: empty loadout.
 const PROG_GEAR = ENV.PROG_GEAR !== '0';
+/** PROG_CARDS=0: the shopper never unlocks a card (tokens go to portals/capstones only). Report only. */
+const PROG_CARDS = ENV.PROG_CARDS !== '0';
+/** PROG_TOKENS=1: print each seed's token sequence (earned and spent, with the run index). */
+const PROG_TOKENS = ENV.PROG_TOKENS === '1';
 const BACKFILL: RelicId[] = ['lightning', 'split', 'spitter', 'explosive', 'momentum', 'shrapnel', 'poison', 'thorns', 'chill', 'static', 'ricochet', 'mirror', 'lantern'];
 const TRICK_PREF: TrickId[] = ['shockwave', 'timeStop', 'recall'];
 // Diagnostics (never asserted): PROG_LOADOUT=damage|chain|control|counter|none forces that relic set (granted free, no
 // back-fill, 1 slot before w2 and 2 after; 'legacy' = lightning+split); PROG_TRICK=<id>|none forces that trick from w2;
-// PROG_CUE=<id> forces the cue; PROG_ONLY=noisy|perfect.
+// PROG_CUE=<id> forces the cue; PROG_ONLY=noisy|perfect. PROG_TRICK=<id> with PROG_TRICK_USES=<n> keeps the bot's own
+// kit and only swaps the trick (n uses) from w2: the Time Stop check (M2: no gated median < 2 at 4 uses).
 const DIAG_LOADOUT = ENV.PROG_LOADOUT;
 const DIAG_TRICK = ENV.PROG_TRICK;
 const DIAG_CUE = ENV.PROG_CUE;
+const DIAG_TRICK_USES = ENV.PROG_TRICK_USES ? Number(ENV.PROG_TRICK_USES) : null;
 const DIAG = !!(DIAG_LOADOUT || DIAG_TRICK || DIAG_CUE);
+/** Trick-only diagnostic: the bot keeps choosing its own loadout. */
+const TRICK_ONLY = !!(DIAG_TRICK && DIAG_TRICK !== 'none' && DIAG_TRICK_USES !== null && !DIAG_LOADOUT && !DIAG_CUE);
 const PROG_ONLY = ENV.PROG_ONLY;
 
-function loadoutSets(stage: string): Record<string, RelicId[]> {
+const counterSet = (stage: string): RelicId[] => {
   const st = stageById(stage);
-  const counter: RelicId[] = st.modifiers.includes('dark') ? ['lantern'] : st.modifiers.includes('ranged') ? ['mirror'] : ['thorns', 'poison'];
-  return { damage: ['explosive', 'momentum'], chain: ['lightning', 'shrapnel'], control: ['chill', 'static'], counter, legacy: ['lightning', 'split'] };
+  return st.modifiers.includes('dark') ? ['lantern'] : st.modifiers.includes('ranged') ? ['mirror'] : ['thorns'];
+};
+
+/** The four sets of the shopping bot, in tie-break order. */
+function loadoutSets(stage: string): Record<string, RelicId[]> {
+  return { damage: ['momentum', 'ricochet', 'explosive'], chain: ['split', 'lightning', 'spitter', 'shrapnel'], control: ['chill', 'static', 'poison'], counter: counterSet(stage), legacy: ['lightning', 'split'] };
 }
 
 function diagStats(save: SaveData, stats: RunStats): RunStats {
   if (!DIAG) return stats;
   const n = globalIndex(save.current);
+  if (TRICK_ONLY) {
+    if (n < 4) return stats;
+    const trick = DIAG_TRICK as TrickId;
+    return { ...stats, trick, trickUses: DIAG_TRICK_USES!, gearLevel: { ...stats.gearLevel, [trick]: 0 } };
+  }
   const out: RunStats = { ...stats, cue: 'standard', relics: [], trick: null, trickUses: 0, gearLevel: {} };
   if (DIAG_LOADOUT && DIAG_LOADOUT !== 'none') out.relics = loadoutSets(save.current)[DIAG_LOADOUT].slice(0, n >= 4 ? 2 : 1);
   if (DIAG_CUE) out.cue = DIAG_CUE as RunStats['cue'];
-  if (out.relics.includes('split') && out.splitCount <= 0) out.splitCount = 1;
+  if (out.relics.includes('split') && out.splitCount <= 0) out.splitCount = 2;
   if (out.relics.includes('lightning') && out.lightningChance <= 0) Object.assign(out, { lightningChance: 0.22, lightningArcs: 1, lightningRange: 40, lightningDamage: 1 });
   if (DIAG_TRICK && DIAG_TRICK !== 'none' && n >= 4) {
     out.trick = DIAG_TRICK as TrickId;
-    out.trickUses = TRICK_USES[out.trick];
+    out.trickUses = DIAG_TRICK_USES ?? TRICK_USES[out.trick];
   }
   return out;
 }
 
-/** Loadout label for the report: relic ids (3 letters), cue, trick. */
+/** Loadout label for the report: relic ids (3 letters), ball, cue, trick. */
 function kitName(stats: RunStats): string {
   const r = stats.relics.map((id) => id.slice(0, 3)).join('+') || '-';
-  return `${r}${stats.cue === 'break' ? '/brk' : ''}${stats.trick ? '/' + stats.trick.slice(0, 4) : ''}`;
+  const ball = stats.ballType !== 'standard' ? `/${stats.ballType.slice(0, 3)}` : '';
+  return `${r}${ball}${stats.cue === 'break' ? '/brk' : ''}${stats.trick ? '/' + stats.trick.slice(0, 4) : ''}`;
 }
 
 function chooseLoadout(save: SaveData): void {
-  save.loadout = { ball: save.loadout?.ball ?? 'standard', cue: 'standard', relics: [], trick: null };
-  if (!PROG_GEAR || DIAG) return;
+  save.loadout = { ball: 'standard', cue: 'standard', relics: [], trick: null };
+  if (!PROG_GEAR || (DIAG && !TRICK_ONLY)) return;
   const st = stageById(save.current);
   const own = ownedGear(save);
-  const counter: RelicId[] = st.modifiers.includes('dark') ? ['lantern'] : st.modifiers.includes('ranged') ? ['mirror'] : ['thorns', 'poison'];
-  const sets: RelicId[][] = [['explosive', 'momentum'], ['lightning', 'shrapnel'], ['chill', 'static'], counter];
+  const sets = loadoutSets(save.current);
+  const order: RelicId[][] = [sets.damage, sets.chain, sets.control, sets.counter];
   const n = relicSlots(save);
-  const score = (set: RelicId[]) => set.filter((id) => own.relics.includes(id)).slice(0, n).length;
-  const best = sets.reduce((a, b) => (score(b) > score(a) ? b : a));
+  const score = (set: RelicId[]) => Math.min(n, set.filter((id) => own.relics.includes(id)).length);
+  const best = order.reduce((a, b) => (score(b) > score(a) ? b : a));
   for (const id of [...best, ...BACKFILL]) if (own.relics.includes(id) && save.loadout.relics.length < n) equip(save, 'relic', id);
-  // Break everywhere except Thin Rails with the damage loadout (a slam into a soft rail overshoots the rack).
-  if (ENV.PROG_NO_BREAK !== '1' && own.cues.includes('break') && !(st.modifiers.includes('thinRails') && best === sets[0])) equip(save, 'cue', 'break');
+  // Break everywhere except Thin Rails with the damage set (a slam into a soft rail overshoots the rack).
+  if (ENV.PROG_NO_BREAK !== '1' && own.cues.includes('break') && !(st.modifiers.includes('thinRails') && best === sets.damage)) equip(save, 'cue', 'break');
   if (trickSlotOpen(save)) {
     const t = TRICK_PREF.find((id) => own.tricks.includes(id));
     if (t) equip(save, 'trick', t);
   }
+  // Ball (spec §6): heavy with the damage set, light with the chain set, else standard. Only an owned card sticks.
+  const ball = best === sets.damage ? 'heavy' : best === sets.chain ? 'light' : 'standard';
+  if (ball !== 'standard' && cardOwned(save, ball)) save.loadout.ball = ball;
 }
 
 /** Greedy trick use at aim: shockwave with >= 3 enemies within 60 px, time stop below 30 % HP, recall with 2+ melee in reach. */
@@ -490,18 +514,124 @@ function playForResult(stage: string, seed: number, stats: RunStats, bot: ProgBo
   return s.result!;
 }
 
-/** Greedy cheapest-first shopping. Returns nodes bought and cash spent. */
-function greedyBuy(save: SaveData): { bought: number; cash: number } {
+// ---------- v0.6 shopping (M2 spec §6) ----------
+// Cash: island nodes 'ok' + buyable card bases, cheapest first (tie: id), until none. Tokens: per world ascending while
+// that world's token count is > 0: (1) the next island's portal, (2) the world's cards in CARD_PRIORITY order,
+// (3) the world's capstone; stop the world when none is buyable. An empty CARDS catalogue means "no cards" (pre-M2 tree:
+// the token phase then falls back to that world's token nodes, cheapest first, so M1 trees still shop).
+
+/** Card unlock order per world (index = world - 1). */
+const CARD_PRIORITY: string[][] = [
+  ['break', 'momentum', 'heavy', 'ricochet', 'lantern', 'recall'],
+  ['chill', 'split', 'mirror', 'light', 'jump', 'shockwave'],
+  ['lightning', 'static', 'spitter', 'sticky', 'draw', 'timeStop'],
+  ['poison', 'thorns', 'shrapnel', 'follow', 'rackEm'],
+  ['explosive'],
+  [],
+];
+
+type SpendKind = 'portal' | 'card' | 'cap' | 'other';
+
+/** Per-seed shop ledger (token flows, portal timing, the PROG_TOKENS trace). */
+interface Shop {
+  r: number;
+  earned: Record<TokenId, number>;
+  spent: Record<TokenId, Record<SpendKind, number>>;
+  /** world k -> run index r at which portal_w{k} was bought. */
+  portalAt: Record<number, number>;
+  trace: string[];
+}
+
+const zeroTokens = (): Record<TokenId, number> => Object.fromEntries(TOKEN_OF_WORLD.map((t) => [t, 0])) as Record<TokenId, number>;
+function newShop(): Shop {
+  return { r: 0, earned: zeroTokens(), spent: Object.fromEntries(TOKEN_OF_WORLD.map((t) => [t, { portal: 0, card: 0, cap: 0, other: 0 }])) as Shop['spent'], portalAt: {}, trace: [] };
+}
+const sumTokens = (rec: Record<TokenId, number>) => TOKEN_OF_WORLD.reduce((a, t) => a + rec[t], 0);
+const spentTotal = (shop: Shop) => TOKEN_OF_WORLD.reduce((a, t) => a + Object.values(shop.spent[t]).reduce((x, y) => x + y, 0), 0);
+
+/** The token a node is priced in, or null for cash. Handles M1 (currency = TokenId) and M2 (currency 'token' + token). */
+function tokenOf(n: UpgradeNode): TokenId | null {
+  const c = n.currency as string;
+  if (c === 'cash') return null;
+  if (c === 'token') return (n as UpgradeNode & { token?: TokenId }).token ?? null;
+  return c as TokenId;
+}
+
+/** Cash price of the next base of an owned card, or null when none is buyable now. */
+function baseCost(save: SaveData, id: string): number | null {
+  const def = cardById(id);
+  const st = save.cards[id];
+  if (!def || def.stub || !st || st.level >= 3) return null;
+  if (st.level === 2 && def.forks.length > 0 && st.fork === null) return null;
+  return def.base[st.level].cost(st.level as 0 | 1 | 2);
+}
+
+function greedyBuy(save: SaveData, shop?: Shop): { bought: number; cash: number } {
   const out = { bought: 0, cash: 0 };
+  // Cash phase.
+  const skip = new Set<string>();
   for (;;) {
-    const ok = nodesFor(save).filter((n) => buyState(save, n) === 'ok');
-    if (!ok.length) return out;
-    ok.sort((a, b) => (nextCost(save, a) ?? 0) - (nextCost(save, b) ?? 0) || a.id.localeCompare(b.id));
+    const cands: { id: string; cost: number; go: () => boolean }[] = [];
+    for (const n of nodesFor(save)) {
+      if (tokenOf(n) !== null || skip.has(n.id) || buyState(save, n) !== 'ok') continue;
+      cands.push({ id: n.id, cost: n.cost(nodeLevel(save, n.id)), go: () => buy(save, n) });
+    }
+    for (const c of CARDS) {
+      const cost = skip.has('card:' + c.id) ? null : baseCost(save, c.id);
+      if (cost !== null && cost <= save.cash) cands.push({ id: 'card:' + c.id, cost, go: () => buyBase(save, c.id) });
+    }
+    if (!cands.length) break;
+    cands.sort((a, b) => a.cost - b.cost || a.id.localeCompare(b.id));
     const c0 = save.cash;
-    buy(save, ok[0]);
+    if (!cands[0].go()) {
+      skip.add(cands[0].id);
+      continue;
+    }
     out.bought++;
     out.cash += c0 - save.cash;
   }
+  // Token phase.
+  const note = (tok: TokenId, kind: SpendKind, id: string, t0: number) => {
+    const d = t0 - save.tokens[tok];
+    if (shop) {
+      shop.spent[tok][kind] += d;
+      if (PROG_TOKENS) shop.trace.push(`r${shop.r} -${d}${tok[0]} ${id}`);
+    }
+    out.bought++;
+  };
+  for (let w = 1; w <= TOKEN_OF_WORLD.length; w++) {
+    const tok = TOKEN_OF_WORLD[w - 1];
+    while (save.tokens[tok] > 0) {
+      const t0 = save.tokens[tok];
+      const portal = nodeById(save, `portal_w${w + 1}`);
+      if (portal && buyState(save, portal) === 'ok' && buy(save, portal)) {
+        if (shop) shop.portalAt[w + 1] ??= shop.r;
+        note(tok, 'portal', portal.id, t0);
+        continue;
+      }
+      const card = PROG_CARDS ? CARD_PRIORITY[w - 1].find((id) => cardById(id)?.world === w && cardBuyState(save, id) === 'open') : undefined;
+      if (card && buyCard(save, card)) {
+        note(tok, 'card', card, t0);
+        continue;
+      }
+      const cap = nodeById(save, `cap_w${w}`);
+      if (cap && buyState(save, cap) === 'ok' && buy(save, cap)) {
+        note(tok, 'cap', cap.id, t0);
+        continue;
+      }
+      if (CARDS.length === 0) {
+        // Pre-M2 tree: gear lives on token nodes. Cheapest first; skipped when PROG_CARDS=0.
+        const ok = PROG_CARDS ? nodesFor(save).filter((n) => tokenOf(n) === tok && buyState(save, n) === 'ok') : [];
+        ok.sort((a, b) => a.cost(nodeLevel(save, a.id)) - b.cost(nodeLevel(save, b.id)) || a.id.localeCompare(b.id));
+        if (ok.length && buy(save, ok[0])) {
+          note(tok, 'other', ok[0].id, t0);
+          continue;
+        }
+      }
+      break;
+    }
+  }
+  return out;
 }
 
 /** Nodes still worth buying (not maxed, not hidden/locked by world). */
@@ -525,32 +655,50 @@ interface StageLog {
   kit: string;
   /** Runs ending at stage wave 1..4 (index 0..3) without the boss kill. */
   ends: number[];
+  /** Tokens banked (all kinds, cumulative) and spent at arrival. */
+  tokIn: number;
+  tokOut: number;
+  /** Cards owned at arrival. */
+  cards: number;
+  /** Run index of the run that brought the bot here (0 for w1s1). */
+  arriveR: number;
+  /** dmg x hp of the clearing run (0 if never cleared). */
+  clearDH: number;
 }
 
 interface ProgLog {
   stages: StageLog[];
   earned60: number;
   spent60: number;
+  shop: Shop;
 }
 
 function progression(seed: number, bot: ProgBot): ProgLog {
   const save = newSave();
   save.current = stageId(1, 1);
   save.unlocked = 0;
-  const log: ProgLog = { stages: [], earned60: 0, spent60: 0 };
+  const shop = newShop();
+  const log: ProgLog = { stages: [], earned60: 0, spent60: 0, shop };
   let cur: StageLog | null = null;
   let arrivalBuys = 0;
+  let arriveR = 0;
   for (let r = 1; r <= PROG_RUNS; r++) {
+    shop.r = r;
     const n = globalIndex(save.current);
     chooseLoadout(save);
+    const st = diagStats(save, buildStats(save));
     if (!cur) {
-      const st = diagStats(save, buildStats(save));
-      cur = { runs: 0, cleared: false, dmg: st.damage, hp: st.maxHp, open: openNodes(save), secs: [], earlyBuys: arrivalBuys, kit: kitName(st), ends: [0, 0, 0, 0] };
+      cur = {
+        runs: 0, cleared: false, dmg: st.damage, hp: st.maxHp, open: openNodes(save), secs: [], earlyBuys: arrivalBuys, kit: kitName(st), ends: [0, 0, 0, 0],
+        tokIn: sumTokens(shop.earned), tokOut: spentTotal(shop), cards: Object.keys(save.cards).length, arriveR, clearDH: 0,
+      };
       log.stages[n] = cur;
       if (ENV.PROG_DUMP === save.current) console.log('STATS', JSON.stringify(st));
     }
-    const res = playForResult(save.current, seed * 1000 + r, diagStats(save, buildStats(save)), bot, save.bestWave[save.current] ?? 0);
-    bankRun(save, res);
+    const res = playForResult(save.current, seed * 1000 + r, st, bot, save.bestWave[save.current] ?? 0);
+    const banked = bankRun(save, res);
+    shop.earned[banked.tokenId] += banked.tokens;
+    if (PROG_TOKENS && banked.tokens > 0) shop.trace.push(`r${r} ${save.current} +${banked.tokens}${banked.tokenId[0]}`);
     if (r <= 60) log.earned60 += res.cash;
     cur.runs++;
     cur.secs.push(res.seconds);
@@ -558,16 +706,19 @@ function progression(seed: number, bot: ProgBot): ProgLog {
     const onStage = cur;
     if (res.bossKilled) {
       cur.cleared = true;
+      cur.clearDH = st.damage * st.maxHp;
       cur = null;
+      arriveR = r;
       if (n + 1 >= SMOKE_STAGES) break;
       save.current = nextStageId(save.current);
       save.unlocked = Math.max(save.unlocked, globalIndex(save.current));
     }
-    const b = greedyBuy(save);
+    const b = greedyBuy(save, shop);
     if (r <= 60) log.spent60 += b.cash;
     if (onStage.runs <= BUY_WINDOW && !onStage.cleared) onStage.earlyBuys += b.bought;
     arrivalBuys = cur ? 0 : b.bought; // buys right after a clear count for the next stage's arrival
   }
+  if (PROG_TOKENS) console.log(`tokens seed ${seed} (${bot}): ${shop.trace.join(', ')}`);
   return log;
 }
 
@@ -599,6 +750,16 @@ function runBot(bot: ProgBot): BotReport {
     rep.worst[n] = rtc.length ? Math.max(...rtc) : NaN;
     // Dead zone: a seed that stayed BUY_WINDOW+ runs on the stage without being able to buy anything.
     rep.dead[n] = logs.filter((l) => l.runs > BUY_WINDOW && l.earlyBuys === 0).length;
+    // Portal timing (slot 1 of worlds >= 2): runs from arrival (the slot-4 kill run) to buying this island's portal.
+    const world = Math.floor(n / 4) + 1;
+    let portal = '';
+    if (n % 4 === 0 && world >= 2 && world <= 6) {
+      const offs = all.filter((l) => l.stages[n]).map((l) => (l.shop.portalAt[world] !== undefined ? l.shop.portalAt[world] - l.stages[n].arriveR : NaN));
+      const got = offs.filter((x) => !Number.isNaN(x));
+      const never = offs.length - got.length;
+      portal = got.length ? `${pct(got, 0.5)}${never ? ` (${never} -)` : ''}` : '-';
+    }
+    const arrive = logs.filter((l) => l.clearDH > 0).map((l) => (l.dmg * l.hp) / l.clearDH);
     rep.table[`${n} ${st.id}`] = {
       mods: st.modifiers.join(',') || '-',
       reached: logs.length,
@@ -607,15 +768,29 @@ function runBot(bot: ProgBot): BotReport {
       'rtc min-max': rtc.length ? `${Math.min(...rtc)}-${Math.max(...rtc)}` : '-',
       'run s median': f1(pct(logs.flatMap((l) => l.secs), 0.5)),
       'dmg/hp arrive': `${f1(mean(logs.map((l) => l.dmg)))}/${f1(mean(logs.map((l) => l.hp)))}`,
+      'arrive %': arrive.length ? Math.round(100 * pct(arrive, 0.5)) : '-',
       'open nodes': f1(mean(logs.map((l) => l.open))),
+      tokens: `${f1(mean(logs.map((l) => l.tokIn)))}/${f1(mean(logs.map((l) => l.tokOut)))}`,
+      cards: f1(mean(logs.map((l) => l.cards))),
+      'portal run': portal,
       'dead seeds': rep.dead[n],
       'lost at w1-4': [0, 1, 2, 3].map((i) => logs.reduce((a, l) => a + l.ends[i], 0)).join('/'),
       kit: topKits(logs.map((l) => l.kit)),
     };
   }
-  console.log(`Multi-stage progression, ${bot} bot, gear ${PROG_GEAR ? 'on' : 'off'} (${PROG_SEEDS} seeds x up to ${PROG_RUNS} runs; rtc = runs to clear; stages 12+ smoke only)`);
+  console.log(`Multi-stage progression, ${bot} bot, gear ${PROG_GEAR ? 'on' : 'off'}, cards ${PROG_CARDS ? (CARDS.length ? 'on' : 'none in catalogue') : 'off'} (${PROG_SEEDS} seeds x up to ${PROG_RUNS} runs; rtc = runs to clear; stages 12+ smoke only)`);
   console.table(rep.table);
   console.log(`Cash by run 60 (${bot}, mean over seeds): earned ${Math.round(rep.earned)}, spent on the tree ${Math.round(rep.spent)} (${Math.round((100 * rep.spent) / Math.max(1, rep.earned))} %)`);
+  // Token budget per world over the whole progression (mean over seeds; min-max of earned).
+  const tok: Record<string, Record<string, string | number>> = {};
+  for (const t of TOKEN_OF_WORLD) {
+    const earned = all.map((l) => l.shop.earned[t]);
+    if (!earned.some((x) => x > 0)) continue;
+    const sp = (k: SpendKind) => f1(mean(all.map((l) => l.shop.spent[t][k])));
+    tok[t] = { earned: f1(mean(earned)), 'min-max': `${Math.min(...earned)}-${Math.max(...earned)}`, portal: sp('portal'), cards: sp('card'), cap: sp('cap'), other: sp('other'), left: f1(mean(all.map((l) => l.shop.earned[t] - Object.values(l.shop.spent[t]).reduce((a, b) => a + b, 0)))) };
+  }
+  console.log(`Token budget per world (${bot}, mean over seeds, whole progression)`);
+  console.table(tok);
   return rep;
 }
 
@@ -625,14 +800,14 @@ describe('multi-stage progression bot (greedy cheapest-node shopper)', () => {
     const noisy = PROG_ONLY === 'perfect' ? empty : runBot('noisy');
     const perfect = PROG_ONLY === 'noisy' ? empty : runBot('perfect');
     // Diagnostic runs (forced loadouts, gear off, one bot) only report.
-    if (DIAG || !PROG_GEAR || PROG_ONLY) return;
+    if (DIAG || !PROG_GEAR || !PROG_CARDS || PROG_ONLY) return;
     const fails: string[] = [];
     for (let n = 0; n < GATE_STAGES; n++) {
       const id = idFromIndex(n);
       const m = noisy.med[n];
       // World openers (slot 1 of world >= 2) are breathers after a slot-4 grind: lower bound 2 (DECISIONS: Balance).
       const opener = n >= 4 && n % 4 === 0;
-      const lo = GATE_WAIVER[n] ?? (opener ? 2 : GATE[0]);
+      const lo = opener ? 2 : GATE[0];
       if (!(m >= lo && m <= GATE[1])) fails.push(`noisy ${id}: median ${m}`);
       if (n === GATE_STAGES - 1 && !(noisy.worst[n] <= LAST_STAGE_MAX)) fails.push(`noisy ${id}: worst ${noisy.worst[n]}`);
       if ((noisy.dead[n] ?? 0) > 0) fails.push(`noisy ${id}: ${noisy.dead[n]} seeds could not buy anything in ${BUY_WINDOW} runs`);

@@ -2,7 +2,7 @@ import { PALETTE } from '../render/palette';
 import { getFeltBg } from '../render/renderer';
 import { drawSprite } from '../render/sprite-cache';
 import { drawText } from '../render/text';
-import { Buttons, anyAffordable, currentToken, drawBuyDot, drawTokenCount } from './widgets';
+import { Buttons, anyAffordable, anyCardAffordable, drawBuyDot, drawTokenStrip } from './widgets';
 import type { App, Screen } from './app';
 
 const P = PALETTE;
@@ -71,15 +71,16 @@ export class TitleScreen implements Screen {
     const pulse = Math.floor(now * 2) % 2;
     this.buttons.set([
       { id: 'play', x: 40, y: 258, w: 100, h: 28, label: 'PLAY', scale: 3, style: pulse ? 'green' : 'green' },
-      { id: 'shop', x: 16, y: 292, w: 74, h: 20, label: 'UPGRADES', style: 'blue' },
-      { id: 'settings', x: 94, y: 292, w: 70, h: 20, label: 'SETTINGS', style: 'gray' },
+      { id: 'shop', x: 10, y: 292, w: 80, h: 20, label: 'UPGRADES', style: 'blue' },
+      { id: 'gallery', x: 94, y: 292, w: 70, h: 20, label: 'GEAR', style: 'gold' },
+      { id: 'settings', x: 154, y: 1, w: 22, h: 16, label: 'SET', style: 'gray' },
     ]);
     this.buttons.draw(ctx);
     if (anyAffordable(this.app)) drawBuyDot(ctx, this.buttons.list[1]);
-    const wt = currentToken(this.app.save);
+    if (anyCardAffordable(this.app.save)) drawBuyDot(ctx, this.buttons.list[2]);
     drawSprite(ctx, 'coin', 9, 8);
     drawText(ctx, String(Math.floor(this.app.save.cash)), 16, 5, { color: P.Y, shadow: P['0'] });
-    drawTokenCount(ctx, wt, this.app.save.tokens?.[wt] ?? 0, 62, 8);
+    drawTokenStrip(ctx, this.app.save);
     drawText(ctx, 'V0.1', 4, 314, { color: P['2'] });
   }
 
@@ -92,6 +93,7 @@ export class TitleScreen implements Screen {
     if (id) this.app.sfx.ui();
     if (id === 'play') this.app.startRun();
     else if (id === 'shop') this.app.go('shop');
+    else if (id === 'gallery') this.app.go('gallery');
     else if (id === 'settings') {
       this.app.settingsFrom = 'title';
       this.app.go('settings');

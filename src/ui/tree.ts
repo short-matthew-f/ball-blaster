@@ -1,22 +1,17 @@
 // The One Tree: pan/zoom web of upgrade nodes on a virtual 640x640 canvas, bottom inspect panel, path highlight.
-import type { BallType, RunStats, TokenId, UpgradeNode } from '../core/types';
+import type { RunStats, TokenId, UpgradeNode } from '../core/types';
 import { BASE_STATS } from '../core/tuning';
 import { WORLDS, makeStage } from '../core/worlds';
-import { ROOT_ID, gearOwned, worldCleared, buy, buyState, distanceFromOwned, nextCost, nodeLevel, nodesFor, pathToOwned } from '../meta/index';
+import { ROOT_ID, buy, buyState, distanceFromOwned, nextCost, nodeLevel, nodesFor, pathToOwned } from '../meta/index';
 import { PALETTE } from '../render/palette';
 import { getMenuBg } from '../render/renderer';
 import { drawSprite, spriteSize } from '../render/sprite-cache';
 import { drawText, textWidth, wrapText } from '../render/text';
-import { Buttons, currentToken, drawPanel, drawTokenCount } from './widgets';
+import { Buttons, TOKEN_COLOR, drawPanel, drawTokenStrip } from './widgets';
 import type { Button } from './widgets';
 import type { App, Screen } from './app';
 
 const P = PALETTE;
-const BALL_NODES: Record<string, BallType> = { ballHeavy: 'heavy', ballLight: 'light', ballSticky: 'sticky' };
-function ballOf(node: UpgradeNode): BallType | null {
-  if (node.id === ROOT_ID) return 'standard';
-  return BALL_NODES[node.id] ?? null;
-}
 type BuyState = ReturnType<typeof buyState>;
 
 const VIEW_TOP = 28;
@@ -32,8 +27,21 @@ interface Vis {
   st: BuyState;
   lvl: number;
   sil: boolean; // dim silhouette, no text
+  beat: string; // unreachable portal: world to beat ('' otherwise)
   sx: number;
   sy: number;
+}
+
+/** Stages to clear before a portal can be bought, or 0 for non-portals. */
+function portalNeed(n: UpgradeNode): number {
+  const w = /^portal_w(\d+)$/.exec(n.id);
+  if (w) return 4 * (Number(w[1]) - 1);
+  const l = /^portal_l(\d+)$/.exec(n.id);
+  return l ? 24 * Number(l[1]) : 0;
+}
+/** The world whose boss (slot 4) gates a portal. */
+function beatWorld(need: number): string {
+  return (WORLDS[Math.floor((need - 1) / 4) % WORLDS.length]?.name ?? '').toUpperCase();
 }
 
 function fmtNum(v: number, pct: boolean): string {
@@ -65,7 +73,7 @@ function describe(node: UpgradeNode, level: number): string {
 /** Concentric-layer shape fill. Layer L is inset by L; kind picks the per-row horizontal inset. */
 function insetFor(kind: UpgradeNode['kind'], r: number, s: number): number {
   const h = (s - 1) / 2;
-  if (kind === 'keystone') return Math.abs(r - h);
+  if (kind === 'keystone' || kind === 'portal') return Math.abs(r - h);
   if (kind === 'counter') return Math.max(0, (s > 15 ? 3 : 1) - Math.min(r, s - 1 - r));
   return 0;
 }
@@ -97,7 +105,6 @@ export class TreeScreen implements Screen {
   private drag: { x0: number; y0: number; cx0: number; cy0: number; moved: boolean; prevSel: string | null; picked: boolean } | null = null;
   private toast = '';
   private toastUntil = 0;
-  private gearHintUntil = 0;
   private now = 0;
   private vis: Vis[] = [];
   private bounds = { x0: 0, y0: 0, x1: 640, y1: 640 };
@@ -108,10 +115,21 @@ export class TreeScreen implements Screen {
     this.drag = null;
     this.zoom = 1;
     const nodes = nodesFor(this.app.save);
-    const target = nodes.find((n) => n.id === this.sel) ?? nodes.find((n) => n.id === ROOT_ID);
     if (!nodes.some((n) => n.id === this.sel)) this.sel = null;
-    this.camX = target?.x ?? 320;
-    this.camY = target?.y ?? 320;
+    this.recentre();
+  }
+
+  /** Camera to the hub of the frontier island: the highest owned portal, else the hero. */
+  private recentre(): void {
+    const save = this.app.save;
+    const nodes = nodesFor(save);
+    let hub = nodes.find((n) => n.id === ROOT_ID);
+    let best = 1;
+    for (const n of nodes) {
+      if (n.kind === 'portal' && nodeLevel(save, n.id) > 0 && (n.island ?? 0) > best) { best = n.island ?? 0; hub = n; }
+    }
+    this.camX = hub?.x ?? 320;
+    this.camY = hub?.y ?? 320;
     this.clamp();
   }
 
@@ -136,24 +154,26 @@ export class TreeScreen implements Screen {
     const out: Vis[] = [];
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     const all = nodesFor(save);
-    const entry = new Map<number, UpgradeNode>();
-    for (const n of all) if (n.graft && !worldCleared(save, n.graft)) {
-      const e = entry.get(n.graft);
-      if (!e || n.ring < e.ring) entry.set(n.graft, n);
+    // islands behind a portal that cannot be bought yet stay fog (only the portal itself shows)
+    const fog = new Set<number>();
+    const beats = new Map<string, string>();
+    for (const n of all) {
+      const need = portalNeed(n);
+      if (need > 0 && nodeLevel(save, n.id) === 0 && save.unlocked < need) {
+        fog.add(n.island ?? -1);
+        beats.set(n.id, beatWorld(need));
+      }
     }
     for (const n of all) {
       const st = buyState(save, n);
       let sil = false;
       if (st === 'hidden') continue;
       const lvl0 = nodeLevel(save, n.id) === 0;
-      if (n.graft && !worldCleared(save, n.graft)) {
-        if (entry.get(n.graft) !== n) {
-          if (distanceFromOwned(save, n.id) !== 2) continue;
-          sil = true;
-        } else if (distanceFromOwned(save, n.id) > 2) continue;
-      } else if (st === 'locked' && lvl0 && distanceFromOwned(save, n.id) >= 2) sil = true;
+      const beat = lvl0 ? beats.get(n.id) ?? '' : '';
+      if (n.kind !== 'portal' && n.island !== undefined && fog.has(n.island) && lvl0) continue;
+      if (!beat && st === 'locked' && lvl0 && distanceFromOwned(save, n.id) >= 2) sil = true;
       x0 = Math.min(x0, n.x); y0 = Math.min(y0, n.y); x1 = Math.max(x1, n.x); y1 = Math.max(y1, n.y);
-      out.push({ n, st, lvl: n.id === ROOT_ID ? 1 : nodeLevel(save, n.id), sil, sx: 0, sy: 0 });
+      out.push({ n, st, lvl: n.id === ROOT_ID ? 1 : nodeLevel(save, n.id), sil, beat, sx: 0, sy: 0 });
     }
     if (out.length) this.bounds = { x0, y0, x1, y1 };
     this.clamp();
@@ -176,6 +196,7 @@ export class TreeScreen implements Screen {
 
   private frameSize(kind: UpgradeNode['kind']): number {
     const base = this.zoom === 1 ? 23 : 11;
+    if (kind === 'portal') return base + 4;
     return kind === 'capstone' ? base + (this.zoom === 1 ? 4 : 2) : base;
   }
 
@@ -198,9 +219,8 @@ export class TreeScreen implements Screen {
     // header
     drawSprite(ctx, 'coin', 9, 8);
     drawText(ctx, String(Math.floor(save.cash)), 16, 5, { color: P.Y, shadow: P['0'] });
-    const wt = currentToken(save);
-    drawTokenCount(ctx, wt, save.tokens?.[wt] ?? 0, 82, 8);
-    btns.push({ id: 'settings', x: 144, y: 1, w: 32, h: 16, label: 'SET', style: 'gray' });
+    drawTokenStrip(ctx, save);
+    btns.push({ id: 'settings', x: 154, y: 1, w: 22, h: 16, label: 'SET', style: 'gray' });
     let stageName = '';
     try { stageName = makeStage(save.current).name.toUpperCase(); } catch { /* ignore */ }
     drawText(ctx, stageName, 90, 19, { align: 'center', color: P['3'], shadow: P['0'] });
@@ -236,11 +256,10 @@ export class TreeScreen implements Screen {
     }
 
     // nodes
-    const stubSeen = new Set<number>();
     const pulse = 0.35 + 0.25 * Math.sin(now * 5);
     for (const v of this.vis) {
       if (v.sx < -20 || v.sx > 200 || v.sy < VIEW_TOP - 20 || v.sy > VIEW_BOT + 20) continue;
-      this.drawNode(ctx, v, path.has(v.n.id), pulse, stubSeen);
+      this.drawNode(ctx, v, path.has(v.n.id), pulse);
     }
     ctx.restore();
     ctx.fillStyle = P['2'];
@@ -266,23 +285,18 @@ export class TreeScreen implements Screen {
       const lines = wrapText(describe(node, lvl), 27).slice(0, 2);
       lines.forEach((l, i) => drawText(ctx, l, 7, PANEL_Y + 17 + i * 7, { color: P['4'] }));
       let hint = '';
-      if (st === 'locked') {
-        const w = node.graft ? WORLDS.find((x) => x.index === node.graft) : undefined;
-        hint = w ? `REACH ${w.name.toUpperCase()}` : 'REQUIRES MORE';
-      }
+      if (sv.beat) hint = `BEAT ${sv.beat} 4`;
+      else if (st === 'locked') hint = node.kind === 'capstone' ? 'MAX THE ISLAND FIRST' : 'REQUIRES MORE';
       const cost = nextCost(save, node);
       if (cost !== null) {
         const have = gem ? save.tokens?.[node.currency as TokenId] ?? 0 : save.cash;
         drawSprite(ctx, gem ? `token_${node.currency}` : 'coin', 11, PANEL_Y + 37);
-        drawText(ctx, String(cost), 18, PANEL_Y + 34, { color: have >= cost ? (gem ? P['5'] : P.Y) : P.R, shadow: P['0'] });
+        drawText(ctx, String(cost), 18, PANEL_Y + 34, { color: have >= cost ? P.Y : P.R, shadow: P['0'] });
       }
       if (hint) drawText(ctx, hint, 7, PANEL_Y + 38 + 0, { color: P.p });
-      const bt = ballOf(node);
       if (node.id === ROOT_ID) {
         drawText(ctx, 'STANDARD BALL', 7, PANEL_Y + 38, { color: P['3'] });
-      } else if (bt && lvl >= 1) {
-        drawText(ctx, save.loadout.ball === bt ? 'EQUIPPED' : 'IN LOADOUT', 7, PANEL_Y + 38, { color: P['4'] });
-      } else if (!(node.id === ROOT_ID)) {
+      } else {
         const label = st === 'maxed' ? 'MAXED' : st === 'locked' ? 'LOCKED' : st === 'poor' ? 'NEED MORE' : 'BUY';
         btns.push({ id: 'buy', x: 100, y: PANEL_Y + 28, w: 74, h: 16, label, scale: st === 'ok' || st === 'maxed' ? 2 : 1, style: 'gold', disabled: st !== 'ok' });
       }
@@ -292,36 +306,36 @@ export class TreeScreen implements Screen {
 
     btns.push({ id: 'menu', x: 4, y: 297, w: 30, h: 20, label: 'MENU', style: 'gray' });
     btns.push({ id: 'map', x: 36, y: 297, w: 28, h: 20, label: 'MAP', style: 'blue' });
-    btns.push({ id: 'loadout', x: 66, y: 297, w: 52, h: 20, label: 'LOADOUT', style: 'gold' });
-    btns.push({ id: 'start', x: 120, y: 297, w: 56, h: 20, label: 'START RUN', style: 'green' });
+    btns.push({ id: 'gallery', x: 66, y: 297, w: 40, h: 20, label: 'GEAR', style: 'gold' });
+    btns.push({ id: 'start', x: 108, y: 297, w: 68, h: 20, label: 'START RUN', style: 'green' });
     this.buttons.set(btns);
     this.buttons.draw(ctx);
-    if (now < this.gearHintUntil) {
-      ctx.fillStyle = P['0'];
-      ctx.globalAlpha = 0.85;
-      ctx.fillRect(10, VIEW_BOT - 38, 160, 14);
-      ctx.globalAlpha = 1;
-      drawText(ctx, 'EQUIP IT IN LOADOUT', 90, VIEW_BOT - 34, { align: 'center', color: Math.floor(now * 3) % 2 ? P.Y : P['5'] });
-    }
     if (now < this.toastUntil) drawText(ctx, this.toast, 90, VIEW_BOT - 9, { align: 'center', color: P.Y, shadow: P['0'] });
   }
 
-  private drawNode(ctx: CanvasRenderingContext2D, v: Vis, onPath: boolean, pulse: number, stubSeen: Set<number>): void {
+  private drawNode(ctx: CanvasRenderingContext2D, v: Vis, onPath: boolean, pulse: number): void {
     const { n, st, lvl } = v;
     const big = this.zoom === 1;
     const s = this.frameSize(n.kind);
     const cx = v.sx, cy = v.sy;
-    if (v.sil) {
+    if (v.sil || v.beat) {
       fillLayer(ctx, n.kind, cx, cy, s, 0, P['0']);
-      fillLayer(ctx, n.kind, cx, cy, s, 1, P['1']);
+      fillLayer(ctx, n.kind, cx, cy, s, 1, v.beat ? P['2'] : P['1']);
+      if (v.beat) {
+        fillLayer(ctx, n.kind, cx, cy, s, 2, P['0']);
+        if (big) drawText(ctx, `BEAT ${v.beat} 4`, cx, cy + Math.floor(s / 2) + 3, { align: 'center', color: P.p, shadow: P['0'] });
+      }
       return;
     }
     const owned = lvl > 0;
+    const portal = n.kind === 'portal';
     let border = P['2'];
     if (st === 'maxed') border = P.Y;
     else if (owned) border = P.B;
     else if (st === 'ok') border = P['4'];
     else if (st === 'poor') border = P['3'];
+    if (portal && !owned && st !== 'locked') border = TOKEN_COLOR[n.currency as TokenId] ?? border;
+    else if (portal && owned) border = TOKEN_COLOR[n.currency as TokenId] ?? border;
     if (this.sel === n.id && Math.floor(this.now * 4) % 2 === 0) border = P['5'];
     if (st === 'ok') {
       ctx.globalAlpha = pulse;
@@ -339,19 +353,13 @@ export class TreeScreen implements Screen {
     if (n.kind === 'capstone' && big) fillLayer(ctx, n.kind, cx, cy, s, 2, P.Y === border ? P.y : P['0']);
     const fillL = n.kind === 'capstone' && big ? 3 : 2;
     fillLayer(ctx, n.kind, cx, cy, s, fillL, locked ? P['0'] : n.currency !== 'cash' ? P.g : P['1']);
-    const bt = ballOf(n);
-    if (bt && this.app.save.loadout.ball === bt) {
-      ctx.fillStyle = P['0'];
-      ctx.fillRect(cx + s / 2 - 5, cy - s / 2 - 1, 7, 8);
-      drawText(ctx, 'E', cx + s / 2 - 4, cy - s / 2, { color: P.Y });
-    }
     if (!big) return;
     // icon: 2x when it fits a plain square frame
     const isz = spriteSize(n.icon);
     const inner = s - 2 * fillL;
-    const two = n.kind !== 'keystone' && isz.w * 2 <= inner - 2 && isz.h * 2 <= inner - 2;
+    const two = n.kind !== 'keystone' && n.kind !== 'portal' && isz.w * 2 <= inner - 2 && isz.h * 2 <= inner - 2;
     drawSprite(ctx, n.icon, cx, cy, { scale: two ? 2 : 1, alpha: locked ? 0.35 : 1 });
-    if (locked) drawSprite(ctx, 'icon_lock', cx + s / 2 - 4, cy + s / 2 - 4);
+    if (locked && n.kind !== 'capstone' && !portal) drawSprite(ctx, 'icon_lock', cx + s / 2 - 4, cy + s / 2 - 4);
     // pips
     const by = cy + Math.floor(s / 2) + 3;
     let ty = by;
@@ -372,26 +380,19 @@ export class TreeScreen implements Screen {
       }
       ty = by + 5;
     }
-    // cost / MAX / graft stub text
-    if (n.graft && locked && lvl === 0) {
-      if (!stubSeen.has(n.graft)) {
-        stubSeen.add(n.graft);
-        const w = WORLDS.find((x) => x.index === n.graft);
-        if (w) drawText(ctx, `REACH ${w.name.toUpperCase()}`, cx, ty, { align: 'center', color: P.p, shadow: P['0'] });
-      }
-      return;
-    }
+    // cost / MAX text
     const cost = nextCost(this.app.save, n);
     if (n.id === ROOT_ID) return;
     if (cost === null) {
-      drawText(ctx, 'MAX', cx, ty, { align: 'center', color: P.Y, shadow: P['0'] });
+      if (!portal) drawText(ctx, 'MAX', cx, ty, { align: 'center', color: P.Y, shadow: P['0'] });
     } else {
       const txt = String(cost);
       const w = textWidth(txt) + 7;
       const x0 = Math.round(cx - w / 2);
-      drawSprite(ctx, n.currency !== 'cash' ? `token_${n.currency}` : 'coin', x0 + 2, ty + 3);
-      const short = st !== 'ok' && st !== 'locked' && (n.currency !== 'cash' ? (this.app.save.tokens?.[n.currency as TokenId] ?? 0) : this.app.save.cash) < cost;
-      drawText(ctx, txt, x0 + 7, ty, { color: st === 'ok' ? P.Y : short ? P.R : P['3'], shadow: P['0'] });
+      const tok = n.currency !== 'cash';
+      drawSprite(ctx, tok ? `token_${n.currency}` : 'coin', x0 + 2, ty + 3);
+      const have = tok ? (this.app.save.tokens?.[n.currency as TokenId] ?? 0) : this.app.save.cash;
+      drawText(ctx, txt, x0 + 7, ty, { color: tok ? (have < cost ? P.R : st === 'ok' ? P.Y : P['3']) : st === 'ok' ? P.Y : have < cost && st !== 'locked' ? P.R : P['3'], shadow: P['0'] });
     }
   }
 
@@ -438,10 +439,7 @@ export class TreeScreen implements Screen {
       this.zoom = this.zoom === 1 ? 0.5 : 1;
       this.clamp();
     } else if (id === 'recentre') {
-      const root = nodesFor(save).find((n) => n.id === ROOT_ID);
-      this.camX = root?.x ?? 320;
-      this.camY = root?.y ?? 320;
-      this.clamp();
+      this.recentre();
     } else if (id === 'buy') {
       const node = nodesFor(save).find((n) => n.id === this.sel);
       if (node && buy(save, node)) {
@@ -449,16 +447,11 @@ export class TreeScreen implements Screen {
         app.sfx.buy();
         this.toast = 'PURCHASED!';
         this.toastUntil = this.now + 1;
-        if (node.id !== ROOT_ID && gearOwned(save, node.id) && !save.hints.gearTaught) {
-          save.hints.gearTaught = true;
-          app.persist();
-          this.gearHintUntil = this.now + 4;
-        }
       }
     } else if (id === 'start') app.startRun();
     else if (id === 'menu') app.go('title');
     else if (id === 'map') app.go('map');
-    else if (id === 'loadout') app.go('loadout');
+    else if (id === 'gallery') app.go('gallery');
     else if (id === 'settings') {
       app.settingsFrom = 'shop';
       app.go('settings');

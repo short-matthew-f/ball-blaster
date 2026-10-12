@@ -75,3 +75,21 @@ export function v3CardRefund(id: string, level: number): number {
   for (let l = 4; l < L; l++) sum += def[1](l);
   return sum;
 }
+
+/** v3/M1 tree nodes dropped by the v0.6 islands, with the curves they were bought at (refunded in cash). [old max, cost(step)] */
+export const V6_DROPPED: Record<string, [number, (l: number) => number]> = {
+  thickSkin: [2, geo(50, 1.8)],
+  comboLockdown: [4, geo(120, 1.8)],
+  g1_counter: [3, geo(100, 1.5)],
+  g1_cash: [5, geo(80, 1.5)],
+};
+
+/** Cash paid for `level` steps of a dropped v3/M1 node. */
+export function v6DropRefund(id: string, level: number): number {
+  const def = V6_DROPPED[id];
+  if (!def || !(level > 0)) return 0;
+  const n = Math.min(Math.floor(level), def[0]);
+  let sum = 0;
+  for (let l = 0; l < n; l++) sum += def[1](l);
+  return sum;
+}

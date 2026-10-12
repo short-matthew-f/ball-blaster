@@ -1,6 +1,8 @@
 import type { SaveData, UpgradeNode } from '../core/types';
 import { nodeLevel } from './level';
-import { CORE_NODES, FIRST_LOOP_NODES, GRAFT_NODES, ROOT_ID, loopNodes } from './upgrades';
+import { ISLAND_NODES, ROOT_ID, loopNodes, treeBounds } from './upgrades';
+
+export { treeBounds };
 
 const LOOP_LEN = 24;
 
@@ -12,13 +14,13 @@ export function currentLoop(save: SaveData): number {
 
 const setCache = new Map<number, UpgradeNode[]>();
 
-/** Core + all grafts (locked ones included) + loop rings up to the current loop + 1. */
+/** Islands 1..6 always (unreachable portals included) + loop portals/rings up to the current loop + 1. */
 export function nodesFor(save: SaveData): UpgradeNode[] {
   const top = currentLoop(save) + 1;
   let r = setCache.get(top);
   if (!r) {
-    r = [...CORE_NODES, ...GRAFT_NODES, ...FIRST_LOOP_NODES];
-    for (let l = 2; l <= top; l++) r.push(...loopNodes(l));
+    r = [...ISLAND_NODES];
+    for (let l = 1; l <= top; l++) r.push(...loopNodes(l));
     setCache.set(top, r);
   }
   return r;

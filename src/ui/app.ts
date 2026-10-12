@@ -2,7 +2,7 @@
 import type { MetaApi, RunResult, SaveData, SimApi, StageId, TokenId } from '../core/types';
 import type { Sfx } from '../audio/sfx';
 
-export type ScreenId = 'title' | 'run' | 'summary' | 'shop' | 'map' | 'settings' | 'loadout';
+export type ScreenId = 'title' | 'run' | 'summary' | 'shop' | 'map' | 'settings' | 'gallery';
 
 export interface SummaryInfo {
   result: RunResult;

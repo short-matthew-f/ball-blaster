@@ -1,42 +1,80 @@
 import type { RunResult, SaveData, StageId, TokenId, UpgradeNode } from '../core/types';
 import { globalIndex, nextStageId } from '../core/worlds';
-import { cueSlotOpen, equip, gearOwned, ownedGear, relicSlots, trickSlotOpen, unequip } from './gear';
+import { cueSlotOpen, equip, fixLoadout, gearOwned, ownedGear, relicSlots, trickSlotOpen, unequip } from './gear';
 import { exportSave, importSave, loadSave, newSave, writeSave } from './save';
 import { buildStats, nodeLevel, worldOf } from './stats';
-import { NODES, currentLoop, distanceFromOwned, isReachable, nodesFor, pathToOwned } from './tree';
-import { BALL_CARD, CAPSTONE_NEEDS, CUE_IDS, RELIC_IDS, ROOT_ID, STAT_RELICS, TRICK_IDS } from './upgrades';
+import { NODES, currentLoop, distanceFromOwned, isReachable, nodesFor, pathToOwned, treeBounds } from './tree';
+import { CAPSTONE_NEEDS, ISLAND_CENTRES, PORTAL_NEEDS, ROOT_ID, WORLD_COUNT, islandHub, loopCentre, pierOf } from './upgrades';
 
-export { NODES, ROOT_ID, nodesFor, isReachable, distanceFromOwned, pathToOwned, newSave, loadSave, writeSave, exportSave, importSave, buildStats, nodeLevel, relicSlots, trickSlotOpen, cueSlotOpen, gearOwned, ownedGear, equip, unequip };
+export {
+  NODES, ROOT_ID, nodesFor, isReachable, distanceFromOwned, pathToOwned, treeBounds, newSave, loadSave, writeSave, exportSave, importSave, buildStats,
+  nodeLevel, relicSlots, trickSlotOpen, cueSlotOpen, gearOwned, ownedGear, equip, unequip, fixLoadout,
+  CAPSTONE_NEEDS, PORTAL_NEEDS, ISLAND_CENTRES, islandHub, loopCentre, pierOf,
+};
+export {
+  CARDS, CARD_IDS, CARD_MAX_LEVEL, CARD_UNLOCK_COST, anyCardAffordable, baseBuyState, basePrice, buyBase, buyCard, cardBuyState, cardById, cardLevel,
+  cardOwned, cardState, cardToken, nextBaseCost, setCap, setFork,
+} from './cards';
+export type { BaseBuyState, BaseNode, CardBuyState, CardDef, CardSlot, ForkChoice } from './cards';
 
 export function nextCost(save: SaveData, node: UpgradeNode): number | null {
   const l = nodeLevel(save, node.id);
   return l >= node.maxLevel ? null : node.cost(l);
 }
 
-/** A world is cleared when any of its stages (in any loop) has a boss kill. */
 /**
- * A world's graft opens when the player REACHES the world (its first stage is unlocked), not when they clear it:
- * the graft is what makes the world beatable. Loops never re-lock a graft.
+ * True once the player has reached world `world` (its first stage is unlocked) or killed one of its bosses.
+ * Kept for the UI; island gating is by portal ownership (see buyState).
  */
 export function worldCleared(save: SaveData, world: number): boolean {
-  if (world <= 1) return true; // Felt Hall's graft is available from the start
+  if (world <= 1) return true;
   if (save.unlocked >= 4 * (world - 1)) return true;
   return Object.entries(save.bossKills).some(([id, n]) => n > 0 && worldOf(id) === world);
 }
 
-/** Capstone sibling node ids (counter, cash, dmg, hp) that must be maxed; empty for other nodes. */
+/** Island cash node ids that must be maxed before a capstone opens; empty for other nodes. */
 export function capstoneRequires(node: UpgradeNode): string[] {
   return CAPSTONE_NEEDS.get(node.id) ?? [];
+}
+
+/** `save.unlocked` a portal needs (4(k-1) for portal_w{k}, 24L for portal_l{L}); undefined for other nodes. */
+export function portalNeeds(node: UpgradeNode | string): number | undefined {
+  return PORTAL_NEEDS.get(typeof node === 'string' ? node : node.id);
+}
+
+/** World whose last stage must be beaten to open a portal (portal_w{k} -> k-1; loop portals -> 6). */
+export function portalGateWorld(node: UpgradeNode | string): number | undefined {
+  const id = typeof node === 'string' ? node : node.id;
+  const m = /^portal_w(\d)$/.exec(id);
+  if (m) return Number(m[1]) - 1;
+  return /^portal_l\d+$/.test(id) ? WORLD_COUNT : undefined;
+}
+
+/** True when the portal's world gate is met (`save.unlocked` high enough); true for non-portals. */
+export function portalOpen(save: SaveData, node: UpgradeNode | string): boolean {
+  const need = portalNeeds(node);
+  return need === undefined || save.unlocked >= need;
+}
+
+/** True when the node's island is open: island 1 always; island k / loop L once its portal is owned. */
+export function islandOpen(save: SaveData, island: number | undefined): boolean {
+  if (island === undefined || island <= 1) return true;
+  return nodeLevel(save, islandHub(island)) > 0;
 }
 
 export function buyState(save: SaveData, node: UpgradeNode): 'ok' | 'locked' | 'maxed' | 'poor' | 'hidden' {
   const level = nodeLevel(save, node.id);
   if (node.id === ROOT_ID || level >= node.maxLevel) return 'maxed';
-  if (node.graft !== undefined && !worldCleared(save, node.graft)) return 'locked';
   const dist = distanceFromOwned(save, node.id);
   if (dist > 2) return 'hidden';
   if (node.loop !== undefined && node.loop > currentLoop(save)) return 'locked';
   if (dist > 1 && level === 0) return 'locked';
+  if (node.kind === 'portal') {
+    if (!portalOpen(save, node)) return 'locked';
+  } else if (!islandOpen(save, node.island)) {
+    // Nodes owned before their island moved behind a portal (v3/M1 saves) are BFS sources; further buys still wait for the portal.
+    return 'locked';
+  }
   const sibs = CAPSTONE_NEEDS.get(node.id);
   if (sibs) {
     const all = nodesFor(save);
@@ -50,29 +88,12 @@ export function buyState(save: SaveData, node: UpgradeNode): 'ok' | 'locked' | '
   return bal >= cost ? 'ok' : 'poor';
 }
 
-const GEAR_IDS = new Set<string>([...CUE_IDS, ...RELIC_IDS, ...TRICK_IDS]);
-
-const newCard = () => ({ level: 0, forks: [] as string[], fork: null, caps: [] as string[], cap: null });
-
 export function buy(save: SaveData, node: UpgradeNode): boolean {
   if (buyState(save, node) !== 'ok') return false;
   const cost = node.cost(nodeLevel(save, node.id));
   if (node.currency === 'cash') save.cash -= cost;
   else save.tokens[node.currency] -= cost;
-  const id = node.id;
-  const ballCard = (BALL_CARD as Record<string, string>)[id];
-  if (ballCard) {
-    save.cards[ballCard] ??= newCard();
-  } else if (GEAR_IDS.has(id)) {
-    const card = save.cards[id];
-    if (!card) save.cards[id] = newCard(); // unlock; lightning/split/spitter node level 1 = card level 0
-    else if ((STAT_RELICS as readonly string[]).includes(id)) card.level++;
-  } else if (id.endsWith('_lv') && GEAR_IDS.has(id.slice(0, -3))) {
-    const card = save.cards[id.slice(0, -3)];
-    if (card) card.level++;
-  } else {
-    save.levels[id] = nodeLevel(save, id) + 1;
-  }
+  save.levels[node.id] = nodeLevel(save, node.id) + 1;
   return true;
 }
 

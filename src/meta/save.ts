@@ -1,9 +1,12 @@
 import type { CardState, SaveData, TokenId } from '../core/types';
 import { TOKEN_OF_WORLD } from '../core/types';
 import { autoEquipLegacy, fixLoadout } from './gear';
-import { LEGACY_STAGES, v2Refund, v3CardRefund } from './legacy';
+import { CASH_GROWTH } from '../core/tuning';
+import { BALL_IDS, CARDS } from './cards';
+import { LEGACY_STAGES, V6_DROPPED, v2Refund, v3CardRefund, v6DropRefund } from './legacy';
 import { worldOf } from './stats';
-import { BALL_CARD, CUE_IDS, RELIC_IDS, STAT_RELICS, TRICK_IDS } from './upgrades';
+import { nodesFor } from './tree';
+import { BALL_CARD, CUE_IDS, RELIC_IDS, STAT_RELICS, TRICK_IDS, WORLD_COUNT } from './upgrades';
 
 export const SAVE_KEY_V4 = 'ballblaster.save.v4';
 export const SAVE_KEY_V3 = 'ballblaster.save.v3';
@@ -24,7 +27,8 @@ export function newSave(): SaveData {
     bestLoot: {},
     loadout: { ball: 'standard', cue: 'standard', relics: [], trick: null },
     settings: { sound: true, shake: true, flash: !prefersReducedMotion() },
-    hints: {},
+    // A fresh save is born on the island tree: the v0.6 M2 repair (free portals for `unlocked`) must never run on it.
+    hints: { islandsV6: true },
     stats: { runs: 0, kills: 0, shots: 0, teeth: 0 },
   };
 }
@@ -91,6 +95,7 @@ function sanitizeV4(r: Record<string, unknown>): SaveData {
     loadout: d.loadout,
   };
   if (typeof settings.fastEnemies === 'boolean') out.settings.fastEnemies = settings.fastEnemies;
+  repairV6(out);
   fixLoadout(out, r.loadout);
   autoEquipLegacy(out);
   return out;
@@ -107,13 +112,17 @@ function tokenMap(v: unknown): Record<TokenId, number> {
   return out;
 }
 
-const CARD_IDS: string[] = [...CUE_IDS, ...RELIC_IDS, ...TRICK_IDS, ...Object.values(BALL_CARD)];
+/** Ownable card ids (stubs never are). */
+const CARD_IDS: string[] = CARDS.filter((c) => !c.stub).map((c) => c.id);
 const strList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
 
 function cardMap(v: unknown): Record<string, CardState> {
   const out: Record<string, CardState> = {};
   if (!v || typeof v !== 'object' || Array.isArray(v)) return out;
-  for (const [id, c] of Object.entries(v as Record<string, unknown>)) {
+  for (const [raw, c] of Object.entries(v as Record<string, unknown>)) {
+    // M1 era ball keys: cards.ballHeavy -> heavy (never overwrite a card already under the new key).
+    const id: string = (BALL_CARD as Record<string, string>)[raw] ?? raw;
+    if (id !== raw && id in (v as Record<string, unknown>)) continue;
     if (!CARD_IDS.includes(id) || !c || typeof c !== 'object') continue;
     const x = c as Record<string, unknown>;
     const forks = strList(x.forks);
@@ -184,28 +193,9 @@ function migrateV3(r: Record<string, unknown>): Record<string, unknown> {
   }
   tokens.stripe += em - given;
 
-  let cash = num(r.cash, 0);
   const cards: Record<string, CardState> = {};
-  const drop = (id: string) => { delete levels[id]; };
-  for (const id of [...CUE_IDS, ...RELIC_IDS, ...TRICK_IDS] as string[]) {
-    const own = levels[id] ?? 0;
-    if ((STAT_RELICS as readonly string[]).includes(id)) {
-      if (own > 0) {
-        const L = Math.floor(own);
-        cards[id] = newCard(L - 1);
-        cash += v3CardRefund(id, L);
-      }
-    } else if (own > 0) {
-      cards[id] = newCard(levels[`${id}_lv`] ?? 0);
-    }
-    drop(id);
-    drop(`${id}_lv`);
-  }
-  for (const [node, id] of Object.entries(BALL_CARD)) {
-    if ((levels[node] ?? 0) > 0) cards[id] = newCard(0);
-    drop(node);
-  }
-  drop('strayEmerald');
+  const cash = num(r.cash, 0) + levelsToCards(levels, cards);
+  delete levels.strayEmerald;
   const ball = typeof r.ballType === 'string' ? r.ballType : 'standard';
   const old = (r.loadout && typeof r.loadout === 'object' ? r.loadout : {}) as Record<string, unknown>;
   const { emeralds: _e, ballType: _b, ...rest } = r;
@@ -224,10 +214,91 @@ function migrateV3(r: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
+/**
+ * Moves gear ids out of `levels` into `cards` (v3 shape): cues/relics/tricks at level = `${id}_lv`; lightning/split/spitter
+ * (cash stat nodes, level L) at min(3, L-1) with the lost steps refunded; ballHeavy/Light/Sticky -> heavy/light/sticky.
+ * Existing cards are kept. Mutates both maps; returns the cash refund.
+ */
+function levelsToCards(levels: Record<string, number>, cards: Record<string, CardState>): number {
+  let cash = 0;
+  for (const id of [...CUE_IDS, ...RELIC_IDS, ...TRICK_IDS] as string[]) {
+    const own = levels[id] ?? 0;
+    if (own > 0 && !cards[id]) {
+      if ((STAT_RELICS as readonly string[]).includes(id)) {
+        const L = Math.floor(own);
+        cards[id] = newCard(L - 1);
+        cash += v3CardRefund(id, L);
+      } else {
+        cards[id] = newCard(levels[`${id}_lv`] ?? 0);
+      }
+    }
+    delete levels[id];
+    delete levels[`${id}_lv`];
+  }
+  for (const [node, id] of Object.entries(BALL_CARD)) {
+    if ((levels[node] ?? 0) > 0 && !cards[id]) cards[id] = newCard(0);
+    delete levels[node];
+  }
+  for (const id of BALL_IDS) delete levels[`${id}_lv`];
+  return cash;
+}
+
+/**
+ * v0.6 M2 island repair (once per save, `hints.islandsV6`), m2-spec §5 + addendum:
+ * 1. portals granted for `unlocked` (portal_w{k} at 4(k-1), portal_l{L} at 24L);
+ * 2. g{w}_cap -> cap_w{w};
+ * 3. g{w}_counter (w >= 2) shifts down one level (the portal is counter level 1), refunding round(100 f_w);
+ * 4. thickSkin, comboLockdown, g1_counter, g1_cash dropped with their cash refunded; strayEmerald dropped (no refund);
+ *    crates / chests / shrine stay (cash keystones);
+ * 6. any gear id still in `levels` becomes a card (M1 already moved v3 gear; card level = `_lv` level, so no -1 fix is needed;
+ *    `cardMap` clamps card level to 3 and renames cards.ballHeavy/Light/Sticky);
+ * then levels are clamped to each node's max. fixLoadout runs after this in sanitizeV4.
+ */
+export function repairV6(save: SaveData): void {
+  if (save.hints.islandsV6) return;
+  const lv = save.levels;
+  let cash = 0;
+  for (let k = 2; k <= WORLD_COUNT; k++) if (save.unlocked >= 4 * (k - 1)) lv[`portal_w${k}`] = 1;
+  for (let L = 1; save.unlocked >= 24 * L; L++) lv[`portal_l${L}`] = 1;
+  for (let w = 1; w <= WORLD_COUNT; w++) {
+    const old = `g${w}_cap`;
+    if ((lv[old] ?? 0) > 0) lv[`cap_w${w}`] = 1;
+    delete lv[old];
+  }
+  for (let w = 2; w <= WORLD_COUNT; w++) {
+    const id = `g${w}_counter`;
+    const v = Math.floor(lv[id] ?? 0);
+    if (v <= 0) continue;
+    if (v - 1 > 0) lv[id] = v - 1;
+    else delete lv[id];
+    cash += Math.round(100 * CASH_GROWTH ** (4 * (w - 1)));
+  }
+  for (const id of Object.keys(V6_DROPPED)) {
+    cash += v6DropRefund(id, lv[id] ?? 0);
+    delete lv[id];
+  }
+  delete lv.strayEmerald;
+  cash += levelsToCards(lv, save.cards);
+  const max = new Map(nodesFor(save).map((n) => [n.id, n.maxLevel]));
+  for (const [id, v] of Object.entries(lv)) {
+    const m = max.get(id);
+    if (m !== undefined && v > m) lv[id] = m;
+  }
+  save.cash += cash;
+  save.hints.islandsV6 = true;
+}
+
 export function loadSave(): SaveData {
   try {
     const t = localStorage.getItem(SAVE_KEY_V4);
-    if (t) return sanitize(JSON.parse(t)) ?? newSave();
+    if (t) {
+      const raw = JSON.parse(t);
+      const save = sanitize(raw);
+      if (!save) return newSave();
+      // The one-time island repair ran in memory: persist it so the stored save carries the hint.
+      if (!raw?.hints?.islandsV6) writeSave(save);
+      return save;
+    }
     const v3 = localStorage.getItem(SAVE_KEY_V3);
     const v2 = v3 ? null : localStorage.getItem(SAVE_KEY_V2);
     const old = v3 ?? v2;

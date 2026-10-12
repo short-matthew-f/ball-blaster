@@ -700,13 +700,17 @@ export interface UpgradeNode {
   maxLevel: number;
   /** Cost to buy level (current+1). */
   cost: (level: number) => number;
-  /** Virtual tree canvas 640x640, root at (320,320), spacing ~40. */
+  /**
+   * Virtual tree canvas position, root at (320,320), spacing 40 within an island, islands 200 apart (v0.6 spiral).
+   * The canvas exceeds 640 and loops go to negative x: use meta treeBounds(nodes).
+   */
   x: number;
   y: number;
   /** Adjacency (undirected; each edge listed once, on either node). */
   links: string[];
-  /** 0 root, 1..3 core, 4+ grafts/loops. */
+  /** v0.6: equals `island` (kept for compatibility). Pre-v0.6: 0 root, 1..3 core, 4+ grafts/loops. */
   ring: number;
+  /** Unused since v0.6 islands (always 'power'); kept for compatibility. */
   trunk: Trunk;
   /** World index (1..6) whose first boss kill reveals this node. */
   graft?: number;
@@ -747,15 +751,18 @@ export interface MetaApi {
   cueSlotOpen(save: SaveData): boolean;
   /** 'standard' cue is always owned. */
   gearOwned(save: SaveData, id: string): boolean;
-  ownedGear(save: SaveData): { cues: CueId[]; relics: RelicId[]; tricks: TrickId[] };
+  ownedGear(save: SaveData): { cues: CueId[]; relics: RelicId[]; tricks: TrickId[]; balls: BallType[] };
   /** Validates ownership + slot; mutates save.loadout; false if rejected. `index` is the relic slot (default: append if free; duplicates rejected). */
-  equip(save: SaveData, slot: 'cue' | 'relic' | 'trick', id: string, index?: number): boolean;
-  /** Clears a slot (cue -> 'standard'); relic `index` defaults to the last one. false if nothing to clear. */
-  unequip(save: SaveData, slot: 'cue' | 'relic' | 'trick', index?: number): boolean;
+  equip(save: SaveData, slot: 'ball' | 'cue' | 'relic' | 'trick', id: string, index?: number): boolean;
+  /** Clears a slot (ball / cue -> 'standard'); relic `index` defaults to the last one. false if nothing to clear. */
+  unequip(save: SaveData, slot: 'ball' | 'cue' | 'relic' | 'trick', index?: number): boolean;
   nodeLevel(save: SaveData, id: string): number;
   /** Cost of next level, or null if maxed. */
   nextCost(save: SaveData, node: UpgradeNode): number | null;
-  /** 'locked' = graft unrevealed / not adjacent / capstone siblings unmaxed; 'hidden' = >2 steps from any owned node. */
+  /**
+   * 'locked' = not adjacent / portal's world not beaten (unlocked < 4(k-1)) / island's portal not owned / capstone's island cash
+   * nodes not all maxed; 'hidden' = >2 steps from any owned node; 'poor' compares the node's currency (cash or a token).
+   */
   buyState(save: SaveData, node: UpgradeNode): 'ok' | 'locked' | 'maxed' | 'poor' | 'hidden';
   /** Mutates save; returns true on success. */
   buy(save: SaveData, node: UpgradeNode): boolean;
@@ -764,4 +771,21 @@ export interface MetaApi {
    * stats (runs, kills, shots, teeth), unlocks the next stage on a boss kill. Returns the tokens banked and the stage unlocked.
    */
   bankRun(save: SaveData, result: RunResult): { tokens: number; tokenId: TokenId; unlocked: StageId | null };
+  // ---- v0.6 M2: islands and gallery cards (meta/cards.ts) ----
+  /** Bounding box of a node set (virtual canvas). */
+  treeBounds(nodes: UpgradeNode[]): { minX: number; minY: number; maxX: number; maxY: number };
+  /** `save.unlocked` a portal needs; undefined for non-portals. */
+  portalNeeds(node: UpgradeNode | string): number | undefined;
+  /** 'stub' | 'locked' (no token) | 'open' (unlock affordable) | 'owned' | 'maxed' (base III). */
+  cardBuyState(save: SaveData, id: string): 'stub' | 'locked' | 'open' | 'owned' | 'maxed';
+  /** Unlock a card for 1 token of its world. */
+  buyCard(save: SaveData, id: string): boolean;
+  /** Next base node: 'unowned' | 'locked' (base III needs a fork, M3) | 'poor' | 'ok' | 'maxed'. */
+  baseBuyState(save: SaveData, id: string): 'unowned' | 'locked' | 'poor' | 'ok' | 'maxed';
+  /** Cash cost of the next base node, or null. */
+  nextBaseCost(save: SaveData, id: string): number | null;
+  /** Buy the next base node with cash. */
+  buyBase(save: SaveData, id: string): boolean;
+  /** Any card unlock or base node affordable (GEAR button dot). */
+  anyCardAffordable(save: SaveData): boolean;
 }
