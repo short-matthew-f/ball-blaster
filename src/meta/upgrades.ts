@@ -79,7 +79,7 @@ const CORE_ROWS: Array<[string, [number, number], string[], Core]> = [
     } }],
   ['speed', [-1, -2], ['lightning', 'heavyHits'], { name: 'VELOCITY', desc: 'Fast hits +{v} dmg', kind: 'stat', trunk: 'power', max: 5, cost: geo(60, 1.8), icon: 'icon_speed',
     apply: (s, l) => { s.speedDamage = l; } }],
-  ['split', [1, -2], ['lightning'], { name: 'SPLIT', desc: '{v} balls on 1st hit', kind: 'stat', trunk: 'power', max: 4, cost: geo(200, 2), icon: 'icon_split',
+  ['split', [1, -2], ['lightning'], { name: 'SPLIT', desc: '{v} balls on 1st hit', kind: 'stat', trunk: 'power', max: 3, cost: geo(200, 2), icon: 'icon_split',
     apply: (s, l) => { s.splitCount = l + 1; } }],
   ['spitter', [1, -3], ['split'], { name: 'SPITTER', desc: 'Spits mini balls', kind: 'stat', trunk: 'power', max: 4, cost: geo(250, 1.8), icon: 'icon_spit',
     apply: (s, l) => {

@@ -312,7 +312,7 @@ describe('gear', () => {
       expect(s.gearLevel[id]).toBe(1);
       expect(BASE_STATS.gearLevel).toEqual({});
     }
-    for (const id of ['lightning', 'split', 'spitter']) { expect(node(id).maxLevel).toBe(4); expect(node(id).currency).toBe('cash'); }
+    for (const id of ['lightning', 'split', 'spitter']) { expect(node(id).maxLevel).toBe(id === 'split' ? 3 : 4); expect(node(id).currency).toBe('cash'); }
   });
   it('slots by unlocked', () => {
     const sv = newSave();
