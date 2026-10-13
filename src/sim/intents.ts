@@ -1,6 +1,6 @@
 // Intent rolls. Not reach-aware (execution is): an Attack rolled out of reach executes as Advance.
 import type { RunState, Target } from '../core/types';
-import { BOSS_ATTACK, BOSS_COG_CAP, BOSS_SLAM, REPAIR_RANGE, TARGET_DEFS, stageById } from '../core/tuning';
+import { BOSS_ATTACK, BOSS_COG_CAP, BOSS_LEECH_CAP, BOSS_SLAM, REPAIR_RANGE, TARGET_DEFS, stageById } from '../core/tuning';
 import { mod } from './gear';
 
 /** Stage attack scaling (x ATK_GROWTH^n): the shown number is the hit. */
@@ -12,6 +12,13 @@ function atk(s: RunState, n: number): number {
 export function bossCogs(s: RunState): number {
   let n = 0;
   for (const t of s.targets) if (!t.dead && t.kind === 'cog' && t.summon) n++;
+  return n;
+}
+
+/** Live leeches summoned by the Mire Queen (its own cap, BOSS_LEECH_CAP). */
+export function bossLeeches(s: RunState): number {
+  let n = 0;
+  for (const t of s.targets) if (!t.dead && t.kind === 'leech' && t.summon) n++;
   return n;
 }
 
@@ -57,6 +64,32 @@ function mainspringIntent(s: RunState, e: Target): void {
   }
 }
 
+/**
+ * The Mire Queen. Phase 1: Attack 4 (45) / Advance (25) / Summon leech (30; 0 at BOSS_LEECH_CAP live boss leeches).
+ * Phase 2: Slam 8 after a Charge; else Charge (40) / Summon (30; 0 at the cap) / Attack 4 (30). Her pull is not an
+ * intent (sim/enemy.ts schedulePull).
+ */
+function mirequeenIntent(s: RunState, e: Target): void {
+  const summon = bossLeeches(s) >= BOSS_LEECH_CAP ? 0 : 30;
+  if (e.phase === 0) {
+    const p = s.rng.pick([
+      { t: 'attack' as const, weight: 45 },
+      { t: 'advance' as const, weight: 25 },
+      { t: 'summon' as const, weight: summon },
+    ]);
+    e.intent = p.t === 'attack' ? { t: 'attack', n: atk(s, BOSS_ATTACK) } : { t: p.t };
+  } else if (e.charged) {
+    e.intent = { t: 'attack', n: atk(s, BOSS_SLAM) };
+  } else {
+    const p = s.rng.pick([
+      { t: 'charge' as const, weight: 40 },
+      { t: 'summon' as const, weight: summon },
+      { t: 'attack' as const, weight: 30 },
+    ]);
+    e.intent = p.t === 'attack' ? { t: 'attack', n: atk(s, BOSS_ATTACK) } : { t: p.t };
+  }
+}
+
 export function rollIntent(s: RunState, e: Target): void {
   const def = TARGET_DEFS[e.kind];
   switch (e.kind) {
@@ -78,6 +111,10 @@ export function rollIntent(s: RunState, e: Target): void {
     case 'boss':
       if (stageById(s.stage).boss.kit === 'mainspring') {
         mainspringIntent(s, e);
+        return;
+      }
+      if (stageById(s.stage).boss.kit === 'mirequeen') {
+        mirequeenIntent(s, e);
         return;
       }
       if (e.phase === 0) {

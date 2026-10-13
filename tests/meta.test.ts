@@ -284,6 +284,25 @@ describe('purchasing', () => {
     sv.current = 'w2s2';
     expect(buildStats(sv).beltGrip).toBe(0);
   });
+  it('mudboots (v0.7): portal -> mudGrip 1, g4_counter -> 2, off world 4 -> 0; max HP untouched', () => {
+    const sv = newSave();
+    sv.current = 'w4s2';
+    expect(buildStats(sv).mudGrip).toBe(0);
+    sv.levels.portal_w4 = 1;
+    expect(buildStats(sv).mudGrip).toBe(1);
+    expect(buildStats(sv).maxHp).toBe(BASE_STATS.maxHp);
+    sv.levels.g4_counter = 1;
+    expect(buildStats(sv).mudGrip).toBe(2);
+    expect(buildStats(sv).maxHp).toBe(BASE_STATS.maxHp);
+    expect(buildStats(sv).beltGrip).toBe(0);
+    sv.current = 'w3s2';
+    expect(buildStats(sv).mudGrip).toBe(0);
+    expect(node('g4_counter').name).toBe('MUD BOOTS');
+    expect(node('g4_counter').desc).toBe('Mud keeps 50% speed');
+    expect(node('g4_counter').icon).toBe('icon_mudboots');
+    expect(node('g4_counter').maxLevel).toBe(1);
+    expect(node('g5_counter').maxLevel).toBe(2);
+  });
   it('capstone', () => {
     const sv = newSave();
     const needs = CAPSTONE_NEEDS.get('cap_w1')!;
@@ -376,8 +395,8 @@ describe('cards', () => {
       expect(c.name.length, c.id).toBeLessThanOrEqual(12);
       expect(c.desc.length, c.id).toBeLessThanOrEqual(20);
       expect(c.icon).toBe(`gear_${c.id}`);
-      expect(c.forks.length, c.id).toBe(c.world <= 3 ? 2 : 0);
-      expect(c.caps.length, c.id).toBe(c.world <= 3 ? 2 : 0);
+      expect(c.forks.length, c.id).toBe(c.world <= 4 ? 2 : 0);
+      expect(c.caps.length, c.id).toBe(c.world <= 4 ? 2 : 0);
       for (const f of c.forks) expect(f.cost, f.id).toBe(1);
       for (const f of c.caps) expect(f.cost, f.id).toBe(2);
       for (const f of [...c.forks, ...c.caps]) {
@@ -447,8 +466,8 @@ describe('cards', () => {
     const sv = newSave();
     sv.cash = 1e6;
     sv.cards.ricochet = card(2);
-    sv.cards.follow = card(2);
-    expect(baseBuyState(sv, 'follow')).toBe('ok'); // world 4: no forks yet
+    sv.cards.explosive = card(2);
+    expect(baseBuyState(sv, 'explosive')).toBe('ok'); // world 5: no forks yet
     expect(baseBuyState(sv, 'ricochet')).toBe('locked');
     expect(buyBase(sv, 'ricochet')).toBe(false);
     sv.tokens.stripe = 1;
@@ -456,6 +475,32 @@ describe('cards', () => {
     expect(baseBuyState(sv, 'ricochet')).toBe('ok');
     expect(buyBase(sv, 'ricochet')).toBe(true);
     expect(sv.cards.ricochet.level).toBe(3);
+  });
+  it('world-4 choices (v0.7): ids, names, descs; a capstone needs an active fork; pearls pay', () => {
+    const want: Record<string, string[]> = {
+      follow: ['follow.plow PLOW 2ND HIT +1 DMG', 'follow.roll ROLL NO CHARGE PENALTY', 'follow.cannon CANNON KEEPS SPEED 3 HITS', 'follow.topspin TOPSPIN RAILS FULL AFTER HIT'],
+      poison: ['poison.plague PLAGUE BUMPS SPREAD POISON', 'poison.sap SAP POISONED DEAL -1', 'poison.blight BLIGHT DYING SPREADS 2', 'poison.siphon SIPHON TICKS HEAL 1 PER 3'],
+      thorns: ['thorns.barbs BARBS CHARGER POISONED 2', 'thorns.riposte RIPOSTE CHARGER KNOCKED BACK', 'thorns.brace BRACE 1ST CHARGE/TURN HALF', 'thorns.quills QUILLS THORNS = YOUR DAMAGE'],
+      shrapnel: ['shrapnel.flak FLAK SHARDS LAST 1.2 S', 'shrapnel.spear SPEAR 1 SHARD, YOUR DAMAGE', 'shrapnel.fragment FRAGMENT SHARD KILL SHEDS 2', 'shrapnel.plating PLATING KILL: BLOCK A CHARGE'],
+      rackEm: ['rackEm.tight TIGHT PULLS 30 PX', 'rackEm.scatter SCATTER PUSHES 20 PX OUTWARD', 'rackEm.rerack RE-RACK ALSO REROLLS INTENTS', 'rackEm.tableroll TABLE ROLL INTO MUD: HELD 1'],
+    };
+    for (const [id, rows] of Object.entries(want)) {
+      const c = cardById(id)!;
+      expect([...c.forks, ...c.caps].map((f) => `${f.id} ${f.name} ${f.desc}`), id).toEqual(rows);
+    }
+    const sv = newSave();
+    sv.cards.poison = card(3);
+    sv.tokens = { ...zero, pearl: 6 };
+    expect(capBuyState(sv, 'poison', 'poison.blight')).toBe('locked');
+    expect(setCap(sv, 'poison', 'poison.blight')).toBe(false);
+    expect(setFork(sv, 'poison', 'poison.sap')).toBe(true);
+    expect(sv.tokens.pearl).toBe(5);
+    expect(capBuyState(sv, 'poison', 'poison.blight')).toBe('open');
+    expect(setCap(sv, 'poison', 'poison.blight')).toBe(true);
+    expect(sv.tokens.pearl).toBe(3);
+    sv.unlocked = 16;
+    sv.loadout.relics = ['poison'];
+    expect(buildStats(sv).mods).toEqual(['poison.sap', 'poison.blight']);
   });
   it('capstone needs an active fork; forks of worlds 2-3 spend frost / cog', () => {
     const sv = newSave();

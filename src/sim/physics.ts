@@ -76,11 +76,20 @@ import {
   TRAP_MULT,
   WEB_R,
   WEB_STAGGER,
+  BARBS_STACKS,
+  BRACE_MULT,
+  CANNON_CONTACTS,
+  LEECH_HEAL,
+  PLAGUE_STACKS,
+  PLOW_DMG,
+  RIPOSTE_SPEED,
+  SAP_DMG,
 } from '../core/tuning';
 import { addPoison, addStagger, applyDamage, chainLightning, heal, heroDamage, hitEnemy, scaleAtk, scaleCash } from './damage';
 import { clampIn, spawnSplit } from './balls';
 import { has, heroGap, lv, mod } from './gear';
 import { goblinHit } from './loot';
+import { hasMud, heroMudKeep, inMudAt, refreshMud } from './mud';
 
 export const MAX_BALL_SPEED = MAX_LAUNCH_SPEED * 1.5;
 const OBSTACLE_RESTITUTION = 0.8;
@@ -163,9 +172,15 @@ function mainDamage(s: RunState, speed: number): number {
   return s.stats.damage + bonus + dart + Math.floor(speed / SPEED_DMG_REF) * s.stats.speedDamage;
 }
 
-/** Numb (chill fork): a chilled enemy's blow deals NUMB_DMG less (min 1; a 0 stays 0). */
+/**
+ * Numb (chill fork): a chilled enemy's blow deals NUMB_DMG less; Sap (poison fork): a poisoned one SAP_DMG less (min 1;
+ * a 0 stays 0). Charges, Shoots, lobs and strikes; never blasts or thorns.
+ */
 export function numbed(s: RunState, t: Target, n: number): number {
-  return n > 0 && (t.chill ?? 0) > 0 && mod(s, 'chill.numb') ? Math.max(1, n - NUMB_DMG) : n;
+  if (n <= 0) return n;
+  if ((t.chill ?? 0) > 0 && mod(s, 'chill.numb')) n = Math.max(1, n - NUMB_DMG);
+  if ((t.poison ?? 0) > 0 && mod(s, 'poison.sap')) n = Math.max(1, n - SAP_DMG);
+  return n;
 }
 
 /** Nearest live enemy (not the goblin, not `except`) within `R` (edge gap) of the hero; ties: lowest id. */
@@ -220,15 +235,55 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
         fx.push({ t: 'blocked', x: (b.x + t.x) / 2, y: (b.y + t.y) / 2 });
         return;
       }
-      heroDamage(s, numbed(s, t, t.chargeDmg ?? 0), t.kind, b.x, b.y, fx, 'charge');
+      // Plating (shrapnel capstone): a hero-ball kill holds one block, spent at most once a wave (no blow, Thorns, steal).
+      if (mod(s, 'shrapnel.plating') && s.plated && s.platingWave !== s.wave) {
+        s.plated = false;
+        s.platingWave = s.wave;
+        t.chargeDmg = 0;
+        t.vx = 0;
+        t.vy = 0;
+        fx.push({ t: 'blocked', x: (b.x + t.x) / 2, y: (b.y + t.y) / 2 });
+        return;
+      }
+      let n = numbed(s, t, t.chargeDmg ?? 0);
+      // Brace (thorns capstone): the first charge to land each enemy phase deals half (ceil); Thorns still prick.
+      if (mod(s, 'thorns.brace') && !s.braceUsed) {
+        s.braceUsed = true;
+        n = Math.ceil(n * BRACE_MULT);
+        fx.push({ t: 'blocked', x: (b.x + t.x) / 2, y: (b.y + t.y) / 2 });
+      }
+      const dealt = heroDamage(s, n, t.kind, b.x, b.y, fx, 'charge');
       t.chargeDmg = 0;
-      // Thorns relic: the charger pays for landing its blow.
-      if (has(s, 'thorns')) applyDamage(s, t, gearVal(THORNS_RELIC_DMG, lv(s, 'thorns')), 'thorns', fx);
+      // Bog leech: the landed steal heals it for the damage dealt (capped at its max HP).
+      if (t.kind === 'leech' && !t.dead && dealt > 0) {
+        const before = t.hp;
+        t.hp = Math.min(t.maxHp, t.hp + LEECH_HEAL * dealt);
+        if (t.hp > before) fx.push({ t: 'steal', x: t.x, y: t.y, amount: t.hp - before });
+      }
+      // Thorns relic: the charger pays for landing its blow (Quills: the hero's damage). Barbs: it is poisoned too.
+      if (has(s, 'thorns')) {
+        applyDamage(s, t, mod(s, 'thorns.quills') ? s.stats.damage : gearVal(THORNS_RELIC_DMG, lv(s, 'thorns')), 'thorns', fx);
+        if (mod(s, 'thorns.barbs') && !t.dead) {
+          const was = t.poison ?? 0;
+          t.poison = Math.max(was, BARBS_STACKS);
+          if (was <= 0) fx.push({ t: 'status', id: t.id, kind: 'poison', on: true });
+        }
+      }
       // The blow lands: the charger stops on contact (the hero keeps the full knock). Without this, heavy
       // chargers (brute, boss) plough on and pin the hero into rails and corners.
       if (CHARGE_STOPS_ON_HIT) {
         t.vx = 0;
         t.vy = 0;
+      }
+      // Riposte (thorns fork): the charger is knocked straight away from the hero (a velocity; never the boss).
+      if (mod(s, 'thorns.riposte') && !t.dead && t.kind !== 'boss') {
+        const dx = t.x - b.x;
+        const dy = t.y - b.y;
+        const d = Math.hypot(dx, dy) || 1;
+        t.vx = (dx / d) * RIPOSTE_SPEED;
+        t.vy = (dy / d) * RIPOSTE_SPEED;
+        t.resting = false;
+        fx.push({ t: 'ballClack', x: t.x, y: t.y, speed: RIPOSTE_SPEED });
       }
     } else if (b.kind === 'main') {
       // Knocked into a thornback (or a Spiky elite) during the enemy phase: thorns still prick.
@@ -243,6 +298,7 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
   const chilled = (t.chill ?? 0) > 0;
   const carom = b.kind === 'main' && mod(s, 'ricochet.carom');
   const anvil = first && mod(s, 'heavy.anvil');
+  if (b.kind === 'main') s.followHits = (s.followHits ?? 0) + 1;
   if (b.kind === 'main') {
     dmg = mainDamage(s, speed) + s.momentum;
     const cap = gearVal(RICOCHET_MAX, lv(s, 'ricochet'));
@@ -260,6 +316,8 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
     if (mod(s, 'recall.anchor') && s.anchorShot === s.shots) dmg += ANCHOR_DMG;
     // Brittle (chill fork): chilled enemies take +BRITTLE_DMG from the hero.
     if (chilled && mod(s, 'chill.brittle')) dmg += BRITTLE_DMG;
+    // Plow (follow fork): the hero's second enemy contact of the shot hits harder.
+    if (mod(s, 'follow.plow') && s.followHits === 2) dmg += PLOW_DMG;
     // Jump: the first contact after landing is softer (Pounce: doubled first, then the level penalty/bonus).
     if (b.jumpLanded) {
       b.jumpLanded = false;
@@ -276,7 +334,7 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
     }
     // Anvil: the first contact doubles after every additive bonus (and stops the hero, below).
     if (anvil) dmg *= ANVIL_MULT;
-  } else if (b.shard) dmg = SHARD_DMG;
+  } else if (b.shard) dmg = b.spear ? s.stats.damage : SHARD_DMG;
   else if (b.kind === 'spat') dmg = mod(s, 'spitter.heavyspit') ? HEAVY_SPIT_DMG : s.stats.spitDamage > 0 ? s.stats.spitDamage : s.stats.damage;
   else dmg = mod(s, 'split.swarm') ? SWARM_DMG : s.stats.damage;
   const sticky = b.kind === 'main' && s.stats.ballType === 'sticky' && !s.stickyUsed;
@@ -335,6 +393,11 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
       s.firstHitDone = true;
       if (!sticky && !anvil) cueAfterContact(s, b, pvx, pvy, t, fx);
       if (has(s, 'explosive')) explode(s, b, t, dmg, fx);
+    } else if (!sticky && !anvil && s.stats.cue === 'follow' && mod(s, 'follow.cannon') && (s.followHits ?? 0) <= CANNON_CONTACTS) {
+      // Cannon (follow capstone): the topspin keep also applies on the shot's contacts 2..CANNON_CONTACTS.
+      const keep = gearVal(FOLLOW_KEEP_LV, lv(s, 'follow'));
+      b.vx = pvx * keep;
+      b.vy = pvy * keep;
     }
     if (s.stats.splitCount > 0 && !s.splitUsed && has(s, 'split')) {
       s.splitUsed = true;
@@ -452,6 +515,16 @@ function enemyBump(s: RunState, a: Target, b: Target, rel: number, spA: number, 
       fx.push({ t: 'status', id: o.id, kind: 'chill', on: true });
     }
   }
+  // Plague (poison fork): a bump during the shot passes poison from a poisoned body to an unpoisoned one.
+  if (s.phase === 'resolve' && mod(s, 'poison.plague')) {
+    const pa = (a.poison ?? 0) > 0;
+    const pb = (b.poison ?? 0) > 0;
+    const o = pa && !pb ? b : pb && !pa ? a : undefined;
+    if (o && !o.dead) {
+      o.poison = Math.max(o.poison ?? 0, PLAGUE_STACKS);
+      fx.push({ t: 'status', id: o.id, kind: 'poison', on: true });
+    }
+  }
   const cogA = a.kind === 'cog' && (a.chargeDmg ?? 0) > 0;
   const cogB = b.kind === 'cog' && (b.chargeDmg ?? 0) > 0;
   if (cogA !== cogB) {
@@ -564,7 +637,9 @@ function wallBounceOf(s: RunState, b: Body): number {
   if (b.en) return Math.min(1, ENEMY_WALL_BOUNCE * kindBounce(b));
   const hero = b.ball?.kind === 'main' && s.phase === 'resolve';
   // Ghost Rail (ricochet capstone): the hero banks at full speed until its first hit of the shot.
-  const e = hero && !s.firstHitDone && mod(s, 'ricochet.ghost') ? 1 : stageById(s.stage).wallBounce;
+  let e = hero && !s.firstHitDone && mod(s, 'ricochet.ghost') ? 1 : stageById(s.stage).wallBounce;
+  // Topspin (follow capstone): after the first hit of the shot the hero's rails return full speed.
+  if (hero && s.firstHitDone && mod(s, 'follow.topspin')) e = 1;
   // Tailwind (light capstone): the hero's rails add speed during the shot (MAX_BALL_SPEED bounds it).
   return hero && mod(s, 'light.tailwind') ? e * TAILWIND_MULT : e;
 }
@@ -755,6 +830,7 @@ export function relaxAll(s: RunState, iters = 40): void {
   const list = bodies(s);
   relaxList(s, list, iters);
   writeBack(list);
+  refreshMud(s);
 }
 
 /** Largest overlap between any two live bodies (px). */
@@ -769,6 +845,29 @@ export function maxOverlap(s: RunState): number {
     }
   }
   return worst;
+}
+
+/**
+ * Bog mud, after relaxation and before friction: a live, moving body whose centre has just entered a patch stops dead
+ * (the hero keeps MUD_KEEP[mudGrip] of its speed: fx only when it loses some). Then `inMud` = inside for every body. A
+ * body never checked yet (just spawned or placed) only records where it is. Ghosts, frozen bodies and the goblin exempt.
+ */
+function mudStep(s: RunState, live: Body[], fx: FxEvent[]): void {
+  for (const b of live) {
+    if (b.en?.kind === 'goblin') continue;
+    const o = (b.ball ?? b.en)!;
+    const inside = inMudAt(s, b.x, b.y);
+    if (o.inMud !== undefined && inside && !o.inMud && !b.resting && b.im > 0) {
+      const keep = b.ball?.kind === 'main' ? heroMudKeep(s) : 0;
+      if (keep < 1) {
+        b.vx *= keep;
+        b.vy *= keep;
+        if (keep <= 0) b.resting = true;
+        fx.push({ t: 'mud', x: b.x, y: b.y, id: b.id });
+      }
+    }
+    o.inMud = inside;
+  }
 }
 
 /** One fixed physics substep of `h` seconds (resolve and enemy phases). */
@@ -879,6 +978,7 @@ export function physicsStep(s: RunState, h: number, fx: FxEvent[]): void {
   writeBack(list.filter((b) => b.ghost));
   const live = list.filter((b) => !b.en || !b.en.dead);
   relaxList(s, live, RELAX_ITERS);
+  if (hasMud(s)) mudStep(s, live, fx);
 
   for (const b of live) {
     if (b.resting || b.im === 0) continue;

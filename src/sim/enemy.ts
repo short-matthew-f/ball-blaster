@@ -39,11 +39,16 @@ import {
   PULSE_PUSH,
   QUAKE_R,
   SHOCKWAVE_R,
+  BELT_HOLD,
+  BOSS_LEECH_CAP,
+  LOB_R,
+  QUEEN_PULL,
+  SIPHON_PER,
 } from '../core/tuning';
 import { addStagger, applyDamage, heal, hero, heroDamage, kill, scaleCash, stageWaves, staticZap } from './damage';
 import { has, heroGap, lanternR, lv, mod, timeStopInEffect } from './gear';
-import { bossCogs, repairTarget, rollIntent } from './intents';
-import { runSweep, scheduleSweep } from './belts';
+import { bossCogs, bossLeeches, repairTarget, rollIntent } from './intents';
+import { runSweep, scheduleSweep, slideRoom } from './belts';
 import { numbed, relaxAll } from './physics';
 import { liveRegulars, spawnWave, summonNear } from './spawn';
 
@@ -73,6 +78,8 @@ export function startEnemyPhase(s: RunState, fx: FxEvent[]): void {
   s.rangedTaken = 0;
   s.mothLeft = mod(s, 'lantern.moth') ? MOTH_CAP : 0;
   s.mirrorFree = mod(s, 'mirror.flawless');
+  s.braceUsed = false;
+  s.pullAt = undefined;
   for (const t of s.targets) t.chargeDmg = 0;
   // Stasis (time stop capstone): freezes do not tick while a Time Stop is in effect (timeStopped is set below: read the
   // pending flag).
@@ -86,11 +93,14 @@ export function startEnemyPhase(s: RunState, fx: FxEvent[]): void {
   }
   // Poison ticks before the wave check, so a tick that kills the last regular brings the next wave.
   poisonTick(s, fx);
+  // Bog: croaker lobs thrown last phase land now (also under Time Stop), before the wave check.
+  landLobs(s, fx);
   if (s.bossKilled) {
     // A tick killed the boss: the waves are over. Nobody acts; the phase ends once everything rests (-> loot).
     s.enemyQueue = [];
     s.timeStopped = false;
     s.beltAt = undefined;
+    s.pullAt = undefined;
     return;
   }
 
@@ -118,6 +128,57 @@ export function startEnemyPhase(s: RunState, fx: FxEvent[]): void {
   // Stop is in effect (a pending Wind keeps).
   if (mod(s, 'timeStop.clockwork') && timeStopInEffect(s)) s.beltAt = undefined;
   else scheduleSweep(s);
+  schedulePull(s, fresh, reflex);
+}
+
+/**
+ * The Mire Queen's pull (every enemy phase she is on the table, not arriving, not staggered, not a stopped or Reflex
+ * phase; Slow pulls): after BELT_HOLD s, before anyone acts, the hero slides QUEEN_PULL px straight at her, stopping at
+ * the first contact (sim/belts.ts slideRoom). A boss action, not the board: Clockwork (time stop) never stops it.
+ */
+function schedulePull(s: RunState, fresh: Set<number>, reflex: boolean): void {
+  s.pullAt = undefined;
+  if (stageById(s.stage).boss.kit !== 'mirequeen' || s.timeStopped || reflex) return;
+  const q = s.targets.find((t) => t.kind === 'boss' && !t.dead);
+  if (!q || fresh.has(q.id) || staggered(q) || (q.frozen ?? 0) > 0) return;
+  s.pullAt = s.t + BELT_HOLD;
+  s.enemyNext = Math.max(s.enemyNext, s.pullAt);
+}
+
+function runPull(s: RunState, fx: FxEvent[]): void {
+  s.pullAt = undefined;
+  const q = s.targets.find((t) => t.kind === 'boss' && !t.dead);
+  if (!q) return;
+  const h = hero(s);
+  const d = Math.hypot(q.x - h.x, q.y - h.y);
+  if (d < 1e-9) return;
+  const ux = (q.x - h.x) / d;
+  const uy = (q.y - h.y) / d;
+  const go = slideRoom(s, h, ux, uy, QUEEN_PULL);
+  if (go <= 1e-9) return;
+  const x0 = h.x;
+  const y0 = h.y;
+  h.x += ux * go;
+  h.y += uy * go;
+  relaxAll(s);
+  fx.push({ t: 'pull', x: h.x, y: h.y, dx: h.x - x0, dy: h.y - y0 });
+}
+
+/**
+ * Croaker lobs land at the start of the enemy phase: the hero takes the lob (armor, Slow; never the ranged cap) when
+ * its centre is within LOB_R + its radius of the mark; otherwise it fizzles. Cleared either way.
+ */
+function landLobs(s: RunState, fx: FxEvent[]): void {
+  const h = hero(s);
+  for (const t of s.targets) {
+    const L = t.lob;
+    if (!L) continue;
+    t.lob = undefined;
+    if (t.dead) continue;
+    if (Math.hypot(h.x - L.x, h.y - L.y) > LOB_R + h.r) continue;
+    fx.push({ t: 'lobLand', x: L.x, y: L.y, r: LOB_R });
+    heroDamage(s, L.n, t.kind, h.x, h.y, fx, 'blast');
+  }
 }
 
 /**
@@ -169,14 +230,21 @@ function glare(s: RunState, fx: FxEvent[]): void {
  */
 function poisonTick(s: RunState, fx: FxEvent[]): void {
   const decay = lv(s, 'poison') < POISON_NO_DECAY_LV;
+  let total = 0;
   for (const t of s.targets.slice()) {
     const n = t.poison ?? 0;
     if (t.dead || n <= 0) continue;
+    total += n;
     fx.push({ t: 'poisonTick', x: t.x, y: t.y, dmg: n });
     applyDamage(s, t, n, 'poison', fx);
     if (t.dead) continue;
     if (decay) t.poison = n - 1;
     if ((t.poison ?? 0) <= 0) fx.push({ t: 'status', id: t.id, kind: 'poison', on: false });
+  }
+  // Siphon (poison capstone): the phase's ticks heal 1 per SIPHON_PER damage (the shared curve; needs the Poison card).
+  if (total >= SIPHON_PER && has(s, 'poison') && mod(s, 'poison.siphon')) {
+    const h = hero(s);
+    heal(s, Math.floor(total / SIPHON_PER), h.x, h.y, fx);
   }
 }
 
@@ -222,6 +290,7 @@ export function enemyStep(s: RunState, h: number, fx: FxEvent[], physics: (s: Ru
   // The boss died mid-phase (bump, blast, thorns, mirror): its escorts never act again.
   if (s.bossKilled) s.enemyQueue = [];
   if (s.beltAt !== undefined && s.t + 1e-9 >= s.beltAt) runSweep(s, fx);
+  if (s.pullAt !== undefined && s.t + 1e-9 >= s.pullAt) runPull(s, fx);
   while (s.enemyQueue.length > 0 && s.t + 1e-9 >= s.enemyNext) {
     const id = s.enemyQueue.shift()!;
     const e = s.targets.find((t) => t.id === id);
@@ -230,7 +299,7 @@ export function enemyStep(s: RunState, h: number, fx: FxEvent[], physics: (s: Ru
     if (staggered(e) || (e.frozen ?? 0) > 0) continue;
     if (s.timeStopped) {
       // Time Stop: melee enemies close in without attacking; the intent is kept (not added to acted).
-      if ((e.intent.t === 'attack' || e.intent.t === 'advance') && e.kind !== 'skirmisher' && advance(s, e, hero(s), fx)) {
+      if ((e.intent.t === 'attack' || e.intent.t === 'steal' || e.intent.t === 'advance') && e.kind !== 'skirmisher' && e.kind !== 'croaker' && advance(s, e, hero(s), fx)) {
         s.enemyNext = s.t + LAUNCH_GAP;
         break;
       }
@@ -251,10 +320,11 @@ export function enemyStep(s: RunState, h: number, fx: FxEvent[], physics: (s: Ru
   if (s.resolveTime >= MAX_ENEMY_SECONDS) {
     s.enemyQueue = [];
     s.beltAt = undefined;
+    s.pullAt = undefined;
     for (const b of s.balls) ((b.vx = 0), (b.vy = 0), (b.resting = true));
     for (const t of s.targets) ((t.vx = 0), (t.vy = 0), (t.resting = true), (t.chargeDmg = 0));
   }
-  if (s.enemyQueue.length > 0 || s.beltAt !== undefined) return false;
+  if (s.enemyQueue.length > 0 || s.beltAt !== undefined || s.pullAt !== undefined) return false;
   if (!s.balls.every((b) => b.resting) || !s.targets.every((t) => t.dead || t.resting)) return false;
   // The boss died: no refill and no arrival hold; the turn ends (endTurn -> death check -> loot phase).
   if (s.bossKilled) {
@@ -280,6 +350,7 @@ function endEnemyPhase(s: RunState, fx: FxEvent[]): void {
   s.targets = s.targets.filter((t) => !t.dead);
   s.timeStopped = false;
   s.beltAt = undefined;
+  s.pullAt = undefined;
   const acted = new Set(s.acted);
   for (const t of s.targets) {
     if (acted.has(t.id)) rollIntent(s, t);
@@ -388,7 +459,7 @@ function speedFor(s: RunState, dist: number, vmax: number): number {
  * Advance: a soft roll toward the hero (skirmisher: sideways reposition). It stops ADVANCE_STANDOFF short of the
  * hero instead of shoving it (an advance is not an attack), so the roll is shortened when the hero is close.
  */
-function advance(s: RunState, e: Target, h: Ball, fx: FxEvent[], sideways = e.kind === 'skirmisher', base?: number): boolean {
+function advance(s: RunState, e: Target, h: Ball, fx: FxEvent[], sideways = e.kind === 'skirmisher' || e.kind === 'croaker', base?: number): boolean {
   let dx = h.x - e.x;
   let dy = h.y - e.y;
   let dist = (base ?? (e.elite === 'swift' ? SWIFT_ADVANCE_DIST : ADVANCE_DIST)) * stageById(s.stage).advanceMult;
@@ -466,6 +537,7 @@ function executeIntent(s: RunState, e: Target, fx: FxEvent[]): boolean {
   const rage = rageLevel(s);
   const it = e.intent;
   switch (it.t) {
+    case 'steal': // Bog leech: executes exactly as Attack; its landed blow heals it (physics.ts ballHitsEnemy)
     case 'attack': {
       const slam = e.kind === 'boss' && !!e.charged;
       const gap = Math.hypot(h.x - e.x, h.y - e.y) - e.r - h.r;
@@ -559,6 +631,14 @@ function executeIntent(s: RunState, e: Target, fx: FxEvent[]): boolean {
         }
         return false;
       }
+      // The Mire Queen summons leeches (own cap; they pay 1 and never count for the wave clear).
+      if (e.kind === 'boss' && stageById(s.stage).boss.kit === 'mirequeen') {
+        if (bossLeeches(s) < BOSS_LEECH_CAP) {
+          const c = summonNear(s, e, 'leech', fx);
+          if (c) c.cashBase = 1;
+        }
+        return false;
+      }
       const grubs = s.targets.filter((t) => !t.dead && t.summon).length;
       const cap = e.kind === 'hive' ? HIVE_GRUB_CAP : SUMMON_CAP;
       if (grubs < cap) summonNear(s, e, 'grub', fx);
@@ -577,8 +657,13 @@ function executeIntent(s: RunState, e: Target, fx: FxEvent[]): boolean {
     case 'wind': // The Mainspring: the next conveyor sweep runs twice.
       s.beltWound = true;
       return false;
-    case 'steal': // Bog leech (sim owner implements)
-    case 'lob': // Bog croaker (sim owner implements)
+    case 'lob': {
+      // Bog croaker: artillery at the hero's spot, landing at the start of the next enemy phase (landLobs). Not a
+      // Shoot: no cover, no Mirror roll (never touches s.rng), no ranged cap; Sap/Numb read the croaker now.
+      e.lob = { x: h.x, y: h.y, n: numbed(s, e, (it.n ?? 0) + rage) };
+      fx.push({ t: 'lob', x0: e.x, y0: e.y, x: h.x, y: h.y });
+      return false;
+    }
     case 'flee': // Loot Goblin: scurry is driven by the loot phase, never by intent execution
     case 'rest':
       return false;

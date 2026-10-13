@@ -1,5 +1,5 @@
 // v0.6 gallery cards (M2). Every piece of gear is a card with the same tree: unlock -> base I/II -> fork -> base III -> capstone.
-// Forks (base II, 1 token) and capstones (base III, 2 tokens) are the world 1-3 choices (M3); worlds 4-6 stay empty. Leaf module: imports only core/types and core/tuning.
+// Forks (base II, 1 token) and capstones (base III, 2 tokens) are the world 1-4 choices (M3, v0.7); worlds 5-6 stay empty. Leaf module: imports only core/types and core/tuning.
 import {
   CARD_BASE_PRICE, CASH_GROWTH, CHILL_PHASES, EXPLOSIVE_R, HEAVY_MASS, LANTERN_REACH, LIGHT_SPEED, MIRROR_CHANCE, MOMENTUM_MAX,
   POISON_MAX, RICOCHET_MAX, SHRAPNEL_COUNT, SPIT_LIFE_CAP, STATIC_DMG, STICKY_STAGGER, THORNS_RELIC_DMG, TRICK_USES,
@@ -216,6 +216,27 @@ const CHOICES: Record<string, { forks: ForkChoice[]; caps: ForkChoice[] }> = {
   timeStop: {
     forks: [ch('timeStop', 'freeze', 'FREEZE', 'NOBODY EVEN MOVES', 1), ch('timeStop', 'slow', 'SLOW', '2 PHASES: HALF DMG', 1)],
     caps: [ch('timeStop', 'clockwork', 'CLOCKWORK', 'BELTS STOP TOO', 2), ch('timeStop', 'stasis', 'STASIS', 'STATUS & RAGE HOLD', 2)],
+  },
+  // ---- v0.7: world 4 (pearl)
+  follow: {
+    forks: [ch('follow', 'plow', 'PLOW', '2ND HIT +1 DMG', 1), ch('follow', 'roll', 'ROLL', 'NO CHARGE PENALTY', 1)],
+    caps: [ch('follow', 'cannon', 'CANNON', 'KEEPS SPEED 3 HITS', 2), ch('follow', 'topspin', 'TOPSPIN', 'RAILS FULL AFTER HIT', 2)],
+  },
+  poison: {
+    forks: [ch('poison', 'plague', 'PLAGUE', 'BUMPS SPREAD POISON', 1), ch('poison', 'sap', 'SAP', 'POISONED DEAL -1', 1)],
+    caps: [ch('poison', 'blight', 'BLIGHT', 'DYING SPREADS 2', 2), ch('poison', 'siphon', 'SIPHON', 'TICKS HEAL 1 PER 3', 2)],
+  },
+  thorns: {
+    forks: [ch('thorns', 'barbs', 'BARBS', 'CHARGER POISONED 2', 1), ch('thorns', 'riposte', 'RIPOSTE', 'CHARGER KNOCKED BACK', 1)],
+    caps: [ch('thorns', 'brace', 'BRACE', '1ST CHARGE/TURN HALF', 2), ch('thorns', 'quills', 'QUILLS', 'THORNS = YOUR DAMAGE', 2)],
+  },
+  shrapnel: {
+    forks: [ch('shrapnel', 'flak', 'FLAK', 'SHARDS LAST 1.2 S', 1), ch('shrapnel', 'spear', 'SPEAR', '1 SHARD, YOUR DAMAGE', 1)],
+    caps: [ch('shrapnel', 'fragment', 'FRAGMENT', 'SHARD KILL SHEDS 2', 2), ch('shrapnel', 'plating', 'PLATING', 'KILL: BLOCK A CHARGE', 2)],
+  },
+  rackEm: {
+    forks: [ch('rackEm', 'tight', 'TIGHT', 'PULLS 30 PX', 1), ch('rackEm', 'scatter', 'SCATTER', 'PUSHES 20 PX OUTWARD', 1)],
+    caps: [ch('rackEm', 'rerack', 'RE-RACK', 'ALSO REROLLS INTENTS', 2), ch('rackEm', 'tableroll', 'TABLE ROLL', 'INTO MUD: HELD 1', 2)],
   },
 };
 

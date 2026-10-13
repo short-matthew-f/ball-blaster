@@ -36,10 +36,16 @@ import {
   TESLA_AT,
   TESLA_DMG,
   TESLA_R,
+  BLIGHT_R,
+  BLIGHT_STACKS,
+  FLAK_LIFE,
+  FRAG_SHARDS,
+  SPEAR_R,
 } from '../core/tuning';
 import { makeEnemy } from './spawn';
 import { mitosis } from './balls';
 import { has, heroGap, lanternR, lv, mod } from './gear';
+import { growMud } from './mud';
 
 /** poison/static/mirror/thorns: relic damage that never staggers and never counts as a hit. */
 export type DamageSource = BallKind | 'lightning' | 'explosion' | 'bump' | 'poison' | 'static' | 'mirror' | 'thorns';
@@ -171,12 +177,20 @@ export function addPoison(s: RunState, t: Target, fx: FxEvent[]): void {
   if (before <= 0 && t.poison > 0) fx.push({ t: 'status', id: t.id, kind: 'poison', on: true });
 }
 
-/** Shrapnel relic: a kill by the hero ball releases shards (spat-like balls, SHARD_LIFE s, 1 damage). */
-function spawnShards(s: RunState, t: Target, fx: FxEvent[]): void {
+/**
+ * Shrapnel relic: a kill by the hero ball releases shards (spat-like balls, SHARD_LIFE s, 1 damage). Flak: FLAK_LIFE.
+ * Spear: one shard at the hero's damage, aimed at the nearest live enemy within SPEAR_R of the corpse (the angle roll is
+ * drawn either way). `plain` (Fragment): n plain shards whatever the fork.
+ */
+function spawnShards(s: RunState, t: Target, fx: FxEvent[], plain?: number): void {
   if (isGoblin(t)) return;
-  const n = gearVal(SHRAPNEL_COUNT, lv(s, 'shrapnel'));
+  const spear = plain === undefined && mod(s, 'shrapnel.spear');
+  const n = plain ?? (spear ? 1 : gearVal(SHRAPNEL_COUNT, lv(s, 'shrapnel')));
+  const life = mod(s, 'shrapnel.flak') ? FLAK_LIFE : SHARD_LIFE;
   const r = 2;
-  const a0 = s.rng.range(0, Math.PI * 2);
+  let a0 = s.rng.range(0, Math.PI * 2);
+  const aim = spear ? nearestTo(s, t, SPEAR_R) : undefined;
+  if (aim) a0 = Math.atan2(aim.y - t.y, aim.x - t.x);
   for (let i = 0; i < n; i++) {
     const a = a0 + (i / n) * Math.PI * 2;
     s.balls.push({
@@ -189,9 +203,10 @@ function spawnShards(s: RunState, t: Target, fx: FxEvent[]): void {
       vy: Math.sin(a) * SHARD_SPEED,
       r,
       mass: 0.4,
-      life: SHARD_LIFE,
+      life,
       resting: false,
       banked: false,
+      ...(spear ? { spear: true } : {}),
     });
   }
   fx.push({ t: 'shard', x: t.x, y: t.y });
@@ -263,6 +278,11 @@ export function checkBossPhase(s: RunState, b: Target, fx: FxEvent[]): void {
       }
       fx.push({ t: 'beltReverse' });
     }
+    // The Mire Queen's phase 2 entry (once): every mud patch on this run's board grows (it swallows nothing).
+    if (boss.kit === 'mirequeen' && b.phase === 1) {
+      growMud(s);
+      fx.push({ t: 'mudGrow' });
+    }
   }
 }
 
@@ -272,6 +292,7 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
   t.dead = true;
   t.hp = 0;
   t.chargeDmg = 0;
+  t.lob = undefined; // a croaker's pending lob dies with it
   if (s.phase === 'resolve' && !quiet && !t.resting) {
     t.ghost = GHOST_SECONDS; // keeps its momentum: the cascade survives the kill
   } else {
@@ -319,6 +340,23 @@ export function kill(s: RunState, t: Target, src: DamageSource, fx: FxEvent[], k
   // Sweep counts kills within a shot; a poison tick at the start of the enemy phase is not part of the shot.
   if (!t.summon && t.kind !== 'boss' && (s.waveKillShot ?? -1) < 0 && src !== 'poison') s.waveKillShot = s.shots;
   if (!quiet && src === 'main' && s.phase === 'resolve' && has(s, 'shrapnel')) spawnShards(s, t, fx);
+  // Fragment (shrapnel capstone): the shot's first shard kill sheds FRAG_SHARDS plain shards (no grandchildren).
+  if (!quiet && src === 'spat' && killer?.shard && s.phase === 'resolve' && !s.fragUsed && mod(s, 'shrapnel.fragment')) {
+    s.fragUsed = true;
+    spawnShards(s, t, fx, FRAG_SHARDS);
+  }
+  // Plating (shrapnel capstone): a hero-ball kill during the shot holds one charge block (one at a time).
+  if (!quiet && src === 'main' && s.phase === 'resolve' && mod(s, 'shrapnel.plating')) s.plated = true;
+  // Blight (poison capstone): a poisoned enemy killed during the shot spreads BLIGHT_STACKS to its neighbours.
+  if (!quiet && s.phase === 'resolve' && (t.poison ?? 0) > 0 && mod(s, 'poison.blight')) {
+    for (const o of s.targets) {
+      if (o.dead || o === t || isGoblin(o)) continue;
+      if (Math.hypot(o.x - t.x, o.y - t.y) - o.r - t.r > BLIGHT_R) continue;
+      const was = o.poison ?? 0;
+      o.poison = Math.max(was, BLIGHT_STACKS);
+      if (was <= 0) fx.push({ t: 'status', id: o.id, kind: 'poison', on: true });
+    }
+  }
   if (t.kind === 'cadre') updateBossShield(s);
   if (!quiet && s.phase === 'resolve') {
     // Mitosis (split capstone): the shot's first kill by a child releases more children from it.
@@ -359,7 +397,8 @@ export function heroDamage(s: RunState, n: number, src: TargetKind, x: number, y
   // Slow (time stop fork): hero damage halved (rounded up) while Slow lasts.
   if ((s.slowPhases ?? 0) > 0) n = Math.ceil(n * SLOW_MULT);
   // Follow cue trade: charges hit harder.
-  if (how === 'charge' && s.stats.cue === 'follow') n += FOLLOW_CHARGE_EXTRA;
+  // Roll (follow fork): no charge penalty.
+  if (how === 'charge' && s.stats.cue === 'follow' && !mod(s, 'follow.roll')) n += FOLLOW_CHARGE_EXTRA;
   const dmg = Math.max(1, Math.round(n) - s.stats.armor);
   s.hp = Math.max(0, s.hp - dmg);
   fx.push({ t: 'heroHit', x, y, dmg, src, how });

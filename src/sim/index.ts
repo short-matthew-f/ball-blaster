@@ -16,3 +16,10 @@ export const sim: SimApi = { createRun, step, shoot, previewShot, canFastForward
  */
 export { beltPreview } from './belts';
 export { BELT_SHIFT, MAINSPRING_MOVE_DIST } from '../core/tuning';
+
+/**
+ * Bog (v0.7): mud queries. `inMudAt` = a point inside a patch; `mudOnLine` = the straight centre path a -> b enters a
+ * patch (bots' mud-aware target choice; ignores MUD BOOTS); `hasMud` = the run has patches. Implemented in sim/mud.ts.
+ */
+export { hasMud, inMudAt, mudOnLine } from './mud';
+export { LOB_R, MUD_GROW, QUEEN_PULL } from '../core/tuning';

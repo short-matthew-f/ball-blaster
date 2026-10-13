@@ -109,6 +109,7 @@ export function startLoot(s: RunState, fx: FxEvent[]): void {
   s.targets = [];
   s.enemyQueue = [];
   s.beltAt = undefined;
+  s.pullAt = undefined;
   s.timeStopped = false;
   s.skipNextEnemyPhase = false;
   s.balls = s.balls.filter((b) => b.kind === 'main');

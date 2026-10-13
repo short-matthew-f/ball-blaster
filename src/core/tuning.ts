@@ -65,14 +65,14 @@ export const TARGET_DEFS: Record<TargetKind, TargetDef> = {
     hp: 3, r: 12, mass: 1.2, cash: 8, bounce: 1, staggerAt: 1, chargeSpeed: 0, reach: 0,
     intents: [{ t: 'repair', weight: 60 }, { t: 'shoot', n: 1, weight: 40 }], // repair = heal most damaged ally within 70 px
   },
-  // Bog (spec stubs; the sim owner sets the spec numbers)
+  // Bog (v0.7 spec values; sim owner may retune within the gate)
   leech: {
-    hp: 4, r: 12, mass: 1.2, cash: 9, bounce: 0.8, staggerAt: 2, chargeSpeed: 240, reach: 110,
-    intents: [{ t: 'steal', n: 2, weight: 60 }, { t: 'advance', weight: 40 }],
+    hp: 4, r: 13, mass: 1.3, cash: 9, bounce: 1, staggerAt: 2, chargeSpeed: 240, reach: 100,
+    intents: [{ t: 'steal', n: 2, weight: 60 }, { t: 'advance', weight: 30 }, { t: 'rest', weight: 10 }], // steal = Attack that heals it (LEECH_HEAL)
   },
   croaker: {
-    hp: 4, r: 13, mass: 1.5, cash: 10, bounce: 0.8, staggerAt: 2, chargeSpeed: 0, reach: 0,
-    intents: [{ t: 'lob', n: 2, weight: 70 }, { t: 'rest', weight: 30 }],
+    hp: 3, r: 13, mass: 1.2, cash: 8, bounce: 1, staggerAt: 1, chargeSpeed: 0, reach: 0,
+    intents: [{ t: 'lob', n: 3, weight: 60 }, { t: 'advance', weight: 40 }], // lob = artillery at the hero's spot; advance = sideways
   },
   // Loot Goblin (loot phase; spec numbers, sim owner may retune within the hits-per-pull test)
   goblin: {
@@ -287,7 +287,7 @@ export const GEAR_EXIT_MAX_DEG = 75;
 /** Tinker Repair: range (edge gap, px) and heal (x stage hpScale, ceil). */
 export const REPAIR_RANGE = 70;
 export const REPAIR_HEAL = 2;
-/** Cogs per regular wave (extras become grunts) and live boss-summoned cogs. */
+/** Cogs per regular wave (extras become grunts) and live boss-summoned cogs. v0.7: WAVE_KIND_CAP holds every per-wave kind cap. */
 export const COG_WAVE_CAP = 2;
 export const BOSS_COG_CAP = 2;
 /** The Mainspring's soft roll after Wind / Charge / Summon (px). */
@@ -478,3 +478,41 @@ export const HEAVY_SPIT_DMG = 2;
 /** Time Stop / Slow: phases at half damage (ceil). */
 export const SLOW_PHASES = 2;
 export const SLOW_MULT = 0.5;
+
+// ---------- v0.7 Bog (world 4) ----------
+/** Mud patches per slot (loops: the slot-4 count) and their radius range (px). */
+export const MUD_COUNT = [2, 3, 3, 4];
+export const MUD_R_MIN = 16;
+export const MUD_R_MAX = 22;
+/** Hero speed kept entering mud by MUD BOOTS level (RunStats.mudGrip 0/1/2). Extra balls and enemies always stop. */
+export const MUD_KEEP = [0, 0.5, 1];
+/** Per regular wave: at most this many of a kind (extras become grunts). */
+export const WAVE_KIND_CAP: Partial<Record<TargetKind, number>> = { cog: COG_WAVE_CAP, leech: 2, croaker: 2 };
+/** Leech: a landed steal heals it LEECH_HEAL x the damage dealt (capped at its max HP). */
+export const LEECH_HEAL = 1;
+/** Croaker lob: lands on the hero when its centre is within LOB_R + hero r of the mark. */
+export const LOB_R = 24;
+/** The Mire Queen: live summoned leeches, phase-2 mud growth (px of radius), pull per enemy phase (px). */
+export const BOSS_LEECH_CAP = 2;
+export const MUD_GROW = 8;
+export const QUEEN_PULL = 40;
+/** Follow / Plow: the hero's second enemy contact of a shot +this. Cannon: the keep applies on contacts 1..this. */
+export const PLOW_DMG = 1;
+export const CANNON_CONTACTS = 3;
+/** Poison / Plague: bump-spread stacks. Sap: poisoned enemies deal -this (min 1). Blight: radius (edge gap) and stacks. Siphon: 1 HP per this much tick damage. */
+export const PLAGUE_STACKS = 1;
+export const SAP_DMG = 1;
+export const BLIGHT_R = 40;
+export const BLIGHT_STACKS = 2;
+export const SIPHON_PER = 3;
+/** Thorns / Barbs: poison stacks on a pricked charger. Riposte: knock-back speed (px/s). Brace: first landed charge x this (ceil). */
+export const BARBS_STACKS = 2;
+export const RIPOSTE_SPEED = 200;
+export const BRACE_MULT = 0.5;
+/** Shrapnel / Flak: shard life (s). Spear: aim radius (edge gap from the corpse). Fragment: plain shards from the shot's first shard kill. */
+export const FLAK_LIFE = 1.2;
+export const SPEAR_R = 80;
+export const FRAG_SHARDS = 2;
+/** Rack 'Em / Tight: pull (px). Scatter: push away from the centre (px). */
+export const TIGHT_PULL = 30;
+export const SCATTER_PUSH = 20;

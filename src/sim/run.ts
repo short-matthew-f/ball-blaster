@@ -40,6 +40,9 @@ import {
   SLOW_PHASES,
   SPIT_LIVE_CAP,
   ZIP_MULT,
+  SCATTER_PUSH,
+  TIGHT_PULL,
+  TARGET_DEFS,
 } from '../core/tuning';
 import { has, lv, mod, spitInterval } from './gear';
 import { Rng } from '../core/rng';
@@ -48,6 +51,8 @@ import { emptyCombo, evaluateCombos } from './combos';
 import { effectiveReach, enemyStep, shockwaveWave, startEnemyPhase } from './enemy';
 import { endLootShot, inLoot, lootStep, startLoot } from './loot';
 import { OBSTACLE_R, spawnObstacle, spawnWave } from './spawn';
+import { rollIntent } from './intents';
+import { hasMud, inMudAt, mudEntry, refreshMud } from './mud';
 import { hero, stageWaves } from './damage';
 
 export function mainBall(s: RunState): Ball {
@@ -168,6 +173,8 @@ export function shoot(s: RunState, pull: Vec): boolean {
   s.childSplitUsed = false;
   s.teslaHits = 0;
   s.mortarBlasts = 0;
+  s.followHits = 0;
+  s.fragUsed = false;
   s.shotBounces = 0;
   s.firstHitDone = false;
   s.shots++;
@@ -183,6 +190,8 @@ export function shoot(s: RunState, pull: Vec): boolean {
     s.shotGoblinHits = s.goblinHits;
   }
   s.phase = 'resolve';
+  // Bog: a hero launched from inside a patch leaves freely (positional moves since the last step never count).
+  refreshMud(s);
   (s.pendingFx ??= []).push({ t: 'shoot', power });
   return true;
 }
@@ -391,15 +400,36 @@ export function useTrick(s: RunState): boolean {
     case 'rackEm': {
       const cx = TABLE.x + TABLE.w / 2;
       const cy = TABLE.y + TABLE.h / 2;
+      // Tight: a longer pull. Scatter: every enemy is pushed SCATTER_PUSH px away from the centre instead (clamped).
+      const scatter = mod(s, 'rackEm.scatter');
+      const pull = mod(s, 'rackEm.tight') ? TIGHT_PULL : RACK_PULL;
       for (const t of s.targets) {
         if (t.dead) continue;
         const d = Math.hypot(cx - t.x, cy - t.y);
-        const k = Math.min(RACK_PULL, d) / (d || 1);
+        if (scatter) {
+          if (d < 1e-9) continue;
+          t.x = Math.max(TABLE.x + t.r, Math.min(TABLE.x + TABLE.w - t.r, t.x + ((t.x - cx) / d) * SCATTER_PUSH));
+          t.y = Math.max(TABLE.y + t.r, Math.min(TABLE.y + TABLE.h - t.r, t.y + ((t.y - cy) / d) * SCATTER_PUSH));
+          continue;
+        }
+        const k = Math.min(pull, d) / (d || 1);
         t.x += (cx - t.x) * k;
         t.y += (cy - t.y) * k;
       }
       relaxAll(s);
       jamRule(s, fx);
+      // Re-rack (capstone): every live enemy but the scripted kinds rerolls its intent (seeded).
+      if (mod(s, 'rackEm.rerack')) {
+        for (const t of s.targets) if (!t.dead && t.kind !== 'bomber' && t.kind !== 'brute' && t.kind !== 'boss') rollIntent(s, t);
+      }
+      // Table Roll (capstone): a non-boss enemy left with its centre in mud skips its next turn (staggered now) and is held one more phase.
+      if (mod(s, 'rackEm.tableroll') && hasMud(s)) {
+        for (const t of s.targets) {
+          if (t.dead || t.kind === 'boss' || !inMudAt(s, t.x, t.y)) continue;
+          t.stagger = Math.max(t.stagger, TARGET_DEFS[t.kind].staggerAt);
+          t.held = Math.max(t.held ?? 0, 1);
+        }
+      }
       break;
     }
     case 'shockwave':
@@ -425,7 +455,7 @@ function recallTo(s: RunState, h: Ball): void {
   const exact = (x: number, y: number): Vec | null => (spotClear(s, h, x, y) && hasCorridor(s, x, y) ? { x, y } : nearestOpenSpot(s, x, y));
   let p: Vec | null = null;
   if (mod(s, 'recall.blink')) {
-    const threats = s.targets.filter((t) => !t.dead && (t.intent.t === 'attack' || t.intent.t === 'charge'));
+    const threats = s.targets.filter((t) => !t.dead && (t.intent.t === 'attack' || t.intent.t === 'steal' || t.intent.t === 'charge'));
     const safe = (x: number, y: number) => threats.every((t) => Math.hypot(t.x - x, t.y - y) - t.r - h.r > effectiveReach(t) + BLINK_MARGIN);
     p = nearestOpenSpot(s, h.x, h.y, safe);
   } else if (mod(s, 'recall.rewind') && s.launch) {
@@ -480,6 +510,8 @@ export function previewShot(s: RunState, pull: Vec): Vec[] {
   const circles: { x: number; y: number; r: number }[] = [];
   for (const t of s.targets) if (!t.dead) circles.push(t);
   for (const o of s.obstacles) if (!o.dead) circles.push(o);
+  // Bog: the line stops where the hero's centre would enter mud (unless MUD BOOTS 2 keeps full speed).
+  const mud = (s.stats.mudGrip ?? 0) < 2 && hasMud(s);
 
   for (let k = 0; k <= bounces; k++) {
     let tw = Infinity;
@@ -506,6 +538,11 @@ export function previewShot(s: RunState, pull: Vec): Vec[] {
       if (disc < 0) continue;
       const tt = -bq - Math.sqrt(disc);
       if (tt > 1e-6 && tt < tc) tc = tt;
+    }
+    const tm = mud ? mudEntry(s, px, py, dx, dy) : null;
+    if (tm !== null && tm <= tw && tm < tc) {
+      pts.push({ x: px + dx * tm, y: py + dy * tm });
+      return pts;
     }
     if (tc <= tw) {
       pts.push({ x: px + dx * tc, y: py + dy * tc });

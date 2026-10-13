@@ -136,7 +136,8 @@ const capDef = (k: number): Def => {
 interface IslandSpec {
   world: string;
   counter: [string, string, string];
-  cleats?: boolean;
+  /** The counter answers the world's hazard instead of +2 HP: 'belt' = CLEATS (beltGrip), 'mud' = MUD BOOTS (mudGrip). */
+  grip?: 'belt' | 'mud';
   cash: [string, string];
   themed: [string, string];
   /** An extra cash keystone (chests on island 2, shrine on island 3), at local (0,-80) off the counter. */
@@ -144,8 +145,8 @@ interface IslandSpec {
 }
 const ISLANDS: Record<number, IslandSpec> = {
   2: { world: 'ICE CAVERN', counter: ['ICE GRIP', '+2 HP on ice', 'icon_hp'], cash: ['ICE FUNDS', '+5% cash on ice'], themed: ['secondWind', 'reflex'], extra: 'chests' },
-  3: { world: 'CLOCKWORK', counter: ['CLEATS', 'Belts move you -12px', 'icon_cleats'], cleats: true, cash: ['SCRAP SALE', '+5% cash on works'], themed: ['heavyHits', 'speed'], extra: 'shrine' },
-  4: { world: 'BOG', counter: ['MUD BOOTS', '+2 HP in bog', 'icon_hp'], cash: ['BOG TRADE', '+5% cash in bog'], themed: ['waveRest', 'armor'] },
+  3: { world: 'CLOCKWORK', counter: ['CLEATS', 'Belts move you -12px', 'icon_cleats'], grip: 'belt', cash: ['SCRAP SALE', '+5% cash on works'], themed: ['heavyHits', 'speed'], extra: 'shrine' },
+  4: { world: 'BOG', counter: ['MUD BOOTS', 'Mud keeps 50% speed', 'icon_mudboots'], grip: 'mud', cash: ['BOG TRADE', '+5% cash in bog'], themed: ['waveRest', 'armor'] },
   5: { world: 'EMBER PIT', counter: ['HEAT SHIELD', '+2 HP in pit', 'icon_hp'], cash: ['ASH MARKET', '+5% cash in pit'], themed: ['bossHeal', 'comboSweep'] },
   6: { world: 'NEON CASINO', counter: ['LUCKY SOCKS', '+2 HP at casino', 'icon_hp'], cash: ['HOUSE CUT', '+5% cash at casino'], themed: ['comboBank', 'comboCascade'] },
 };
@@ -228,13 +229,16 @@ function islandK(k: number): UpgradeNode[] {
   const id = (s: string) => `g${k}_${s}`;
   const hub = `portal_w${k}`;
   const [cName, cDesc, cIcon] = spec.counter;
-  const counterLv1 = spec.cleats
-    ? (s: RunStats) => { s.beltGrip = Math.max(s.beltGrip, 1); }
-    : (s: RunStats) => { s.maxHp += 2; };
+  // Grip counters (CLEATS, MUD BOOTS): portal = level 1, the counter node = level 2; no +2 HP.
+  const grip = (s: RunStats, lvl: number) => {
+    if (spec.grip === 'belt') s.beltGrip = Math.max(s.beltGrip, lvl);
+    else s.mudGrip = Math.max(s.mudGrip ?? 0, lvl);
+  };
+  const counterLv1 = spec.grip ? (s: RunStats) => grip(s, 1) : (s: RunStats) => { s.maxHp += 2; };
   const portal: Def = { id: hub, name: spec.world, desc: cDesc, kind: 'portal', max: 1, cost: flat(3), currency: TOKEN_OF_WORLD[k - 2], icon: 'icon_portal',
     apply: (s) => counterLv1(s) };
-  const counter: Def = { id: id('counter'), name: cName, desc: cDesc, kind: 'counter', max: spec.cleats ? 1 : 2, cost: price(k, 100, 1.5), icon: cIcon,
-    apply: spec.cleats ? (s, l) => { s.beltGrip = Math.max(s.beltGrip, 1 + l); } : (s, l) => { s.maxHp += 2 * l; } };
+  const counter: Def = { id: id('counter'), name: cName, desc: cDesc, kind: 'counter', max: spec.grip ? 1 : 2, cost: price(k, 100, 1.5), icon: cIcon,
+    apply: spec.grip ? (s, l) => grip(s, 1 + l) : (s, l) => { s.maxHp += 2 * l; } };
   const cash: Def = { id: id('cash'), name: spec.cash[0], desc: spec.cash[1], kind: 'stat', max: 5, cost: price(k, 80, 1.5), icon: 'icon_cash',
     apply: (s, l) => { s.cashMult += 0.05 * l; } };
   const [A, B] = spec.themed;

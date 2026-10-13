@@ -710,7 +710,7 @@ describe('v0.3 step 2: stage generator, scaling, modifiers, boss traits, hazards
 
   it('ice hazard: patches only on Ice; a body crossing one keeps (almost) all its speed', () => {
     expect(makeStage('w1s1').hazards).toEqual([]);
-    expect(makeStage('w4s1').hazards).toEqual([]); // w3 has conveyors (v0.5); mud/lava/slot are still data-only
+    expect(makeStage('w5s1').hazards).toEqual([]); // w3 has conveyors, w4 mud (v0.7); lava is still a stub
     const st = makeStage('w2s1');
     expect(st.hazards.length).toBeGreaterThan(0);
     expect(st.hazards.every((h) => h.kind === 'ice')).toBe(true);
@@ -3013,4 +3013,868 @@ describe('v0.6 M3 w2/w3: determinism with the new choices', () => {
       expect(ff).toEqual(normal);
     });
   }
+});
+
+// ---------- v0.7 Bog (world 4): mud, MUD BOOTS, leech, croaker, the Mire Queen, waves ----------
+import { BELT_HOLD, BOSS_LEECH_CAP, LOB_R, MUD_GROW, MUD_KEEP, QUEEN_PULL, THORNS_RELIC_DMG } from '../src/core/tuning';
+import { numbed, relaxAll } from '../src/sim/physics';
+import { inMudAt, mudOnLine } from '../src/sim/index';
+
+const MUD: Hazard = { kind: 'mud', x: 90, y: 150, r: 20 };
+/** clab on Bog (w4s1 by default): empty table, hero at (x,y), the given hazards. */
+function blab(hazards: Hazard[], x = 90, y = 240, over: Partial<RunStats> = {}, stage = 'w4s1'): RunState {
+  return clab(hazards, x, y, over, stage);
+}
+const muds = (fx: FxEvent[]) => fx.filter((f): f is Extract<FxEvent, { t: 'mud' }> => f.t === 'mud');
+const stageHash = (a: number, b: number): [number, number] => {
+  let h = 0;
+  const str = JSON.stringify(Array.from({ length: b - a }, (_, i) => makeStage(idFromIndex(a + i))));
+  for (let i = 0; i < str.length; i++) h = (Math.imul(h, 31) + str.charCodeAt(i)) | 0;
+  return [h, str.length];
+};
+/** Run the resolve phase only (no enemy phase), collecting fx. */
+function resolveOnly(s: RunState): FxEvent[] {
+  const fx: FxEvent[] = [];
+  while (s.phase === 'resolve') fx.push(...step(s, SIM_DT));
+  return fx;
+}
+
+describe('v0.7 Bog: stage generator', () => {
+  it('w4s1-4: mud 2/3/3/4, r in [16,22], inside the ice box, gaps >= 10, deterministic', () => {
+    const want = [2, 3, 3, 4];
+    for (let k = 1; k <= 4; k++) {
+      const hz = makeStage(stageId(4, k)).hazards;
+      expect(hz.length).toBe(want[k - 1]);
+      for (const z of hz) {
+        expect(z.kind).toBe('mud');
+        expect(z.r).toBeGreaterThanOrEqual(16);
+        expect(z.r).toBeLessThanOrEqual(22);
+        expect(z.x).toBeGreaterThanOrEqual(TABLE.x + z.r + 4);
+        expect(z.x).toBeLessThanOrEqual(TABLE.x + TABLE.w - z.r - 4);
+        expect(z.y).toBeGreaterThanOrEqual(TABLE.y + z.r + 20);
+        expect(z.y).toBeLessThanOrEqual(TABLE.y + TABLE.h - z.r - 70);
+        for (const o of hz) if (o !== z) expect(Math.hypot(o.x - z.x, o.y - z.y) - o.r - z.r).toBeGreaterThanOrEqual(10);
+      }
+    }
+    const m0 = makeStage('w4s1').hazards[0];
+    expect([Math.round(m0.x), Math.round(m0.y), Math.round(m0.r)]).toEqual([70, 172, 17]);
+    expect(makeStage('l1w4s1').hazards.length).toBeLessThanOrEqual(4);
+  });
+  it('worlds 1-3 stage data unchanged by v0.7 (hashes n = 0..7 and 8..11)', () => {
+    expect(stageHash(0, 8)).toEqual([1834690106, 9165]);
+    expect(stageHash(8, 12)).toEqual([426042823, 5398]);
+  });
+  it('Bog waves, roster and boss wave; Thin Rails: Bog 0.5, Felt 0.65; no loop-0 w4 stage rolls it', () => {
+    const w = WORLDS[3];
+    expect([w.physics.friction, w.physics.rollDecel, w.physics.wallBounce, w.tint]).toEqual([0.9, 110, 0.6, 'w']);
+    expect(w.roster).toContain('leech');
+    expect(w.roster).toContain('croaker');
+    expect(w.waves.map((x) => x.slots)).toEqual([
+      ['grunt', 'leech', 'croaker'],
+      ['grunt', 'leech', 'croaker', ['bouncer', 'thornback'], 'brute'],
+      ['leech', 'croaker', 'bomber', ['broodmother', 'hive'], 'brute'],
+    ]);
+    expect(w.bossWave.slots).toEqual(['boss', 'leech', 'croaker']);
+    expect(makeStage('w4s4').boss.kit).toBe('mirequeen');
+    for (let k = 1; k <= 4; k++) expect(makeStage(stageId(4, k)).modifiers).not.toContain('thinRails');
+    const all = [1, 2, 3].flatMap((l) => allStageIds(l)).map(makeStage).filter((st) => st.modifiers.includes('thinRails'));
+    const bog = all.find((st) => st.world === 4)!;
+    const felt = all.find((st) => st.world === 1)!;
+    expect(bog.wallBounce).toBeCloseTo(0.5, 9);
+    expect(felt.wallBounce).toBe(THIN_RAILS_BOUNCE);
+    for (const st of all) if (st.world <= 3) expect(st.wallBounce).toBe(THIN_RAILS_BOUNCE);
+  });
+});
+
+describe('v0.7 Bog: mud', () => {
+  it('a shot through a patch stops at entry (resting, one mud fx)', () => {
+    const s = blab([MUD]);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    const fx = resolveOnly(s);
+    const h = s.balls[0];
+    expect(muds(fx).map((f) => f.id)).toEqual([h.id]);
+    expect(h.resting).toBe(true);
+    expect(inMudAt(s, h.x, h.y)).toBe(true);
+    expect(h.y).toBeGreaterThan(MUD.y + MUD.r - 3);
+  });
+  it('a body resting (placed) inside leaves freely; a rail return re-entering stops again', () => {
+    const s = blab([MUD], 90, 150);
+    shoot(s, { x: 0, y: -MAX_PULL });
+    const fx = resolveOnly(s);
+    const h = s.balls[0];
+    // Out the top, off the rail, back down into the patch: exactly one stop, on the way back in.
+    expect(muds(fx).length).toBe(1);
+    expect(fx.some((f) => f.t === 'wall')).toBe(true);
+    expect(fx.findIndex((f) => f.t === 'wall')).toBeLessThan(fx.findIndex((f) => f.t === 'mud'));
+    expect(h.y).toBeLessThan(MUD.y - MUD.r + 3);
+    expect(h.resting).toBe(true);
+    // Placed inside and shot down: it leaves without a stop.
+    const q = blab([MUD], 90, 150);
+    shoot(q, { x: 0, y: MAX_PULL / 3 });
+    expect(muds(resolveOnly(q)).length).toBe(0);
+    expect(q.balls[0].y).toBeGreaterThan(MUD.y + MUD.r);
+  });
+  it('split / spat balls entering are swallowed; a knocked enemy stops', () => {
+    const s = blab([MUD], 30, 280);
+    shoot(s, { x: 0, y: 20 });
+    s.balls[0].vx = s.balls[0].vy = 0;
+    s.balls[0].resting = true;
+    s.balls.push({ id: 900, kind: 'split', x: 90, y: 230, vx: 0, vy: -300, r: 2.5, mass: 0.5, life: Infinity, resting: false, banked: false });
+    s.balls.push({ id: 901, kind: 'spat', shard: true, x: 120, y: 160, vx: -300, vy: 0, r: 2, mass: 0.4, life: 2, resting: false, banked: false });
+    const g = dummy(s, 'grunt', 90, 60);
+    g.vy = 300;
+    g.resting = false;
+    let minY = Infinity;
+    const fx: FxEvent[] = [];
+    while (s.phase === 'resolve') {
+      fx.push(...step(s, SIM_DT));
+      const b = s.balls.find((x) => x.id === 900);
+      if (b) minY = Math.min(minY, b.y);
+    }
+    expect(muds(fx).map((f) => f.id).sort()).toEqual([900, 901, g.id].sort());
+    expect(s.balls.length).toBe(1);
+    expect(minY).toBeGreaterThan(MUD.y + MUD.r - 4);
+    expect(g.resting).toBe(true);
+    expect(inMudAt(s, g.x, g.y)).toBe(true);
+    expect(g.y).toBeLessThan(MUD.y - MUD.r + 4);
+  });
+  it('a charging grunt entering mud rests with chargeDmg 0; the hero is untouched', () => {
+    const s = blab([MUD], 90, 60);
+    const g = put(s, 'grunt', 90, 190);
+    g.intent = { t: 'attack', n: 3 };
+    const fx = enemyPhaseOnly(s);
+    expect(fx.some((f) => f.t === 'launch')).toBe(true);
+    expect(muds(fx).map((f) => f.id)).toEqual([g.id]);
+    expect(g.chargeDmg ?? 0).toBe(0);
+    expect(s.hp).toBe(s.maxHp);
+    expect(inMudAt(s, g.x, g.y)).toBe(true);
+  });
+  it("Rack 'Em into mud fires nothing; the racked enemy leaves freely", () => {
+    const s = blab([{ kind: 'mud', x: 90, y: 160, r: 20 }], 90, 270, { trick: 'rackEm', trickUses: 1 });
+    const g = put(s, 'grunt', 90, 190);
+    g.intent = { t: 'rest' };
+    expect(useTrick(s)).toBe(true);
+    expect(inMudAt(s, g.x, g.y)).toBe(true);
+    expect(g.inMud).toBe(true);
+    g.intent = { t: 'advance' };
+    const fx = [...step(s, SIM_DT), ...enemyPhaseOnly(s)];
+    expect(muds(fx).length).toBe(0);
+    expect(fx.some((f) => f.t === 'launch')).toBe(true);
+  });
+  it('mudOnLine: a centre path entering a patch (not one it starts in)', () => {
+    const s = blab([MUD]);
+    expect(mudOnLine(s, 90, 240, 90, 60)).toBe(true);
+    expect(mudOnLine(s, 30, 240, 30, 60)).toBe(false);
+    expect(mudOnLine(s, 90, 150, 90, 60)).toBe(false);
+    expect(mudOnLine(s, 90, 240, 90, 200)).toBe(false);
+  });
+});
+
+describe('v0.7 Bog: MUD BOOTS', () => {
+  const entry = (grip: number) => {
+    const s = blab([MUD], 90, 240, { mudGrip: grip });
+    shoot(s, { x: 0, y: -MAX_PULL });
+    let before = 0;
+    let after = -1;
+    const fx: FxEvent[] = [];
+    while (s.phase === 'resolve') {
+      const v = speedOf(s);
+      const f = step(s, SIM_DT);
+      fx.push(...f);
+      if (after < 0 && f.some((x) => x.t === 'mud')) ((before = v), (after = speedOf(s)));
+    }
+    return { s, fx, before, after };
+  };
+  it('mudGrip 1: the hero keeps 50 % on entry (one fx); 2: unchanged, no fx, it rolls through', () => {
+    const one = entry(1);
+    expect(muds(one.fx).length).toBe(1);
+    expect(Math.abs(one.after - one.before * MUD_KEEP[1])).toBeLessThan(4);
+    expect(one.s.balls[0].resting).toBe(true);
+    const two = entry(2);
+    expect(muds(two.fx).length).toBe(0);
+    expect(two.s.balls[0].y).toBeLessThan(MUD.y - MUD.r);
+  });
+  it('enemies and shards still stop at mudGrip 2', () => {
+    const s = blab([MUD], 30, 280, { mudGrip: 2 });
+    shoot(s, { x: 0, y: 20 });
+    s.balls[0].vx = s.balls[0].vy = 0;
+    s.balls[0].resting = true;
+    s.balls.push({ id: 901, kind: 'spat', shard: true, x: 120, y: 160, vx: -300, vy: 0, r: 2, mass: 0.4, life: 2, resting: false, banked: false });
+    const g = dummy(s, 'grunt', 90, 60);
+    g.vy = 300;
+    g.resting = false;
+    const fx = resolveOnly(s);
+    expect(muds(fx).map((f) => f.id).sort()).toEqual([901, g.id].sort());
+  });
+  it('previewShot ends on the patch at grip 0/1 and passes at 2', () => {
+    for (const grip of [0, 1, 2]) {
+      const s = blab([MUD], 90, 240, { mudGrip: grip, aimPreview: 1 });
+      const pts = previewShot(s, { x: 0, y: -MAX_PULL });
+      if (grip < 2) {
+        expect(pts.length).toBe(2);
+        expect(pts[1].y).toBeCloseTo(MUD.y + MUD.r, 6);
+      } else expect(pts[1].y).toBeCloseTo(TABLE.y + 12, 6);
+    }
+  });
+});
+
+describe('v0.7 Bog: leech', () => {
+  const n2 = () => Math.max(1, Math.round(2 * stageById('w4s1').atkScale));
+  const stealLab = (over: Partial<RunStats> = {}, room = 30) => {
+    const s = blab([], 90, 240, { maxHp: 80, ...over });
+    const l = put(s, 'leech', 90, 170);
+    l.hp = l.maxHp - room;
+    l.intent = { t: 'steal', n: n2() };
+    return { s, l };
+  };
+  it('rolls Steal for the scaled 2; the landed steal hits for it and heals that (capped; Follow 3)', () => {
+    const r = blab([]);
+    const l0 = put(r, 'leech', 90, 100);
+    const seen = new Set<string>();
+    for (let i = 0; i < 100; i++) {
+      rollIntentForTest(r, l0);
+      seen.add(l0.intent.t);
+      if (l0.intent.t === 'steal') expect(l0.intent.n).toBe(n2());
+    }
+    expect([...seen].sort()).toEqual(['advance', 'rest', 'steal']);
+    const { s, l } = stealLab();
+    const hp0 = l.hp;
+    const fx = enemyPhaseOnly(s);
+    expect(s.hp).toBe(80 - n2());
+    expect(l.hp).toBe(hp0 + n2());
+    expect(fx.filter((f) => f.t === 'steal')).toEqual([{ t: 'steal', x: expect.any(Number), y: expect.any(Number), amount: n2() }]);
+    const full = stealLab({}, 0);
+    const f2 = enemyPhaseOnly(full.s);
+    expect(full.l.hp).toBe(full.l.maxHp);
+    expect(f2.some((f) => f.t === 'steal')).toBe(false);
+    const fol = stealLab({ cue: 'follow' });
+    const h1 = fol.l.hp;
+    enemyPhaseOnly(fol.s);
+    expect(fol.s.hp).toBe(80 - n2() - 1);
+    expect(fol.l.hp).toBe(h1 + n2() + 1);
+  });
+  it('Juggernaut and Cling block it (no heal); Thorns pricks it after the heal', () => {
+    const j = stealLab({ mods: ['heavy.jugger'] });
+    const hj = j.l.hp;
+    enemyPhaseOnly(j.s);
+    expect([j.l.hp, j.s.hp]).toEqual([hj, 80]);
+    const c = stealLab({ mods: ['sticky.cling'] });
+    c.s.stuckId = c.l.id;
+    const hc = c.l.hp;
+    enemyPhaseOnly(c.s);
+    expect([c.l.hp, c.s.hp]).toEqual([hc, 80]);
+    const t = stealLab({ relics: ['thorns'] });
+    const ht = t.l.hp;
+    enemyPhaseOnly(t.s);
+    expect(t.l.hp).toBe(ht + n2() - THORNS_RELIC_DMG[0]);
+  });
+  it('Time Stop: a leech with Steal advances (no blow) and keeps its intent', () => {
+    const { s, l } = stealLab({ trick: 'timeStop', trickUses: 1 });
+    l.x = 90;
+    l.y = 60;
+    useTrick(s);
+    const fx = enemyPhaseOnly(s);
+    expect(fx.filter((f) => f.t === 'launch').map((f) => (f as { intent: string }).intent)).toEqual(['advance']);
+    expect(s.hp).toBe(80);
+    expect(l.intent.t).toBe('steal');
+  });
+});
+
+describe('v0.7 Bog: croaker', () => {
+  const lobLab = (over: Partial<RunStats> = {}) => {
+    const s = blab([], 90, 240, { maxHp: 40, ...over });
+    const c = put(s, 'croaker', 40, 80);
+    c.intent = { t: 'lob', n: 5 };
+    dummy(s, 'grunt', 150, 60);
+    return { s, c };
+  };
+  const quiet = (s: RunState) => {
+    for (const t of s.targets) t.intent = { t: 'rest' };
+  };
+  it('rolls Lob for the scaled 3 or a sideways Advance', () => {
+    const s = blab([]);
+    const c = put(s, 'croaker', 40, 100);
+    const seen = new Set<string>();
+    for (let i = 0; i < 100; i++) {
+      rollIntentForTest(s, c);
+      seen.add(c.intent.t);
+      if (c.intent.t === 'lob') expect(c.intent.n).toBe(Math.max(1, Math.round(3 * stageById('w4s1').atkScale)));
+    }
+    expect([...seen].sort()).toEqual(['advance', 'lob']);
+    c.intent = { t: 'advance' };
+    s.balls[0].x = 40;
+    s.balls[0].y = 250;
+    enemyPhaseOnly(s);
+    expect(Math.abs(c.y - 100)).toBeLessThan(3);
+    expect(c.x - 40).toBeGreaterThan(30);
+  });
+  it('a lob marks the spot; next phase the hero inside LOB_R takes n (lobLand); moved 60 px it fizzles; a dead croaker never lands', () => {
+    const { s, c } = lobLab();
+    const fx = enemyPhaseOnly(s);
+    expect(c.lob).toEqual({ x: 90, y: 240, n: 5 });
+    expect(fx.filter((f) => f.t === 'lob')).toEqual([{ t: 'lob', x0: 40, y0: 80, x: 90, y: 240 }]);
+    expect(s.hp).toBe(40);
+    quiet(s);
+    s.balls[0].x = 90 + LOB_R; // inside LOB_R + hero r
+    const f2 = enemyPhaseOnly(s);
+    expect(s.hp).toBe(35);
+    expect(f2.find((f) => f.t === 'lobLand')).toEqual({ t: 'lobLand', x: 90, y: 240, r: LOB_R });
+    expect(c.lob).toBeUndefined();
+    const m = lobLab();
+    enemyPhaseOnly(m.s);
+    quiet(m.s);
+    m.s.balls[0].x = 30; // moved 60 px
+    const f3 = enemyPhaseOnly(m.s);
+    expect(m.s.hp).toBe(40);
+    expect(f3.some((f) => f.t === 'lobLand')).toBe(false);
+    expect(m.c.lob).toBeUndefined();
+    const d = lobLab();
+    enemyPhaseOnly(d.s);
+    quiet(d.s);
+    kill(d.s, d.c, 'main', []);
+    enemyPhaseOnly(d.s);
+    expect(d.s.hp).toBe(40);
+  });
+  it('a lob never touches the rng (Mirror equipped: identical streams); four lobs exceed the ranged cap', () => {
+    const rngAfter = (relics: RunStats['relics']) => {
+      const { s } = lobLab({ relics });
+      quiet(s);
+      s.targets[0].intent = { t: 'lob', n: 5 };
+      enemyPhaseOnly(s);
+      return JSON.stringify(s.rng);
+    };
+    expect(rngAfter(['mirror'])).toBe(rngAfter([]));
+    const s = blab([], 90, 240, { maxHp: 40 });
+    for (const x of [30, 70, 110, 150]) put(s, 'croaker', x, 70).intent = { t: 'lob', n: 6 };
+    enemyPhaseOnly(s);
+    quiet(s);
+    enemyPhaseOnly(s);
+    expect(40 - s.hp).toBe(24);
+    expect(24).toBeGreaterThan(Math.floor(RANGED_PHASE_CAP * 40));
+  });
+});
+
+describe('v0.7 Bog: the Mire Queen', () => {
+  const queenLab = (over: Partial<RunStats> = {}, hx = 90, hy = 240, hazards: Hazard[] = []) => {
+    const s = blab(hazards, hx, hy, over);
+    const q = put(s, 'boss', 90, 70);
+    q.intent = { t: 'rest' };
+    return { s, q };
+  };
+  const pulls = (fx: FxEvent[]) => fx.filter((f): f is Extract<FxEvent, { t: 'pull' }> => f.t === 'pull');
+  it('pulls the hero 40 px at her after the hold, before anyone acts; 10 px short slides 10', () => {
+    const { s } = queenLab();
+    put(s, 'grunt', 150, 120).intent = { t: 'advance' };
+    shoot(s, { x: 0, y: 20 });
+    s.balls[0].vx = s.balls[0].vy = 0;
+    s.balls[0].resting = true;
+    const fx: FxEvent[] = [];
+    let tStart = -1;
+    let tPull = -1;
+    while (s.phase !== 'aim') {
+      const f = step(s, SIM_DT);
+      if (tStart < 0 && s.phase === 'enemy') tStart = s.t;
+      if (f.some((x) => x.t === 'pull')) tPull = s.t;
+      fx.push(...f);
+    }
+    expect(tPull - tStart).toBeCloseTo(BELT_HOLD, 1);
+    expect(pulls(fx)).toEqual([{ t: 'pull', x: 90, y: 240 - QUEEN_PULL, dx: 0, dy: -QUEEN_PULL }]);
+    expect(fx.findIndex((f) => f.t === 'pull')).toBeLessThan(fx.findIndex((f) => f.t === 'launch'));
+    const near = queenLab({}, 90, 70 + 23 + 12 + 10);
+    enemyPhaseOnly(near.s);
+    expect(near.s.balls[0].y).toBeCloseTo(70 + 35, 6);
+  });
+  it('no pull when staggered, under Time Stop or Reflex; Slow still pulls; other bosses never pull', () => {
+    const st = queenLab();
+    st.q.stagger = TARGET_DEFS.boss.staggerAt;
+    expect(pulls(enemyPhaseOnly(st.s)).length).toBe(0);
+    const ts = queenLab({ trick: 'timeStop', trickUses: 1 });
+    useTrick(ts.s);
+    expect(pulls(enemyPhaseOnly(ts.s)).length).toBe(0);
+    const rf = queenLab({ reflex: 1 });
+    expect(pulls(enemyPhaseOnly(rf.s)).length).toBe(0);
+    const sl = queenLab({ trick: 'timeStop', trickUses: 1, mods: ['timeStop.slow'] });
+    useTrick(sl.s);
+    expect(pulls(enemyPhaseOnly(sl.s)).length).toBe(1);
+    for (const stage of ['w1s1', 'w3s1']) {
+      const o = blab([], 90, 240, {}, stage);
+      put(o, 'boss', 90, 70).intent = { t: 'rest' };
+      expect(pulls(enemyPhaseOnly(o)).length).toBe(0);
+    }
+  });
+  it('a pull into mud fires nothing; the hero then leaves freely', () => {
+    const { s } = queenLab({}, 90, 190, [MUD]);
+    const fx = enemyPhaseOnly(s);
+    expect(pulls(fx).length).toBe(1);
+    expect(inMudAt(s, s.balls[0].x, s.balls[0].y)).toBe(true);
+    expect(muds(fx).length).toBe(0);
+    shoot(s, { x: 0, y: MAX_PULL / 3 });
+    expect(muds(resolveOnly(s)).length).toBe(0);
+  });
+  it('phase 2 grows every patch 8 once (mudGrow right after bossPhase; swallows nothing); a second createRun is ungrown', () => {
+    const { s, q } = queenLab({}, 90, 240, [MUD, { kind: 'mud', x: 40, y: 220, r: 18 }]);
+    const g = dummy(s, 'grunt', 90, 150 + MUD.r + 5);
+    relaxAll(s);
+    expect(g.inMud).toBe(false);
+    const fx: FxEvent[] = [];
+    applyDamage(s, q, q.hp - Math.floor(q.maxHp / 2), 'main', fx);
+    const i = fx.findIndex((f) => f.t === 'bossPhase');
+    expect(fx[i + 1]).toEqual({ t: 'mudGrow' });
+    expect(s.hazards.map((z) => z.r)).toEqual([MUD.r + MUD_GROW, 18 + MUD_GROW]);
+    expect(g.inMud).toBe(true);
+    applyDamage(s, q, 1, 'main', fx);
+    expect(fx.filter((f) => f.t === 'mudGrow').length).toBe(1);
+    // A run's growth never leaks into the stage; patches stay inside the rails.
+    const a = createRun('w4s2', BASE_STATS, 3);
+    const boss = makeEnemy(a, 'boss', 90, 60);
+    a.targets.push(boss);
+    applyDamage(a, boss, boss.hp - Math.floor(boss.maxHp / 2), 'main', []);
+    const base = makeStage('w4s2').hazards;
+    a.hazards.forEach((z, k) => {
+      expect(z.r).toBeGreaterThan(base[k].r);
+      expect(z.r).toBeLessThanOrEqual(base[k].r + MUD_GROW);
+      expect(Math.min(z.x - TABLE.x, TABLE.x + TABLE.w - z.x, z.y - TABLE.y, TABLE.y + TABLE.h - z.y)).toBeGreaterThanOrEqual(z.r - 1e-9);
+    });
+    expect(createRun('w4s2', BASE_STATS, 3).hazards).toEqual(base);
+  });
+  it('Summon makes leeches (cap 2, pay 1, never count for the clear); weight 0 at the cap; phase 1/2 kits', () => {
+    const { s, q } = queenLab({}, 90, 280);
+    const g = dummy(s, 'grunt', 30, 250);
+    for (let k = 0; k < 3; k++) {
+      q.intent = { t: 'summon' };
+      for (const t of s.targets) if (t !== q) t.intent = { t: 'rest' };
+      enemyPhaseOnly(s);
+    }
+    const ls = s.targets.filter((t) => !t.dead && t.kind === 'leech');
+    expect(ls.length).toBe(BOSS_LEECH_CAP);
+    for (const l of ls) expect([l.summon, l.cashBase]).toEqual([true, 1]);
+    expect(liveRegulars(s)).toBe(2);
+    expect(g.dead).toBe(false);
+    const seen1 = new Set<string>();
+    for (let i = 0; i < 200; i++) {
+      rollIntentForTest(s, q);
+      seen1.add(q.intent.t);
+    }
+    expect([...seen1].sort()).toEqual(['advance', 'attack']);
+    q.phase = 1;
+    const seen2 = new Set<string>();
+    for (let i = 0; i < 200; i++) {
+      q.charged = false;
+      rollIntentForTest(s, q);
+      seen2.add(q.intent.t);
+    }
+    expect([...seen2].sort()).toEqual(['attack', 'charge']);
+    for (const l of ls) kill(s, l, 'main', []);
+    const seen3 = new Set<string>();
+    for (let i = 0; i < 200; i++) {
+      q.charged = false;
+      rollIntentForTest(s, q);
+      seen3.add(q.intent.t);
+    }
+    expect([...seen3].sort()).toEqual(['attack', 'charge', 'summon']);
+    q.charged = true;
+    rollIntentForTest(s, q);
+    expect(q.intent).toEqual({ t: 'attack', n: Math.max(1, Math.round(8 * stageById('w4s1').atkScale)) });
+  });
+});
+
+describe('v0.7 Bog: waves and liveness', () => {
+  it('leech / croaker <= 2 per wave (extras become grunts)', () => {
+    for (const seed of [1, 2, 3, 4, 5, 6]) {
+      for (const id of ['w4s4', 'l1w4s3']) {
+        const s = createRun(id, BASE_STATS, seed);
+        for (let w = 1; w <= 3; w++) {
+          s.targets = [];
+          s.wave = w;
+          spawnWaveForTest(s);
+          expect(s.targets.filter((t) => t.kind === 'leech').length).toBeLessThanOrEqual(2);
+          expect(s.targets.filter((t) => t.kind === 'croaker').length).toBeLessThanOrEqual(2);
+        }
+      }
+    }
+  });
+  it('w4s4: every enemy phase ends inside MAX_ENEMY_SECONDS', () => {
+    for (const seed of [2, 9]) {
+      const s = createRun('w4s4', { ...BASE_STATS, maxHp: 400, damage: 4 }, seed);
+      let worst = 0;
+      for (let i = 0; i < 12 && s.phase === 'aim'; i++) {
+        shoot(s, SHOTS[i % SHOTS.length]);
+        let n = 0;
+        while (s.phase !== 'aim' && s.phase !== 'over' && n++ < 240 * 60) {
+          step(s, SIM_DT);
+          if (s.phase === 'enemy') worst = Math.max(worst, s.resolveTime);
+        }
+      }
+      expect(worst).toBeLessThan(4);
+    }
+  });
+  it('w4s2: same seed + same shots => identical state; fast-forward matches', () => {
+    const go = (dt: number, seed: number) => {
+      const s = createRun('w4s2', { ...BASE_STATS, mudGrip: 1 }, seed);
+      for (const p of SHOTS) {
+        if (s.phase !== 'aim') break;
+        shoot(s, p);
+        untilSettled(s, dt);
+      }
+      return s;
+    };
+    for (const seed of [3, 8]) {
+      expect(snapshot(go(SIM_DT, seed))).toEqual(snapshot(go(SIM_DT, seed)));
+      const { t: _a, ...ff } = snapshot(go(SIM_DT * FAST_FORWARD_MULT, seed));
+      const { t: _b, ...normal } = snapshot(go(SIM_DT, seed));
+      expect(ff).toEqual(normal);
+    }
+  });
+});
+
+// ---------- v0.7: world-4 forks and capstones (one test per choice) ----------
+import { FOLLOW_KEEP_LV, SHARD_LIFE, SHRAPNEL_COUNT } from '../src/core/tuning';
+
+/** Step until the first 'hit' fx (or the phase ends); returns the fx. */
+function untilHit(s: RunState): FxEvent[] {
+  const fx: FxEvent[] = [];
+  while (s.phase === 'resolve') {
+    const f = step(s, SIM_DT);
+    fx.push(...f);
+    if (f.some((x) => x.t === 'hit')) break;
+  }
+  return fx;
+}
+const FOLLOW = { cue: 'follow' as const, gearLevel: { follow: 3 } };
+const RACK = { trick: 'rackEm' as const, trickUses: 1 };
+
+describe('v0.7 M3: follow cue', () => {
+  it('follow.plow: the 2nd hero contact of a shot +1, the 1st (and 3rd) +0', () => {
+    const run = (mods: string[], prior: number) => {
+      const s = mlab(mods, FOLLOW, 90, 240);
+      const g = dummy(s, 'grunt', 90, 180);
+      shoot(s, { x: 0, y: -MAX_PULL / 2 });
+      s.followHits = prior;
+      s.firstHitDone = prior > 0;
+      untilHit(s);
+      return 20 - g.hp;
+    };
+    expect(run(['follow.plow'], 0)).toBe(1);
+    expect(run(['follow.plow'], 1)).toBe(2);
+    expect(run(['follow.plow'], 2)).toBe(1);
+    expect(run([], 1)).toBe(1);
+  });
+  it('follow.roll: no charge penalty (2, not 3)', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, FOLLOW, 90, 240);
+      put(s, 'grunt', 90, 170).intent = { t: 'attack', n: 2 };
+      enemyPhaseOnly(s);
+      return BASE_STATS.maxHp - s.hp;
+    };
+    expect(run(['follow.roll'])).toBe(2);
+    expect(run([])).toBe(3);
+  });
+  it('follow.cannon: the keep applies on contacts 1..3, not the 4th', () => {
+    const ratio = (mods: string[], prior: number) => {
+      const s = mlab(mods, FOLLOW, 90, 240);
+      dummy(s, 'brute', 90, 170, 50);
+      shoot(s, { x: 0, y: -MAX_PULL });
+      s.followHits = prior;
+      s.firstHitDone = prior > 0;
+      while (s.phase === 'resolve') {
+        const vy = s.balls[0].vy;
+        if (step(s, SIM_DT).some((f) => f.t === 'hit')) return s.balls[0].vy / vy;
+      }
+      return NaN;
+    };
+    const keep = FOLLOW_KEEP_LV[3];
+    for (const prior of [0, 1, 2]) expect(ratio(['follow.cannon'], prior)).toBeCloseTo(keep, 1);
+    expect(ratio(['follow.cannon'], 3)).toBeLessThan(0.3);
+    expect(ratio([], 1)).toBeLessThan(0.3);
+  });
+  it('follow.topspin: on Bog the hero rails at 1 after the first hit, 0.6 before', () => {
+    const railRatio = (mods: string[], afterHit: boolean) => {
+      const s = blab([], 90, 200, { ...FOLLOW, mods });
+      shoot(s, { x: 0, y: -MAX_PULL });
+      s.firstHitDone = afterHit;
+      while (s.phase === 'resolve') {
+        const vy = s.balls[0].vy;
+        if (step(s, SIM_DT).some((f) => f.t === 'wall')) return -s.balls[0].vy / vy;
+      }
+      return NaN;
+    };
+    expect(railRatio(['follow.topspin'], true)).toBeCloseTo(1, 1);
+    expect(railRatio(['follow.topspin'], false)).toBeCloseTo(0.6, 1);
+    expect(railRatio([], true)).toBeCloseTo(0.6, 1);
+  });
+});
+
+describe('v0.7 M3: poison', () => {
+  it('poison.plague: a bump during the shot passes 1 stack; enemy-phase bumps do not', () => {
+    const run = (mods: string[], enemy: boolean) => {
+      const s = mlab(mods, { relics: ['poison'] }, 90, 270);
+      const a = dummy(s, 'grunt', 40, 100);
+      const b = dummy(s, 'grunt', 100, 100);
+      a.poison = 3;
+      if (enemy) bareEnemyPhase(s);
+      else stillShot(s);
+      a.vx = 300;
+      a.resting = false;
+      let maxP = 0;
+      for (let i = 0; i < 240 * 3 && s.phase !== 'aim'; i++) {
+        step(s, SIM_DT);
+        maxP = Math.max(maxP, b.poison ?? 0);
+      }
+      return maxP;
+    };
+    expect(run(['poison.plague'], false)).toBe(1);
+    expect(run(['poison.plague'], true)).toBe(0);
+    expect(run([], false)).toBe(0);
+  });
+  it('poison.sap: a poisoned enemy deals 1 less (3 -> 2), a 1 stays 1', () => {
+    const s = mlab(['poison.sap'], { relics: ['poison'] });
+    const g = dummy(s, 'grunt', 90, 100);
+    g.poison = 1;
+    expect([numbed(s, g, 3), numbed(s, g, 1), numbed(s, g, 0)]).toEqual([2, 1, 0]);
+    g.poison = 0;
+    expect(numbed(s, g, 3)).toBe(3);
+    const r = mlab(['poison.sap'], { relics: ['poison'] }, 90, 240);
+    const c = put(r, 'grunt', 90, 170);
+    c.hp = c.maxHp = 20;
+    c.poison = 3; // ticks to 2 before it acts
+    c.intent = { t: 'attack', n: 3 };
+    enemyPhaseOnly(r);
+    expect(BASE_STATS.maxHp - r.hp).toBe(2);
+  });
+  it('poison.blight: a poisoned enemy killed during the shot gives 2 within 40 px (gap 30 yes, 50 no); tick deaths do not', () => {
+    const run = (phase: 'resolve' | 'enemy') => {
+      const s = mlab(['poison.blight'], { relics: ['poison'] });
+      s.phase = phase;
+      const a = dummy(s, 'grunt', 60, 100, 1);
+      a.poison = 2;
+      const b = dummy(s, 'grunt', 60 + 24 + 30, 100);
+      const c = dummy(s, 'grunt', 60, 100 + 24 + 50);
+      kill(s, a, phase === 'resolve' ? 'main' : 'poison', []);
+      return [b.poison ?? 0, c.poison ?? 0];
+    };
+    expect(run('resolve')).toEqual([2, 0]);
+    expect(run('enemy')).toEqual([0, 0]);
+  });
+  it('poison.siphon: the phase ticks heal 1 per 3 (T 6 -> +2, T 2 -> 0)', () => {
+    const run = (T: number, mods = ['poison.siphon']) => {
+      const s = mlab(mods, { relics: ['poison'], maxHp: 30 });
+      s.hp = 10;
+      dummy(s, 'grunt', 90, 80, 50).poison = T;
+      enemyPhaseOnly(s);
+      return s.hp - 10;
+    };
+    expect(run(6)).toBe(2);
+    expect(run(2)).toBe(0);
+    expect(run(6, [])).toBe(0);
+  });
+});
+
+describe('v0.7 M3: thorns', () => {
+  const charge = (mods: string[], over: Partial<RunStats> = {}, kind: TargetKind = 'grunt') => {
+    const s = mlab(mods, { relics: ['thorns'], maxHp: 60, ...over }, 90, 240);
+    const e = put(s, kind, 90, kind === 'boss' ? 150 : 170);
+    e.hp = e.maxHp = 200;
+    e.intent = { t: 'attack', n: 2 };
+    stillShot(s);
+    const h = s.balls[0];
+    let v = -1;
+    let away = 0;
+    const fx: FxEvent[] = [];
+    while (s.phase !== 'aim') {
+      const f = step(s, SIM_DT);
+      fx.push(...f);
+      if (v < 0 && f.some((x) => x.t === 'heroHit')) {
+        v = Math.hypot(e.vx, e.vy);
+        away = e.vx * (e.x - h.x) + e.vy * (e.y - h.y);
+      }
+    }
+    return { s, e, v, away, fx };
+  };
+  it('thorns.barbs: a pricked charger is poisoned 2 and ticks without the Poison card', () => {
+    const { s, e } = charge(['thorns.barbs']);
+    expect(e.poison).toBe(2);
+    expect(e.hp).toBe(200 - THORNS_RELIC_DMG[0]);
+    e.intent = { t: 'rest' };
+    enemyPhaseOnly(s);
+    expect(e.hp).toBe(200 - THORNS_RELIC_DMG[0] - 2);
+    expect(e.poison).toBe(1);
+    expect(charge([]).e.poison ?? 0).toBe(0);
+  });
+  it('thorns.riposte: the charger rolls away at 200 px/s; the boss does not', () => {
+    const r = charge(['thorns.riposte']);
+    expect(Math.abs(r.v - 200)).toBeLessThan(3);
+    expect(r.away).toBeGreaterThan(0);
+    expect(charge(['thorns.riposte'], {}, 'boss').v).toBe(0);
+    expect(charge([]).v).toBe(0);
+  });
+  it('thorns.brace: the first landed charge each phase deals half (4 -> 2), the next full', () => {
+    const s = mlab(['thorns.brace'], { relics: ['thorns'], maxHp: 60 }, 90, 240);
+    const a = put(s, 'grunt', 90, 170);
+    const b = put(s, 'grunt', 90, 274);
+    for (const e of [a, b]) ((e.hp = e.maxHp = 50), (e.intent = { t: 'attack', n: 4 }));
+    const hits = (fx: FxEvent[]) => fx.filter((f): f is Extract<FxEvent, { t: 'heroHit' }> => f.t === 'heroHit' && f.how === 'charge').map((f) => f.dmg);
+    expect(hits(enemyPhaseOnly(s))).toEqual([2, 4]);
+    expect(a.hp).toBe(50 - THORNS_RELIC_DMG[0]);
+    a.intent = { t: 'attack', n: 4 };
+    b.intent = { t: 'rest' };
+    expect(hits(enemyPhaseOnly(s))).toEqual([2]);
+  });
+  it('thorns.quills: the thorns deal the hero damage stat', () => {
+    expect(charge(['thorns.quills'], { damage: 5 }).e.hp).toBe(200 - 5);
+    expect(charge([], { damage: 5 }).e.hp).toBe(200 - THORNS_RELIC_DMG[0]);
+  });
+});
+
+describe('v0.7 M3: shrapnel', () => {
+  const killShards = (mods: string[], over: Partial<RunStats> = {}) => {
+    const s = mlab(mods, { relics: ['shrapnel'], ...over }, 90, 270);
+    stillShot(s);
+    const a = dummy(s, 'grunt', 60, 100, 1);
+    const fx: FxEvent[] = [];
+    kill(s, a, 'main', fx, s.balls[0]);
+    return { s, fx, shards: s.balls.filter((b) => b.shard) };
+  };
+  it('shrapnel.flak: shards live 1.2 s', () => {
+    const on = killShards(['shrapnel.flak']).shards;
+    expect(on.length).toBe(SHRAPNEL_COUNT[0]);
+    for (const b of on) expect(b.life).toBe(1.2);
+    for (const b of killShards([]).shards) expect(b.life).toBe(SHARD_LIFE);
+  });
+  it('shrapnel.spear: one shard at the hero damage, aimed at the nearest enemy within 80 px', () => {
+    const s = mlab(['shrapnel.spear'], { relics: ['shrapnel'], damage: 3 }, 90, 270);
+    stillShot(s);
+    const a = dummy(s, 'grunt', 60, 100, 1);
+    const b = dummy(s, 'grunt', 130, 100, 20);
+    kill(s, a, 'main', [], s.balls[0]);
+    const sh = s.balls.filter((x) => x.shard);
+    expect(sh.length).toBe(1);
+    expect(sh[0].spear).toBe(true);
+    expect(sh[0].vx).toBeGreaterThan(0);
+    expect(Math.abs(sh[0].vy)).toBeLessThan(1e-6);
+    const fx = resolveAll(s);
+    expect(hitsOf(fx, 'spat')[0].dmg).toBe(3);
+    expect(b.hp).toBeLessThanOrEqual(17);
+  });
+  it('shrapnel.fragment: the first shard kill of a shot sheds 2 plain shards, once', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, { relics: ['shrapnel'] }, 90, 270);
+      stillShot(s);
+      const shard = { id: 950, kind: 'spat' as const, shard: true, x: 30, y: 60, vx: 0, vy: 0, r: 2, mass: 0.4, life: 1, resting: false, banked: false };
+      s.balls.push(shard);
+      const n0 = s.balls.length;
+      kill(s, dummy(s, 'grunt', 60, 100, 1), 'spat', [], shard);
+      const n1 = s.balls.length;
+      kill(s, dummy(s, 'grunt', 120, 100, 1), 'spat', [], shard);
+      return [n1 - n0, s.balls.length - n1, s.balls.filter((b) => b.spear).length];
+    };
+    expect(run(['shrapnel.fragment'])).toEqual([2, 0, 0]);
+    expect(run([])).toEqual([0, 0, 0]);
+  });
+  it('shrapnel.plating: a hero-ball kill blocks one charge, at most once a wave', () => {
+    const s = mlab(['shrapnel.plating'], { maxHp: 40 }, 90, 240);
+    const g = put(s, 'grunt', 90, 170);
+    g.hp = g.maxHp = 50;
+    const kills = () => {
+      s.phase = 'resolve';
+      kill(s, dummy(s, 'grunt', 30, 60, 1), 'main', [], s.balls[0]);
+      s.phase = 'aim';
+    };
+    kills();
+    expect(s.plated).toBe(true);
+    g.intent = { t: 'attack', n: 3 };
+    const fx = enemyPhaseOnly(s);
+    expect(s.hp).toBe(40);
+    expect(fx.some((f) => f.t === 'blocked')).toBe(true);
+    expect([s.plated, s.platingWave]).toEqual([false, s.wave]);
+    kills();
+    g.x = 90;
+    g.y = 170;
+    s.balls[0].x = 90;
+    s.balls[0].y = 240;
+    g.intent = { t: 'attack', n: 3 };
+    enemyPhaseOnly(s);
+    expect(s.hp).toBe(37);
+  });
+});
+
+describe("v0.7 M3: rack 'em", () => {
+  it('rackEm.tight: pulls 30 px (20 without)', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, RACK, 90, 270);
+      const g = dummy(s, 'grunt', 90, 60);
+      useTrick(s);
+      return g.y - 60;
+    };
+    expect(run(['rackEm.tight'])).toBeCloseTo(30, 6);
+    expect(run([])).toBeCloseTo(20, 6);
+  });
+  it('rackEm.scatter: every enemy pushed 20 px away from the centre; no overlaps', () => {
+    const s = mlab(['rackEm.scatter'], RACK, 90, 270);
+    const a = dummy(s, 'grunt', 64, 160);
+    const b = dummy(s, 'grunt', 116, 160);
+    const c = dummy(s, 'grunt', 90, 120);
+    useTrick(s);
+    expect([a.x, b.x, c.y].map((v) => Math.round(v * 1e6) / 1e6)).toEqual([44, 136, 100]);
+    expect(maxOverlap(s)).toBeLessThan(0.01);
+  });
+  it('rackEm.rerack: rerolls every intent but the scripted kinds; deterministic', () => {
+    const run = (mods: string[]) => {
+      const s = mlab(mods, RACK, 90, 270);
+      const gs = [30, 70, 110, 150].map((x) => dummy(s, 'grunt', x, 80));
+      const br = put(s, 'brute', 90, 150);
+      const bi = br.intent;
+      useTrick(s);
+      return { intents: gs.map((g) => g.intent), brute: br.intent === bi, rng: JSON.stringify(s.rng) };
+    };
+    const a = run(['rackEm.rerack']);
+    expect(a).toEqual(run(['rackEm.rerack']));
+    expect(a.intents.some((i) => i.t !== 'rest')).toBe(true);
+    expect(a.brute).toBe(true);
+    expect(run([]).intents.every((i) => i.t === 'rest')).toBe(true);
+  });
+  it('rackEm.tableroll: a grunt racked into mud is held 1; the boss is not', () => {
+    const MID: Hazard = { kind: 'mud', x: 90, y: 160, r: 20 };
+    const g = (() => {
+      const s = blab([MID], 90, 270, { ...RACK, mods: ['rackEm.tableroll'] });
+      const e = dummy(s, 'grunt', 90, 190);
+      useTrick(s);
+      return e;
+    })();
+    expect(g.held).toBe(1);
+    const s = blab([MID], 90, 290, { ...RACK, mods: ['rackEm.tableroll'] });
+    const q = dummy(s, 'boss', 90, 195);
+    useTrick(s);
+    expect(inMudAt(s, q.x, q.y)).toBe(true);
+    expect(q.held).toBeUndefined();
+    const off = blab([MID], 90, 270, RACK);
+    const e2 = dummy(off, 'grunt', 90, 190);
+    useTrick(off);
+    expect(e2.held).toBeUndefined();
+  });
+});
+
+describe('v0.7 M3 w4: determinism with the new choices', () => {
+  const W4: RunStats = {
+    ...BASE_STATS, damage: 2, maxHp: 60, cue: 'follow', relics: ['poison', 'thorns', 'shrapnel'], trick: 'rackEm', trickUses: 2, mudGrip: 1,
+    gearLevel: { follow: 3, poison: 3, thorns: 3, shrapnel: 3, rackEm: 3 },
+    mods: ['follow.plow', 'follow.cannon', 'poison.plague', 'poison.blight', 'thorns.barbs', 'thorns.brace', 'shrapnel.spear', 'shrapnel.fragment', 'rackEm.rerack'],
+  };
+  it('w4 kit on w4s2: same seed => identical state; fast-forward matches', () => {
+    const go = (dt: number) => {
+      const s = createRun('w4s2', W4, 7);
+      SHOTS.forEach((p, i) => {
+        if (s.phase !== 'aim') return;
+        if (i === 1) useTrick(s);
+        shoot(s, p);
+        untilSettled(s, dt);
+      });
+      return s;
+    };
+    const a = go(SIM_DT);
+    expect(a.shots).toBeGreaterThan(1);
+    expect(snapshot(a)).toEqual(snapshot(go(SIM_DT)));
+    const { t: _a, ...ff } = snapshot(go(SIM_DT * FAST_FORWARD_MULT));
+    const { t: _b, ...normal } = snapshot(go(SIM_DT));
+    expect(ff).toEqual(normal);
+  });
 });

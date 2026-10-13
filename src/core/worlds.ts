@@ -22,6 +22,9 @@ import {
   SWIFT_MOD,
   THIN_RAILS_BOUNCE,
   BELT_SIZE,
+  MUD_COUNT,
+  MUD_R_MAX,
+  MUD_R_MIN,
 } from './tuning';
 
 export type { HazardKind };
@@ -89,9 +92,17 @@ const CLOCK_WAVES: WaveDef[] = [
   { slots: ['cog', 'tinker', 'bomber', ['broodmother', 'hive'], 'brute'], formations: ['rack', 'wall', 'pincer', 'ring'], formationWeights: W3_FORM, elite: 4 },
 ];
 const CLOCK_BOSS_WAVE: WaveDef = { slots: ['boss', 'tinker', 'cog'], formations: ['pincer', 'ring'], formationWeights: BOSS_FORM };
+// Bog (v0.7): leeches (steal) and croakers (lob artillery) replace the skirmishers; Felt formation weights. Regular waves
+// hold at most WAVE_KIND_CAP of each (sim/spawn.ts).
+const BOG_WAVES: WaveDef[] = [
+  { slots: ['grunt', 'leech', 'croaker'], formations: ['rack'], formationWeights: W1_FORM },
+  { slots: ['grunt', 'leech', 'croaker', ['bouncer', 'thornback'], 'brute'], formations: ['rack', 'wall'], formationWeights: W2_FORM },
+  { slots: ['leech', 'croaker', 'bomber', ['broodmother', 'hive'], 'brute'], formations: ['rack', 'wall', 'pincer', 'ring'], formationWeights: W3_FORM, elite: 4 },
+];
+const BOG_BOSS_WAVE: WaveDef = { slots: ['boss', 'leech', 'croaker'], formations: ['pincer', 'ring'], formationWeights: BOSS_FORM };
 const FELT_PHYS = { friction: 0.6, rollDecel: 70, wallBounce: 0.75 };
 
-/** Worlds 3-6 are stubs for now: Felt roster/waves, their own physics, names, tints and boss names. */
+/** Worlds 5-6 are stubs for now: Felt roster/waves, their own physics, names, tints and boss names. */
 export const WORLDS: WorldDef[] = [
   {
     index: 1, id: 'felt', name: 'Felt Hall', tint: 'G', physics: FELT_PHYS, hpMult: 1, atkMult: 1, hazard: null, roster: FELT_ROSTER,
@@ -109,8 +120,8 @@ export const WORLDS: WorldDef[] = [
   },
   {
     index: 4, id: 'bog', name: 'Bog', tint: 'w', physics: { friction: 0.9, rollDecel: 110, wallBounce: 0.6 }, hpMult: 2.2, atkMult: 1.4, hazard: 'mud',
-    roster: FELT_ROSTER,
-    boss: { name: 'Mire Queen', hp: 60, r: 23, signature: [], cadre: 2, kit: 'mirequeen' }, waves: FELT_WAVES, bossWave: FELT_BOSS_WAVE,
+    roster: [...FELT_ROSTER, 'leech', 'croaker'],
+    boss: { name: 'Mire Queen', hp: 60, r: 23, signature: [], cadre: 2, kit: 'mirequeen' }, waves: BOG_WAVES, bossWave: BOG_BOSS_WAVE,
   },
   {
     index: 5, id: 'ember', name: 'Ember Pit', tint: 'r', physics: { friction: 0.5, rollDecel: 60, wallBounce: 0.8 }, hpMult: 2.2, atkMult: 1.4, hazard: 'lava',
@@ -307,9 +318,33 @@ function makeClockHazards(n: number, slot: number, loop: number): Hazard[] {
   return [...belts, ...gears];
 }
 
+/**
+ * Bog: MUD_COUNT patches per slot (loops: the slot-4 count), r in [MUD_R_MIN, MUD_R_MAX], inside the ice box, centre
+ * gaps >= r1 + r2 + 10, 200 tries. Seeded by n only.
+ */
+function makeMudHazards(n: number, slot: number, loop: number): Hazard[] {
+  const rng = new Rng(0x3ad + 7919 * (n + 1));
+  const want = loop > 0 ? MUD_COUNT[3] : MUD_COUNT[slot - 1];
+  const out: Hazard[] = [];
+  for (let tries = 0; out.length < want && tries < 200; tries++) {
+    const r = rng.range(MUD_R_MIN, MUD_R_MAX);
+    const x = rng.range(TABLE.x + r + 4, TABLE.x + TABLE.w - r - 4);
+    const y = rng.range(TABLE.y + r + 20, TABLE.y + TABLE.h - r - 70);
+    if (out.some((o) => Math.hypot(o.x - x, o.y - y) < o.r + r + 10)) continue;
+    out.push({ kind: 'mud', x, y, r });
+  }
+  return out;
+}
+
+/** Thin Rails: rails drop to THIN_RAILS_BOUNCE, or by 0.1 when the world's rails are already below it (Bog 0.6 -> 0.5). */
+function thinRails(wallBounce: number): number {
+  return wallBounce >= THIN_RAILS_BOUNCE ? THIN_RAILS_BOUNCE : Math.round((wallBounce - 0.1) * 100) / 100;
+}
+
 function makeHazards(world: WorldDef, n: number, slot = 1, loop = 0): Hazard[] {
   if (world.hazard === 'conveyor') return makeClockHazards(n, slot, loop);
-  if (world.hazard !== 'ice') return []; // mud / lava / slot: data shape only, no generator or behaviour yet
+  if (world.hazard === 'mud') return makeMudHazards(n, slot, loop);
+  if (world.hazard !== 'ice') return []; // lava / slot: data shape only, no generator or behaviour yet
   const rng = new Rng(0x1ce + 7919 * (n + 1));
   const out: Hazard[] = [];
   for (let tries = 0; out.length < ICE_PATCHES && tries < 200; tries++) {
@@ -364,7 +399,7 @@ export function makeStage(id: StageId): StageDef {
     hazards: makeHazards(world, n, slot, loop),
     friction: world.physics.friction,
     rollDecel: world.physics.rollDecel,
-    wallBounce: modifiers.includes('thinRails') ? THIN_RAILS_BOUNCE : world.physics.wallBounce,
+    wallBounce: modifiers.includes('thinRails') ? thinRails(world.physics.wallBounce) : world.physics.wallBounce,
     waves,
     bossWave: cloneWave(world.bossWave),
     hpScale: world.hpMult * SLOT_HP_MULT[slot - 1] * hpGrowth * (modifiers.includes('hardy') ? HARDY_MOD_HP : 1),

@@ -83,6 +83,17 @@ function freeTravel(s: RunState, m: SweepBody, list: SweepBody[], dx: number, dy
   return Math.max(0, t);
 }
 
+/**
+ * Free travel (<= max px) of body `ref` (the hero or a live target) along unit (dx,dy) before it touches a rail, a live
+ * obstacle or another live body (the sweep's slide-to-contact rule). The Mire Queen's pull uses it.
+ */
+export function slideRoom(s: RunState, ref: Ball | Target, dx: number, dy: number, max: number): number {
+  const list = sweepBodies(s);
+  const me = list.find((m) => m.ref === ref);
+  if (!me) return 0;
+  return freeTravel(s, me, list, dx, dy, max);
+}
+
 /** One sweep pass over `list` (mutates the copies). Owners are fixed at the start of the pass. */
 function sweepPass(s: RunState, list: SweepBody[]): void {
   const owner = new Map<SweepBody, Hazard>();

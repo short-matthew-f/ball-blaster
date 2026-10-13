@@ -68,7 +68,7 @@ export type Modifier =
 /** Boss traits: phases (HP thresholds), cadre (shield minions), moves (repositions every phase). */
 export type BossTrait = 'phases' | 'cadre' | 'moves';
 
-/** Board hazards. Only 'ice' has behaviour yet (zero friction inside); the rest are data-only stubs. */
+/** Board hazards: ice (near-zero friction), conveyor + gear (Clockwork), mud (Bog: entry stops a body). lava/slot are data-only stubs. */
 export type HazardKind = 'ice' | 'conveyor' | 'gear' | 'mud' | 'lava' | 'slot';
 
 export interface Hazard {
@@ -205,6 +205,10 @@ export interface Ball {
   jumpLanded?: boolean;
   /** v0.6 M3 Trample (jump.trample): id of the enemy last jumped (hit too on the landing contact). */
   lastJumped?: number;
+  /** v0.7 Bog: centre inside a mud patch at the end of the last substep (entry = stop; leaving is free). */
+  inMud?: boolean;
+  /** v0.7 Spear (shrapnel.spear): this shard deals the hero's damage stat. */
+  spear?: boolean;
 }
 
 export type TargetKind =
@@ -300,6 +304,10 @@ export interface Target {
   held?: number;
   /** v0.6 M3 Trap (sticky.trap): the next hero contact on it deals x TRAP_MULT. */
   trapped?: boolean;
+  /** v0.7 Bog: centre inside a mud patch at the end of the last substep. */
+  inMud?: boolean;
+  /** v0.7 Croaker: a pending lob (the hero's spot when it was thrown; lands at the start of the next enemy phase for n). */
+  lob?: { x: number; y: number; n: number };
 }
 
 export type ObstacleKind = 'bumper' | 'crate' | 'chest' | 'shrine' | 'gear';
@@ -487,6 +495,17 @@ export interface RunState {
   mortarBlasts?: number;
   /** v0.6 M3 Aftershock (shockwave.aftershock): shot number whose enemy phase repeats the wave. */
   aftershockShot?: number;
+  /** v0.7 Bog: sim time at which the Mire Queen's pull fires this enemy phase (undefined = none pending). */
+  pullAt?: number;
+  /** v0.7 Cannon (follow.cannon): hero enemy contacts this shot. */
+  followHits?: number;
+  /** v0.7 Brace (thorns.brace): the first landed charge of this enemy phase was already halved. */
+  braceUsed?: boolean;
+  /** v0.7 Fragment (shrapnel.fragment): the shard-kill burst was spent this shot. */
+  fragUsed?: boolean;
+  /** v0.7 Plating (shrapnel.plating): a hero-ball kill holds one charge block; platingWave = the wave it was last spent in. */
+  plated?: boolean;
+  platingWave?: number;
 }
 
 /** Public sim API implemented by sim/index.ts. */
@@ -589,6 +608,18 @@ export type FxEvent =
   | { t: 'repair'; x: number; y: number; amount: number }
   /** Clockwork: the Mainspring reversed every conveyor (phase 2 entry). */
   | { t: 'beltReverse' }
+  /** Bog: a body entered a mud patch at (x,y) and stopped (or, with MUD BOOTS 1, slowed). */
+  | { t: 'mud'; x: number; y: number; id: number }
+  /** Bog: a leech's landed charge healed it by `amount` (at the leech). */
+  | { t: 'steal'; x: number; y: number; amount: number }
+  /** Bog: a croaker lobbed from (x0,y0) at the mark (x,y); it lands at the start of the next enemy phase. */
+  | { t: 'lob'; x0: number; y0: number; x: number; y: number }
+  /** Bog: a lob landed on the hero at the mark (x,y), radius r. */
+  | { t: 'lobLand'; x: number; y: number; r: number }
+  /** Bog: the Mire Queen's phase 2 entry grew every mud patch. */
+  | { t: 'mudGrow' }
+  /** Bog: the Mire Queen pulled the hero from (x-dx, y-dy) to (x, y). */
+  | { t: 'pull'; x: number; y: number; dx: number; dy: number }
   /** Loot phase begins (goblin arriving). */
   | { t: 'lootStart' }
   /** A player ball hit the goblin: loot tier and cash paid. */
