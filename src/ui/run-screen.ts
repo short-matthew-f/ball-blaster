@@ -168,7 +168,7 @@ export class RunScreen implements Screen {
     ctx.save();
     ctx.translate(sh.x, sh.y);
     const flash = this.app.save.settings.flash;
-    drawWorld(ctx, s, now, flash, { heroFlash: this.fx.heroFlash, beltFlash: this.fx.beltFlash, goblinAt: (id) => this.fx.goblinAt(id) });
+    drawWorld(ctx, s, now, flash, { heroFlash: this.fx.heroFlash, beltFlash: this.fx.beltFlash, mudFlash: this.fx.mudFlash, goblinAt: (id) => this.fx.goblinAt(id) });
     drawBeltGhost(ctx, s, now);
     this.drawHint(ctx, s, now);
     this.drawAim(ctx, s);

@@ -56,6 +56,8 @@ export class Fx {
   rings: Ring[] = [];
   tracers: Tracer[] = [];
   afterimages: Afterimage[] = [];
+  /** Seconds of mud-growth rim flash remaining. */
+  mudFlash = 0;
   /** Seconds of conveyor-reversal white flash remaining. */
   beltFlash = 0;
   shake = 0;
@@ -94,6 +96,7 @@ export class Fx {
     this.slides.length = 0;
     this.goblinPre = null;
     this.beltFlash = 0;
+    this.mudFlash = 0;
     this.heroFlash = 0;
     this.vignette = 0;
     this.shake = 0;
@@ -428,6 +431,43 @@ export class Fx {
           this.beltFlash = 0.4;
           this.addShake(1.5);
           break;
+        case 'mud':
+          this.burst(e.x, e.y, [P['2'], P['3'], P.E], 10, 50, 0.45, 90, 2);
+          this.rings.push({ x: e.x, y: e.y, r: 10, life: 0.25, max: 0.25, color: P['3'], color2: P.E });
+          break;
+        case 'mudGrow':
+          this.mudFlash = 0.4;
+          this.addShake(1.5);
+          break;
+        case 'steal':
+          this.floater(e.x, e.y - 12, `+${fmt(e.amount)}`, P.E);
+          this.burst(e.x, e.y, [P.E, P.m, P.R], 6, 30, 0.5, -30);
+          break;
+        case 'lob': {
+          // dotted arc from the croaker to the marked spot
+          const n = 14;
+          for (let i = 1; i < n; i++) {
+            const k = i / n;
+            this.particles.push({
+              x: e.x0 + (e.x - e.x0) * k, y: e.y0 + (e.y - e.y0) * k - Math.sin(k * Math.PI) * 36,
+              vx: 0, vy: 0, life: 0.3, max: 0.3, color: i % 2 ? P.E : P['5'], size: 1, g: 0,
+            });
+          }
+          this.burst(e.x0, e.y0, [P.E, P.e], 4, 25, 0.25, 0);
+          break;
+        }
+        case 'lobLand':
+          this.rings.push({ x: e.x, y: e.y, r: e.r, life: 0.35, max: 0.35, color: P.E, color2: P['5'] });
+          this.burst(e.x, e.y, [P['2'], P['3'], P.E, P.e], 14, 70, 0.45, 100, 2);
+          this.addShake(0.5);
+          break;
+        case 'pull':
+          // afterimages from the old hero spot toward the new one (x,y = new spot, dx,dy = travel)
+          for (let k = 0; k < 3; k++) {
+            const f = k / 3;
+            this.afterimages.push({ x: e.x - e.dx * (1 - f), y: e.y - e.dy * (1 - f), life: 0.3 - k * 0.06, max: 0.3 });
+          }
+          break;
         case 'shimmer':
         case 'ballClack':
         case 'launch':
@@ -463,6 +503,7 @@ export class Fx {
     for (const sl of this.slides) sl.t += dt;
     this.slides = this.slides.filter((sl) => sl.t < SCURRY_T);
     this.beltFlash = Math.max(0, this.beltFlash - dt);
+    this.mudFlash = Math.max(0, this.mudFlash - dt);
     this.heroFlash = Math.max(0, this.heroFlash - dt);
     this.vignette = Math.max(0, this.vignette - dt);
     for (const r of this.rings) r.life -= dt;

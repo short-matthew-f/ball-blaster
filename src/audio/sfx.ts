@@ -358,6 +358,40 @@ export class Sfx {
           this.noise(0.5, 0.12, 'bandpass', 700);
           this.tone(130, 0.4, 'square', 0.06, 45, 0.1);
           break;
+        case 'mud':
+          if (!this.gate('mud')) break;
+          this.noise(0.16, 0.2, 'lowpass', 380);
+          this.tone(180, 0.14, 'sine', 0.2, 70);
+          this.tone(110, 0.1, 'sine', 0.12, 160, 0.06);
+          break;
+        case 'steal':
+          if (!this.gate('steal')) break;
+          this.noise(0.22, 0.1, 'bandpass', 900);
+          this.tone(420, 0.2, 'sine', 0.14, 160);
+          this.tone(200, 0.1, 'sine', 0.1, 320, 0.14);
+          break;
+        case 'lob':
+          if (!this.gate('lob')) break;
+          this.tone(500, 0.4, 'sine', 0.12, 1500);
+          this.tone(260, 0.12, 'square', 0.05, 340);
+          break;
+        case 'lobLand':
+          if (!this.gate('lobLand')) break;
+          this.noise(0.2, 0.3, 'lowpass', 700);
+          this.tone(150, 0.2, 'sine', 0.3, 50);
+          this.tone(260, 0.06, 'square', 0.08, 120);
+          break;
+        case 'pull':
+          if (!this.gate('pull')) break;
+          this.tone(90, 0.18, 'sawtooth', 0.2, 140);
+          this.tone(150, 0.12, 'square', 0.14, 100, 0.17);
+          this.noise(0.12, 0.12, 'lowpass', 500, 0.05);
+          break;
+        case 'mudGrow':
+          if (!this.gate('mudGrow')) break;
+          this.noise(0.5, 0.2, 'lowpass', 300);
+          this.tone(75, 0.5, 'sawtooth', 0.14, 50);
+          break;
         case 'shoot': // played locally on a successful shoot() call
         case 'shimmer':
           break;

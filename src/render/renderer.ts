@@ -146,7 +146,7 @@ export function ringDots(ctx: CanvasRenderingContext2D, x: number, y: number, r:
 /** Worlds 4-6 reuse the Big Stripe sprite until their art lands: overlay the world tint. Null = no tint. */
 function bossTint(stage: string): string | null {
   const w = parseStageId(stage).world;
-  return w >= 4 ? WORLDS[w - 1]?.tint ?? null : null;
+  return w >= 5 ? WORLDS[w - 1]?.tint ?? null : null;
 }
 
 /** Banner text for a stage's active modifiers ("RANGED · DARK"); '' when none. */
@@ -162,9 +162,10 @@ export function drawModIcons(ctx: CanvasRenderingContext2D, stage: string, x: nu
 }
 
 /** Board hazards under the enemies: ice = pale cyan dithered disc with a lighter rim; stub kinds = dim grey. */
-function drawHazard(ctx: CanvasRenderingContext2D, h: Hazard, s: RunState, now: number, flash: boolean, beltFlash: number): void {
+function drawHazard(ctx: CanvasRenderingContext2D, h: Hazard, s: RunState, now: number, flash: boolean, beltFlash: number, mudFlash = 0): void {
   if (h.kind === 'conveyor') { drawConveyor(ctx, h, s, now, flash, beltFlash); return; }
-  if (h.kind !== 'ice' && h.kind !== 'mud' && h.kind !== 'lava' && h.kind !== 'slot') return; // gear lives in s.obstacles
+  if (h.kind === 'mud') { drawMud(ctx, h, now, flash, mudFlash); return; }
+  if (h.kind !== 'ice' && h.kind !== 'lava' && h.kind !== 'slot') return; // gear lives in s.obstacles
   const ice = h.kind === 'ice';
   const fill = ice ? P.c : P['3'];
   const rim = ice ? P['5'] : P['4'];
@@ -181,6 +182,57 @@ function drawHazard(ctx: CanvasRenderingContext2D, h: Hazard, s: RunState, now: 
   ctx.globalAlpha = ice ? 0.9 : 0.6;
   ctx.fillStyle = rim;
   for (let a = 0; a < Math.PI * 2; a += 1 / Math.max(4, R)) ctx.fillRect(Math.round(cx + Math.cos(a) * R), Math.round(cy + Math.sin(a) * R), 1, 1);
+  ctx.globalAlpha = 1;
+}
+
+/** Mud: 8x8 tiles clipped to the disc (frames alternate 0.5 s, static when flash is off), soft dark rim; rim flashes white on growth. */
+function drawMud(ctx: CanvasRenderingContext2D, h: Hazard, now: number, flash: boolean, mudFlash: number): void {
+  const R = Math.round(h.r), cx = Math.round(h.x), cy = Math.round(h.y);
+  if (R <= 0) return;
+  const img = getSprite(flash && Math.floor(now / 0.5) % 2 ? 'mud_b' : 'mud');
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.globalAlpha = 0.9;
+  const x0 = cx - R - (((cx - R) % 8) + 8) % 8, y0 = cy - R - (((cy - R) % 8) + 8) % 8;
+  for (let y = y0; y < cy + R; y += 8) for (let x = x0; x < cx + R; x += 8) ctx.drawImage(img, x, y);
+  ctx.restore();
+  const flashing = mudFlash > 0;
+  ctx.fillStyle = flashing ? WHITE : P['2'];
+  for (let a = 0; a < Math.PI * 2; a += 1 / Math.max(4, R)) {
+    ctx.globalAlpha = flashing ? Math.min(1, mudFlash / 0.4) : 0.9;
+    ctx.fillRect(Math.round(cx + Math.cos(a) * R), Math.round(cy + Math.sin(a) * R), 1, 1);
+    if (!flashing) {
+      ctx.globalAlpha = 0.35;
+      ctx.fillRect(Math.round(cx + Math.cos(a) * (R - 1)), Math.round(cy + Math.sin(a) * (R - 1)), 1, 1);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+/** Croaker lob mark: pulsing dotted ring at the aimed spot (drawn always, even Dark: it targets you) with a target cross. */
+function drawLobMark(ctx: CanvasRenderingContext2D, t: Target, now: number, flash: boolean): void {
+  const lob = t.lob;
+  if (!lob) return;
+  const pulse = flash ? 0.5 + 0.5 * Math.sin(now * 8) : 1;
+  const r = 24 - (flash ? pulse * 2 : 0);
+  ctx.globalAlpha = 0.5 + 0.5 * pulse;
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = P.R;
+  ctx.beginPath();
+  ctx.arc(Math.round(lob.x), Math.round(lob.y), 24, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 0.5 + 0.5 * pulse;
+  ringDots(ctx, lob.x, lob.y, r, P.p, flash ? now * 2 : 0, 0.12);
+  ringDots(ctx, lob.x, lob.y, r + 1, P.R, flash ? now * 2 : 0, 0.12);
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = P.p;
+  const x = Math.round(lob.x), y = Math.round(lob.y);
+  ctx.fillRect(x - 3, y, 7, 1);
+  ctx.fillRect(x, y - 3, 1, 7);
+  ctx.fillStyle = P['0'];
+  ctx.fillRect(x, y, 1, 1);
   ctx.globalAlpha = 1;
 }
 
@@ -241,7 +293,7 @@ export function enemySprite(t: Target, stage: string, goblinHits = 0): string {
   if (t.kind === 'goblin') return goblinHits >= TOOTH_HIT ? 'goblin_b' : 'goblin';
   if (t.kind === 'boss') {
     const w = parseStageId(stage).world;
-    return w === 2 ? 'boss_rime_golem' : w === 3 ? 'boss_mainspring' : 'boss_old_eight';
+    return w === 2 ? 'boss_rime_golem' : w === 3 ? 'boss_mainspring' : w === 4 ? 'boss_mirequeen' : 'boss_old_eight';
   }
   return t.kind === 'cadre' ? 'grunt' : t.kind;
 }
@@ -251,6 +303,8 @@ export interface WorldView {
   heroFlash?: number;
   /** Seconds of conveyor reversal flash remaining. */
   beltFlash?: number;
+  /** Seconds of mud-rim growth flash remaining. */
+  mudFlash?: number;
   /** Eased position of a scurrying goblin (by target id); null = at its sim position. */
   goblinAt?: (id: number) => { x: number; y: number } | null;
 }
@@ -367,8 +421,8 @@ function drawEnemyOverlay(ctx: CanvasRenderingContext2D, s: RunState, t: Target,
     const it = t.intent;
     let reach: Reach = 'grey';
     let neutral = false;
-    if (it.t === 'attack') reach = reachState(s, t);
-    else if (it.t === 'shoot') reach = 'red';
+    if (it.t === 'attack' || it.t === 'steal') reach = reachState(s, t);
+    else if (it.t === 'shoot' || it.t === 'lob') reach = 'red';
     else if (it.t === 'detonate') {
       const h = s.balls.find((b) => b.kind === 'main');
       reach = h && Math.hypot(h.x - t.x, h.y - t.y) <= BLAST_HERO_R + h.r ? 'red' : 'grey';
@@ -377,7 +431,7 @@ function drawEnemyOverlay(ctx: CanvasRenderingContext2D, s: RunState, t: Target,
     const ncol = neutral ? P['4'] : REACH_NUM[reach];
     const dim = staggered || (!neutral && reach === 'grey');
     let num = '';
-    if ((it.t === 'attack' || it.t === 'shoot') && it.n !== undefined) {
+    if ((it.t === 'attack' || it.t === 'shoot' || it.t === 'steal' || it.t === 'lob') && it.n !== undefined) {
       const rage = rageInfo(s).level;
       // Mirror the sim: Shoot takes rangedResist first (min 1), then armor (min 1).
       const raw = it.t === 'shoot' ? Math.max(1, it.n + rage - (s.stats.rangedResist ?? 0)) : it.n + rage;
@@ -468,7 +522,7 @@ function drawEnemyOverlay(ctx: CanvasRenderingContext2D, s: RunState, t: Target,
 /** Table contents. Call inside the shake translate. */
 export function drawWorld(ctx: CanvasRenderingContext2D, s: RunState, now: number, flash = true, view: WorldView = {}): void {
   ctx.drawImage(getTableBg(s.stage), 0, 0);
-  for (const h of s.hazards ?? []) drawHazard(ctx, h, s, now, flash, view.beltFlash ?? 0);
+  for (const h of s.hazards ?? []) drawHazard(ctx, h, s, now, flash, view.beltFlash ?? 0, view.mudFlash ?? 0);
   for (const o of s.obstacles) {
     if (o.dead) continue;
     if (o.kind === 'gear') { drawSprite(ctx, flash && Math.floor(now * 4) % 2 ? 'gear_b' : 'gear', o.x, o.y); continue; }
@@ -490,6 +544,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, s: RunState, now: numbe
     } else drawSprite(ctx, b.kind === 'split' ? 'ball_split' : 'ball_spat', x, y);
   }
   for (const t of s.targets) if (!t.dead) drawEnemyOverlay(ctx, s, vis(t), now, flash);
+  for (const t of s.targets) if (!t.dead && t.lob) drawLobMark(ctx, t, now, flash);
 }
 
 export interface HudOpts {
