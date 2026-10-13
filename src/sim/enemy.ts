@@ -577,6 +577,8 @@ function executeIntent(s: RunState, e: Target, fx: FxEvent[]): boolean {
     case 'wind': // The Mainspring: the next conveyor sweep runs twice.
       s.beltWound = true;
       return false;
+    case 'steal': // Bog leech (sim owner implements)
+    case 'lob': // Bog croaker (sim owner implements)
     case 'flee': // Loot Goblin: scurry is driven by the loot phase, never by intent execution
     case 'rest':
       return false;

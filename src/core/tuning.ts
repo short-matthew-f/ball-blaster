@@ -65,6 +65,15 @@ export const TARGET_DEFS: Record<TargetKind, TargetDef> = {
     hp: 3, r: 12, mass: 1.2, cash: 8, bounce: 1, staggerAt: 1, chargeSpeed: 0, reach: 0,
     intents: [{ t: 'repair', weight: 60 }, { t: 'shoot', n: 1, weight: 40 }], // repair = heal most damaged ally within 70 px
   },
+  // Bog (spec stubs; the sim owner sets the spec numbers)
+  leech: {
+    hp: 4, r: 12, mass: 1.2, cash: 9, bounce: 0.8, staggerAt: 2, chargeSpeed: 240, reach: 110,
+    intents: [{ t: 'steal', n: 2, weight: 60 }, { t: 'advance', weight: 40 }],
+  },
+  croaker: {
+    hp: 4, r: 13, mass: 1.5, cash: 10, bounce: 0.8, staggerAt: 2, chargeSpeed: 0, reach: 0,
+    intents: [{ t: 'lob', n: 2, weight: 70 }, { t: 'rest', weight: 30 }],
+  },
   // Loot Goblin (loot phase; spec numbers, sim owner may retune within the hits-per-pull test)
   goblin: {
     hp: Infinity, r: 13, mass: 1.5, cash: 0, bounce: 1.3, staggerAt: Infinity, chargeSpeed: 0, reach: 0,
@@ -173,6 +182,7 @@ export const BASE_STATS: RunStats = {
   speedDamage: 0,
   aimPreview: 0,
   beltGrip: 0,
+  mudGrip: 0,
   tokenId: 'stripe',
   mods: [],
   healOnKill: 0,

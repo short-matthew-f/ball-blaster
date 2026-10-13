@@ -147,7 +147,7 @@ export interface BossDef {
   /** Shield minions spawned around the boss; the boss takes no damage while any lives. 0 = none. */
   cadre: number;
   /** v0.5: intent kit from the world's boss archetype (absent = 'stripe'). Sim rollIntent/checkBossPhase dispatch on it. */
-  kit?: 'stripe' | 'golem' | 'mainspring';
+  kit?: 'stripe' | 'golem' | 'mainspring' | 'mirequeen';
 }
 
 // ---------- Entities ----------
@@ -220,6 +220,8 @@ export type TargetKind =
   | 'hive'
   | 'frost' // freezes an ally (Ice)
   | 'cadre' // boss shield minion (Rime Golem)
+  | 'leech' // Bog: its landed charge heals it for the damage dealt
+  | 'croaker' // Bog: lobs artillery at the hero's spot (lands next phase)
   | 'goblin' // Loot Goblin (loot phase): unkillable, never attacks; every player-ball contact drops loot
   | 'cog' // Clockwork: rolling gear; banked charge that ricochets and bumps its own side
   | 'tinker' // Clockwork: repairs (heals) the most damaged ally in range
@@ -228,7 +230,7 @@ export type TargetKind =
 /** Alias: v0.2 enemies are physics bodies. `Target` is kept so render/ui keep compiling. */
 export type EnemyKind = TargetKind;
 
-export type IntentType = 'attack' | 'shoot' | 'advance' | 'charge' | 'guard' | 'detonate' | 'summon' | 'rest' | 'repair' | 'wind' | 'flee';
+export type IntentType = 'attack' | 'shoot' | 'advance' | 'charge' | 'guard' | 'detonate' | 'summon' | 'rest' | 'repair' | 'wind' | 'flee' | 'steal' | 'lob';
 
 export interface Intent {
   t: IntentType;
@@ -614,6 +616,8 @@ export interface RunStats {
   aimPreview: number; // 0 = off, else number of wall bounces to preview
   /** Clockwork counter (CLEATS): 0 = belts carry the hero 24 px, 1 = 12 px, 2 = 0. */
   beltGrip: number;
+  /** Bog counter (MUD BOOTS): 0/1/2 -> the hero keeps 0/50/100 % speed entering mud. */
+  mudGrip: number;
 
   // Vitality (every heal goes through the shared diminishing curve)
   healOnKill: number; // HP per kill, 0 = off
