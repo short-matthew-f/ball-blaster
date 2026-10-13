@@ -119,7 +119,7 @@ export const WORLDS: WorldDef[] = [
     boss: { name: 'The Mainspring', hp: 70, r: 23, signature: ['moves'], cadre: 2, kit: 'mainspring' }, waves: CLOCK_WAVES, bossWave: CLOCK_BOSS_WAVE,
   },
   {
-    index: 4, id: 'bog', name: 'Bog', tint: 'w', physics: { friction: 0.9, rollDecel: 110, wallBounce: 0.6 }, hpMult: 2.2, atkMult: 1.4, hazard: 'mud',
+    index: 4, id: 'bog', name: 'Bog', tint: 'w', physics: { friction: 0.9, rollDecel: 110, wallBounce: 0.6 }, hpMult: 1.7, atkMult: 1.3, hazard: 'mud',
     roster: [...FELT_ROSTER, 'leech', 'croaker'],
     boss: { name: 'Mire Queen', hp: 60, r: 23, signature: [], cadre: 2, kit: 'mirequeen' }, waves: BOG_WAVES, bossWave: BOG_BOSS_WAVE,
   },

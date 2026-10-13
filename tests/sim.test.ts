@@ -3707,20 +3707,21 @@ describe('v0.7 M3: thorns', () => {
     expect(charge(['thorns.riposte'], {}, 'boss').v).toBe(0);
     expect(charge([]).v).toBe(0);
   });
-  it('thorns.brace: the first landed charge each phase deals half (4 -> 2), the next full', () => {
+  it('thorns.brace: the first landed charge each phase deals x0.75 (4 -> 3), the next full', () => {
     const s = mlab(['thorns.brace'], { relics: ['thorns'], maxHp: 60 }, 90, 240);
     const a = put(s, 'grunt', 90, 170);
     const b = put(s, 'grunt', 90, 274);
     for (const e of [a, b]) ((e.hp = e.maxHp = 50), (e.intent = { t: 'attack', n: 4 }));
     const hits = (fx: FxEvent[]) => fx.filter((f): f is Extract<FxEvent, { t: 'heroHit' }> => f.t === 'heroHit' && f.how === 'charge').map((f) => f.dmg);
-    expect(hits(enemyPhaseOnly(s))).toEqual([2, 4]);
+    expect(hits(enemyPhaseOnly(s))).toEqual([3, 4]);
     expect(a.hp).toBe(50 - THORNS_RELIC_DMG[0]);
     a.intent = { t: 'attack', n: 4 };
     b.intent = { t: 'rest' };
-    expect(hits(enemyPhaseOnly(s))).toEqual([2]);
+    expect(hits(enemyPhaseOnly(s))).toEqual([3]);
   });
-  it('thorns.quills: the thorns deal the hero damage stat', () => {
-    expect(charge(['thorns.quills'], { damage: 5 }).e.hp).toBe(200 - 5);
+  it('thorns.quills: the thorns deal half the hero damage stat, never below the base prick', () => {
+    expect(charge(['thorns.quills'], { damage: 8 }).e.hp).toBe(200 - 4);
+    expect(charge(['thorns.quills'], { damage: 1 }).e.hp).toBe(200 - THORNS_RELIC_DMG[0]);
     expect(charge([], { damage: 5 }).e.hp).toBe(200 - THORNS_RELIC_DMG[0]);
   });
 });

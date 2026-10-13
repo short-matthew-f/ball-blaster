@@ -508,7 +508,7 @@ export const SIPHON_PER = 3;
 /** Thorns / Barbs: poison stacks on a pricked charger. Riposte: knock-back speed (px/s). Brace: first landed charge x this (ceil). */
 export const BARBS_STACKS = 2;
 export const RIPOSTE_SPEED = 200;
-export const BRACE_MULT = 0.5;
+export const BRACE_MULT = 0.75; // sweep: 0.5 read 1 on w4s1 at 32 seeds
 /** Shrapnel / Flak: shard life (s). Spear: aim radius (edge gap from the corpse). Fragment: plain shards from the shot's first shard kill. */
 export const FLAK_LIFE = 1.2;
 export const SPEAR_R = 80;

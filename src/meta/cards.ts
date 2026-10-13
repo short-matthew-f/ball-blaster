@@ -228,7 +228,7 @@ const CHOICES: Record<string, { forks: ForkChoice[]; caps: ForkChoice[] }> = {
   },
   thorns: {
     forks: [ch('thorns', 'barbs', 'BARBS', 'CHARGER POISONED 2', 1), ch('thorns', 'riposte', 'RIPOSTE', 'CHARGER KNOCKED BACK', 1)],
-    caps: [ch('thorns', 'brace', 'BRACE', '1ST CHARGE/TURN HALF', 2), ch('thorns', 'quills', 'QUILLS', 'THORNS = YOUR DAMAGE', 2)],
+    caps: [ch('thorns', 'brace', 'BRACE', '1ST CHARGE/TURN -25%', 2), ch('thorns', 'quills', 'QUILLS', 'THORNS = HALF DMG', 2)],
   },
   shrapnel: {
     forks: [ch('shrapnel', 'flak', 'FLAK', 'SHARDS LAST 1.2 S', 1), ch('shrapnel', 'spear', 'SPEAR', '1 SHARD, YOUR DAMAGE', 1)],

@@ -480,7 +480,7 @@ describe('cards', () => {
     const want: Record<string, string[]> = {
       follow: ['follow.plow PLOW 2ND HIT +1 DMG', 'follow.roll ROLL NO CHARGE PENALTY', 'follow.cannon CANNON KEEPS SPEED 3 HITS', 'follow.topspin TOPSPIN RAILS FULL AFTER HIT'],
       poison: ['poison.plague PLAGUE BUMPS SPREAD POISON', 'poison.sap SAP POISONED DEAL -1', 'poison.blight BLIGHT DYING SPREADS 2', 'poison.siphon SIPHON TICKS HEAL 1 PER 3'],
-      thorns: ['thorns.barbs BARBS CHARGER POISONED 2', 'thorns.riposte RIPOSTE CHARGER KNOCKED BACK', 'thorns.brace BRACE 1ST CHARGE/TURN HALF', 'thorns.quills QUILLS THORNS = YOUR DAMAGE'],
+      thorns: ['thorns.barbs BARBS CHARGER POISONED 2', 'thorns.riposte RIPOSTE CHARGER KNOCKED BACK', 'thorns.brace BRACE 1ST CHARGE/TURN -25%', 'thorns.quills QUILLS THORNS = HALF DMG'],
       shrapnel: ['shrapnel.flak FLAK SHARDS LAST 1.2 S', 'shrapnel.spear SPEAR 1 SHARD, YOUR DAMAGE', 'shrapnel.fragment FRAGMENT SHARD KILL SHEDS 2', 'shrapnel.plating PLATING KILL: BLOCK A CHARGE'],
       rackEm: ['rackEm.tight TIGHT PULLS 30 PX', 'rackEm.scatter SCATTER PUSHES 20 PX OUTWARD', 'rackEm.rerack RE-RACK ALSO REROLLS INTENTS', 'rackEm.tableroll TABLE ROLL INTO MUD: HELD 1'],
     };

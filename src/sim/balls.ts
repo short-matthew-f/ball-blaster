@@ -30,10 +30,10 @@ function homingTargets(s: RunState): Target[] {
  * Split: `n` children fan out from `b` at 0.9x its speed. Homing: child i heads for the i-th nearest enemy within
  * HOMING_R of the hero instead of its fan angle (no rng either way).
  */
-export function spawnSplit(s: RunState, b: Ball, fx: FxEvent[], n = splitKids(s)): void {
-  const sp = Math.hypot(b.vx, b.vy);
+export function spawnSplit(s: RunState, b: Ball, fx: FxEvent[], n = splitKids(s), v: { vx: number; vy: number } = b): void {
+  const sp = Math.hypot(v.vx, v.vy);
   if (sp < 1e-6 || n <= 0) return;
-  const base = Math.atan2(b.vy, b.vx);
+  const base = Math.atan2(v.vy, v.vx);
   const deg = Math.PI / 180;
   const homing = mod(s, 'split.homing') ? homingTargets(s) : [];
   for (let i = 0; i < n; i++) {

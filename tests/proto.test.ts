@@ -10,6 +10,7 @@ import { globalIndex, idFromIndex, nextStageId, stageId } from '../src/core/worl
 import { createRun, previewShot, shoot, step, useTrick } from '../src/sim/index';
 import { maxOverlap } from '../src/sim/physics';
 import { Rng } from '../src/core/rng';
+import * as TUNING from '../src/core/tuning';
 // Env lookup without @types/node (CI typechecks tests without node types).
 const ENV: Record<string, string | undefined> = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
 
@@ -281,13 +282,21 @@ describe('loot goblin: hits per pull (perfect bot, 30 seeds, w1s1)', () => {
 const PROG_SEEDS = Number(ENV.PROG_SEEDS ?? 16);
 // Diagnostic lever search (never for the gate): PROG_ISLAND_MULT=a,b,c,... sets ISLAND_PRICE_MULT[1..] for this process.
 if (ENV.PROG_ISLAND_MULT) ENV.PROG_ISLAND_MULT.split(',').forEach((v, i) => (ISLAND_PRICE_MULT[i + 1] = Number(v)));
+// Diagnostic cut search (never for the gate): PROG_TUNE=NAME:a,b,c;NAME2:... overwrites an exported tuning ARRAY in place
+// (e.g. FOLLOW_KEEP_LV:0.5,0.55,0.6,0.65). Scalar constants cannot be patched from here (ESM bindings are read-only).
+for (const part of (ENV.PROG_TUNE ?? '').split(';').filter(Boolean)) {
+  const [name, vals] = part.split(':');
+  const arr = (TUNING as unknown as Record<string, unknown>)[name];
+  if (!Array.isArray(arr)) throw new Error(`PROG_TUNE: ${name} is not an exported tuning array`);
+  vals.split(',').forEach((v, i) => (arr[i] = Number(v)));
+}
 const PROG_RUNS = Number(ENV.PROG_RUNS ?? 160);
-const GATE_STAGES = 12; // w1s1 .. w3s4: asserted
-const SMOKE_STAGES = Number(ENV.PROG_STAGES ?? 16); // + w4s1 .. w4s4: reported only
+const GATE_STAGES = 16; // w1s1 .. w4s4: asserted (v0.7 Bog)
+const SMOKE_STAGES = Number(ENV.PROG_STAGES ?? 16);
 const GATE: [number, number] = [4, 9];
 /** Per-stage lower-bound waivers (DECISIONS.md "Gate v0.6 M3 w2-3"): w3s4 reads 3 at 16 seeds, 4 at 32 (noise edge). */
 const GATE_WAIVER: Record<number, number> = { 11: 3 };
-const LAST_STAGE_MAX = 20; // stage 11: worst seed
+const LAST_STAGE_MAX = 20; // last gated stage (15, w4s4): worst seed
 const BUY_WINDOW = 3;
 const PERFECT_MIN = 2; // perfect bot: no stage may be a 1-run clear (median) // runs after arrival within which at least one node must be affordable
 
@@ -442,7 +451,7 @@ function chooseLoadout(save: SaveData): void {
   if (ball !== 'standard' && cardOwned(save, ball)) save.loadout.ball = ball;
 }
 
-/** Greedy trick use at aim: shockwave with >= 3 enemies within 60 px, time stop below 30 % HP, recall with 2+ melee in reach. */
+/** Greedy trick use at aim: shockwave with >= 3 enemies within 60 px, time stop below 30 % HP, recall with 2+ melee in reach, rack 'em with 3+ non-boss enemies. */
 function useTricks(s: RunState): void {
   const h = s.balls[0];
   const live = s.targets.filter((t) => !t.dead);
@@ -451,6 +460,8 @@ function useTricks(s: RunState): void {
     s.stats.trick === 'shockwave' ? live.filter((t) => gap(t) <= 60).length >= 3
     : s.stats.trick === 'timeStop' ? s.hp < 0.3 * s.maxHp
     : s.stats.trick === 'recall' ? live.filter((t) => t.intent.t === 'attack' && gap(t) <= TARGET_DEFS[t.kind].reach).length >= 2
+    // Rack 'Em (only ever equipped by the PROG_FORK sweep: not in TRICK_PREF): with 3+ non-boss enemies on the board.
+    : s.stats.trick === 'rackEm' ? live.filter((t) => t.kind !== 'boss').length >= 3
     : false;
   if (want) useTrick(s);
 }
@@ -546,17 +557,59 @@ const STALL_DEG = 23;
 let stallFires = 0;
 let stallLogged = 0;
 
-function playForResult(stage: string, seed: number, stats: RunStats, bot: ProgBot = 'perfect', bestWave = 0, pulls?: number[]): RunResult {
+/**
+ * Mud awareness (v0.7 Bog spec §8, minimal): with mudGrip < 2, a target whose hero->centre segment crosses a mud patch
+ * (centre within r of the segment; a patch the hero already sits in is ignored: it leaves freely) is skipped when another
+ * live target's line is clear; otherwise the bot shoots anyway. No-op on boards without mud (stages 0-11 unchanged).
+ */
+function mudBlocked(s: RunState, t: Target): boolean {
+  if ((s.stats.mudGrip ?? 0) >= 2) return false;
+  const h = s.balls[0];
+  // The hero stops t.r + h.r short of the centre: a patch just behind the target does not block.
+  const L = Math.hypot(t.x - h.x, t.y - h.y) || 1;
+  const k = Math.max(0, 1 - (t.r + h.r) / L);
+  const dx = (t.x - h.x) * k;
+  const dy = (t.y - h.y) * k;
+  const L2 = dx * dx + dy * dy || 1;
+  for (const m of s.hazards) {
+    if (m.kind !== 'mud') continue;
+    if (Math.hypot(h.x - m.x, h.y - m.y) < m.r) continue;
+    const u = Math.max(0, Math.min(1, ((m.x - h.x) * dx + (m.y - h.y) * dy) / L2));
+    if (Math.hypot(h.x + u * dx - m.x, h.y + u * dy - m.y) < m.r) return true;
+  }
+  return false;
+}
+
+/** Re-pick when `tg`'s line crosses mud: the first of `pref` (bot preference order) with a clear line, else `tg`. */
+function avoidMud(s: RunState, tg: Target, pref: Target[]): Target {
+  if (!s.hazards.some((m) => m.kind === 'mud') || !mudBlocked(s, tg)) return tg;
+  return pref.find((t) => t !== tg && !mudBlocked(s, t)) ?? tg;
+}
+
+/** Per-run counters for the progression report (hero mud stops, jams). */
+interface RunMeter {
+  mudStops: number;
+  jams: number;
+}
+
+function playForResult(stage: string, seed: number, stats: RunStats, bot: ProgBot = 'perfect', bestWave = 0, pulls?: number[], meter?: RunMeter): RunResult {
   const s = createRun(stage, stats, seed, bestWave);
   const noise = new Rng(seed * 7919 + 17);
   const boardKey = () => `${s.hp}|${s.wave}|` + s.targets.filter((t) => !t.dead).map((t) => `${t.id}:${t.hp}`).join(',');
   let stall = 0;
+  const heroId = s.balls[0].id;
+  const tick = () => {
+    for (const f of step(s, SIM_DT * 8)) {
+      const e = f as { t: string; id?: number };
+      if (meter && e.t === 'mud' && e.id === heroId) meter.mudStops++;
+    }
+  };
   while (s.phase === 'aim' && s.shots < 600) {
     if (s.bossKilled) {
       // Loot phase: three pulls at the goblin.
       const before = s.goblinHits;
       shoot(s, lootPull(s, bot, noise));
-      while ((s.phase as string) === 'resolve' || (s.phase as string) === 'loot') step(s, SIM_DT * 8);
+      while ((s.phase as string) === 'resolve' || (s.phase as string) === 'loot') tick();
       pulls?.push(s.goblinHits - before);
       continue;
     }
@@ -564,7 +617,7 @@ function playForResult(stage: string, seed: number, stats: RunStats, bot: ProgBo
     if (!s.targets.some((t) => !t.dead)) {
       // A trick (shockwave + static) cleared the board during aim: fire a nudge to bring the next wave.
       shoot(s, { x: 0, y: -MAX_PULL * 0.3 });
-      while ((s.phase as string) === 'resolve' || (s.phase as string) === 'enemy' || (s.phase as string) === 'loot') step(s, SIM_DT * 8);
+      while ((s.phase as string) === 'resolve' || (s.phase as string) === 'enemy' || (s.phase as string) === 'loot') tick();
       continue;
     }
     const h = s.balls[0];
@@ -573,10 +626,15 @@ function playForResult(stage: string, seed: number, stats: RunStats, bot: ProgBo
     let power = 1;
     if (bot === 'perfect') {
       tg = pickTarget(s, 'cluster');
+      const live = s.targets.filter((t) => !t.dead);
+      const score = (t: Target) => live.filter((o) => Math.hypot(o.x - t.x, o.y - t.y) <= 50).length;
+      const dist = (t: Target) => Math.hypot(t.x - h.x, t.y - h.y);
+      tg = avoidMud(s, tg, [...live].sort((a, b) => score(b) - score(a) || dist(a) - dist(b)));
       ang = Math.atan2(tg.y - h.y, tg.x - h.x);
     } else {
       const live = s.targets.filter((t) => !t.dead).sort((a, b) => Math.hypot(a.x - h.x, a.y - h.y) - Math.hypot(b.x - h.x, b.y - h.y) || a.id - b.id);
       tg = live.length > 1 && noise.chance(NOISE_SECOND) ? live[1] : live[0];
+      tg = avoidMud(s, tg, live);
       const err = s.stats.cue === 'break' ? NOISE_DEG_BREAK : NOISE_DEG;
       ang = Math.atan2(tg.y - h.y, tg.x - h.x) + ((noise.range(-err, err) * Math.PI) / 180);
       power = noise.range(NOISE_POWER[0], NOISE_POWER[1]);
@@ -591,10 +649,11 @@ function playForResult(stage: string, seed: number, stats: RunStats, bot: ProgBo
     }
     const key = boardKey();
     shoot(s, { x: Math.cos(ang) * MAX_PULL * power, y: Math.sin(ang) * MAX_PULL * power });
-    while ((s.phase as string) === 'resolve' || (s.phase as string) === 'enemy' || (s.phase as string) === 'loot') step(s, SIM_DT * 8);
+    while ((s.phase as string) === 'resolve' || (s.phase as string) === 'enemy' || (s.phase as string) === 'loot') tick();
     stall = boardKey() === key ? stall + 1 : 0;
   }
   expect(s.phase, `${stage} seed ${seed} (${bot}): progression run hit the shot cap`).toBe('over');
+  if (meter) meter.jams += s.jams;
   return s.result!;
 }
 
@@ -662,11 +721,14 @@ const SAFE_FORK = new Set([
   // Worlds 2-3 (M3 parts 2-3 spec §4).
   'jump.stomp', 'light.zip', 'chill.numb', 'mirror.absorb', 'split.rail', 'shockwave.pulse',
   'draw.snap', 'sticky.glue', 'lightning.thunder', 'static.overload', 'spitter.mortar', 'timeStop.slow',
+  // World 4 (v0.7 Bog spec §8).
+  'follow.roll', 'poison.sap', 'thorns.riposte', 'shrapnel.flak', 'rackEm.tight',
 ]);
 const SAFE_CAP = new Set([
   'break.steady', 'heavy.jugger', 'ricochet.ghost', 'momentum.unstop', 'recall.anchor', 'lantern.sunrise',
   'jump.trample', 'light.blur', 'chill.frostbite', 'mirror.prism', 'split.mitosis', 'shockwave.epicentre',
   'draw.masse', 'sticky.cling', 'lightning.surge', 'static.grounded', 'spitter.aimed', 'timeStop.clockwork',
+  'follow.topspin', 'poison.siphon', 'thorns.brace', 'shrapnel.plating', 'rackEm.tableroll',
 ]);
 /**
  * Diagnostic (report only): PROG_SAFE=<card.choice>,... swaps that card's safe fork/cap for the named one (e.g.
@@ -824,6 +886,9 @@ interface StageLog {
   arriveR: number;
   /** dmg x hp of the clearing run (0 if never cleared). */
   clearDH: number;
+  /** Hero mud stops and jams summed over the stage's runs. */
+  mudStops: number;
+  jams: number;
 }
 
 interface ProgLog {
@@ -858,7 +923,7 @@ function progression(seed: number, bot: ProgBot): ProgLog {
     if (!cur) {
       cur = {
         runs: 0, cleared: false, dmg: st.damage, hp: st.maxHp, open: openNodes(save), secs: [], earlyBuys: arrivalBuys, kit: kitName(st), ends: [0, 0, 0, 0],
-        tokIn: sumTokens(shop.earned), tokOut: spentTotal(shop), cards: Object.keys(save.cards).length, arriveR, clearDH: 0,
+        tokIn: sumTokens(shop.earned), tokOut: spentTotal(shop), cards: Object.keys(save.cards).length, arriveR, clearDH: 0, mudStops: 0, jams: 0,
         forks: Object.values(save.cards).reduce((a, c) => a + (c.forks?.length ?? 0), 0),
         caps: Object.values(save.cards).reduce((a, c) => a + (c.caps?.length ?? 0), 0),
         active: (st.mods ?? []).map((m) => m.split('.')[1] ?? m).join('+') || '-',
@@ -866,7 +931,10 @@ function progression(seed: number, bot: ProgBot): ProgLog {
       log.stages[n] = cur;
       if (ENV.PROG_DUMP === save.current) console.log('STATS', JSON.stringify(st));
     }
-    const res = playForResult(save.current, seed * 1000 + r, st, bot, save.bestWave[save.current] ?? 0);
+    const meter: RunMeter = { mudStops: 0, jams: 0 };
+    const res = playForResult(save.current, seed * 1000 + r, st, bot, save.bestWave[save.current] ?? 0, undefined, meter);
+    cur.mudStops += meter.mudStops;
+    cur.jams += meter.jams;
     const banked = bankRun(save, res);
     shop.earned[banked.tokenId] += banked.tokens;
     if (PROG_TOKENS && banked.tokens > 0) shop.trace.push(`r${r} ${save.current} +${banked.tokens}${banked.tokenId[0]}`);
@@ -898,6 +966,8 @@ interface BotReport {
   med: number[];
   worst: number[];
   dead: number[];
+  /** Seeds that reached the stage but never cleared it (budget ran out). */
+  uncleared: number[];
   earned: number;
   spent: number;
 }
@@ -910,7 +980,7 @@ function topKits(kits: string[]): string {
 
 function runBot(bot: ProgBot): BotReport {
   const all = Array.from({ length: PROG_SEEDS }, (_, k) => progression(7 + k, bot));
-  const rep: BotReport = { table: {}, med: [], worst: [], dead: [], earned: mean(all.map((l) => l.earned60)), spent: mean(all.map((l) => l.spent60)) };
+  const rep: BotReport = { table: {}, med: [], worst: [], dead: [], uncleared: [], earned: mean(all.map((l) => l.earned60)), spent: mean(all.map((l) => l.spent60)) };
   for (let n = 0; n < SMOKE_STAGES; n++) {
     const logs = all.map((l) => l.stages[n]).filter((x): x is StageLog => !!x);
     if (!logs.length) continue;
@@ -921,6 +991,7 @@ function runBot(bot: ProgBot): BotReport {
     rep.worst[n] = rtc.length ? Math.max(...rtc) : NaN;
     // Dead zone: a seed that stayed BUY_WINDOW+ runs on the stage without being able to buy anything.
     rep.dead[n] = logs.filter((l) => l.runs > BUY_WINDOW && l.earlyBuys === 0).length;
+    rep.uncleared[n] = logs.length < PROG_SEEDS ? PROG_SEEDS - logs.length + logs.filter((l) => !l.cleared).length : logs.filter((l) => !l.cleared).length;
     // Portal timing (slot 1 of worlds >= 2): runs from arrival (the slot-4 kill run) to buying this island's portal.
     const world = Math.floor(n / 4) + 1;
     let portal = '';
@@ -947,11 +1018,13 @@ function runBot(bot: ProgBot): BotReport {
       'mods on': topKits(logs.map((l) => l.active)),
       'portal run': portal,
       'dead seeds': rep.dead[n],
+      'jams/run': f2(logs.reduce((a, l) => a + l.jams, 0) / Math.max(1, logs.reduce((a, l) => a + l.runs, 0))),
+      'mudStops/run': f2(logs.reduce((a, l) => a + l.mudStops, 0) / Math.max(1, logs.reduce((a, l) => a + l.runs, 0))),
       'lost at w1-4': [0, 1, 2, 3].map((i) => logs.reduce((a, l) => a + l.ends[i], 0)).join('/'),
       kit: topKits(logs.map((l) => l.kit)),
     };
   }
-  console.log(`Multi-stage progression, ${bot} bot${PROG_FORK ? `, PROG_FORK=${PROG_FORK}` : ''}, gear ${PROG_GEAR ? 'on' : 'off'}, cards ${PROG_CARDS ? (CARDS.length ? 'on' : 'none in catalogue') : 'off'} (${PROG_SEEDS} seeds x up to ${PROG_RUNS} runs; rtc = runs to clear; stages 12+ smoke only)`);
+  console.log(`Multi-stage progression, ${bot} bot${PROG_FORK ? `, PROG_FORK=${PROG_FORK}` : ''}, gear ${PROG_GEAR ? 'on' : 'off'}, cards ${PROG_CARDS ? (CARDS.length ? 'on' : 'none in catalogue') : 'off'} (${PROG_SEEDS} seeds x up to ${PROG_RUNS} runs; rtc = runs to clear; stages 0-${GATE_STAGES - 1} gated)`);
   console.table(rep.table);
   console.log(`Cash by run 60 (${bot}, mean over seeds): earned ${Math.round(rep.earned)}, spent on the tree ${Math.round(rep.spent)} (${Math.round((100 * rep.spent) / Math.max(1, rep.earned))} %)`);
   // Token budget per world over the whole progression (mean over seeds; min-max of earned).
@@ -968,15 +1041,15 @@ function runBot(bot: ProgBot): BotReport {
 }
 
 describe('multi-stage progression bot (greedy cheapest-node shopper)', () => {
-  it('noisy bot: rtc median in [4, 9], stage 11 worst <= 20, no dead economy; perfect bot: median >= 2 (no trivial stage)', () => {
-    const empty: BotReport = { table: {}, med: [], worst: [], dead: [], earned: 0, spent: 0 };
+  it('noisy bot: rtc median in [4, 9], stage 15 worst <= 20, no dead economy; perfect bot: median >= 2 (no trivial stage)', () => {
+    const empty: BotReport = { table: {}, med: [], worst: [], dead: [], uncleared: [], earned: 0, spent: 0 };
     const noisy = PROG_ONLY === 'perfect' ? empty : runBot('noisy');
     const perfect = PROG_ONLY === 'noisy' ? empty : runBot('perfect');
     console.log(`anti-stall aim rotations (both bots): ${stallFires}`);
     // Diagnostic runs (forced loadouts, gear off, one bot) only report.
-    if (DIAG || PROG_FORK || PROG_SAFE || ENV.PROG_CHOICE_MAXW || PROG_NOMODS || PROG_SKIP_CARD.size || !PROG_GEAR || !PROG_CARDS || PROG_ONLY) return;
+    if (DIAG || PROG_FORK || PROG_SAFE || ENV.PROG_TUNE || ENV.PROG_CHOICE_MAXW || PROG_NOMODS || PROG_SKIP_CARD.size || !PROG_GEAR || !PROG_CARDS || PROG_ONLY) return;
     const fails: string[] = [];
-    for (let n = 0; n < GATE_STAGES; n++) {
+    for (let n = 0; n < Math.min(GATE_STAGES, SMOKE_STAGES); n++) {
       const id = idFromIndex(n);
       const m = noisy.med[n];
       // World openers (slot 1 of world >= 2) are breathers after a slot-4 grind: lower bound 2 (DECISIONS: Balance).
@@ -984,6 +1057,8 @@ describe('multi-stage progression bot (greedy cheapest-node shopper)', () => {
       const lo = GATE_WAIVER[n] ?? (opener ? 2 : GATE[0]);
       if (!(m >= lo && m <= GATE[1])) fails.push(`noisy ${id}: median ${m}`);
       if (n === GATE_STAGES - 1 && !(noisy.worst[n] <= LAST_STAGE_MAX)) fails.push(`noisy ${id}: worst ${noisy.worst[n]}`);
+      // An uncleared seed on the last gated stage is invisible to worst[] when it played <= GATE[1] runs: count it.
+      if (n === GATE_STAGES - 1) for (const [b, r] of [['noisy', noisy], ['perfect', perfect]] as const) if (r.uncleared[n]) fails.push(`${b} ${id}: ${r.uncleared[n]} seeds never cleared`);
       if ((noisy.dead[n] ?? 0) > 0) fails.push(`noisy ${id}: ${noisy.dead[n]} seeds could not buy anything in ${BUY_WINDOW} runs`);
       if (!(perfect.med[n] >= PERFECT_MIN)) fails.push(`perfect ${id}: median ${perfect.med[n]}`);
     }

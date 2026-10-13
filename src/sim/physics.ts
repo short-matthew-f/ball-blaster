@@ -246,7 +246,7 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
         return;
       }
       let n = numbed(s, t, t.chargeDmg ?? 0);
-      // Brace (thorns capstone): the first charge to land each enemy phase deals half (ceil); Thorns still prick.
+      // Brace (thorns capstone): the first charge to land each enemy phase deals x BRACE_MULT (ceil); Thorns still prick.
       if (mod(s, 'thorns.brace') && !s.braceUsed) {
         s.braceUsed = true;
         n = Math.ceil(n * BRACE_MULT);
@@ -262,7 +262,9 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
       }
       // Thorns relic: the charger pays for landing its blow (Quills: the hero's damage). Barbs: it is poisoned too.
       if (has(s, 'thorns')) {
-        applyDamage(s, t, mod(s, 'thorns.quills') ? s.stats.damage : gearVal(THORNS_RELIC_DMG, lv(s, 'thorns')), 'thorns', fx);
+        const prick = gearVal(THORNS_RELIC_DMG, lv(s, 'thorns'));
+        // Quills: half the hero damage, never below the base prick (sweep: full damage made w4s1-2 read 1-2).
+        applyDamage(s, t, mod(s, 'thorns.quills') ? Math.max(prick, Math.floor(s.stats.damage / 2)) : prick, 'thorns', fx);
         if (mod(s, 'thorns.barbs') && !t.dead) {
           const was = t.poison ?? 0;
           t.poison = Math.max(was, BARBS_STACKS);
@@ -389,6 +391,9 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
       b.vx = 0;
       b.vy = 0;
     }
+    // Split reads the post-impact physics velocity, before Draw / Follow replace it (Follow + Split sent the
+    // split balls forward through the rack at the pre-impact speed and made worlds 3-4 one-run clears).
+    const post = { vx: b.vx, vy: b.vy };
     if (first) {
       s.firstHitDone = true;
       if (!sticky && !anvil) cueAfterContact(s, b, pvx, pvy, t, fx);
@@ -401,7 +406,7 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
     }
     if (s.stats.splitCount > 0 && !s.splitUsed && has(s, 'split')) {
       s.splitUsed = true;
-      spawnSplit(s, b, fx);
+      spawnSplit(s, b, fx, undefined, post);
     }
   }
   // Surge (lightning capstone): the hero's first contact of the shot always arcs.
@@ -431,13 +436,14 @@ function stick(s: RunState, t: Target, fx: FxEvent[]): void {
 function ballHitsGoblin(s: RunState, b: Ball, g: Target, fx: FxEvent[], pvx: number, pvy: number): void {
   goblinHit(s, g, fx);
   if (b.kind !== 'main') return;
+  const post = { vx: b.vx, vy: b.vy };
   if (!s.firstHitDone) {
     s.firstHitDone = true;
     cueAfterContact(s, b, pvx, pvy, g, fx);
   }
   if (s.stats.splitCount > 0 && !s.splitUsed && has(s, 'split')) {
     s.splitUsed = true;
-    spawnSplit(s, b, fx);
+    spawnSplit(s, b, fx, undefined, post);
   }
 }
 
