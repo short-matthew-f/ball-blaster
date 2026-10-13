@@ -433,8 +433,8 @@ export const PRISM_DMG = 1;
 /** Split / Swarm: extra children, every child deals SWARM_DMG. Mitosis: kids from the first child kill. Homing: aim radius (edge gap from the hero). */
 export const SWARM_EXTRA = 2;
 export const SWARM_DMG = 1;
-export const MITOSIS_KIDS = 2;
-export const HOMING_R = 60;
+export const MITOSIS_KIDS = 1; // sweep: 2 trivialised w2s2-w3s4 on Rail Split
+export const HOMING_R = 30; // sweep: 60 trivialised w2-w3
 /** Shockwave / Quake: radius. Pulse: shove (px). Epicentre: touching radius (edge gap) and static damage. */
 export const QUAKE_R = 90;
 export const PULSE_PUSH = 30;
@@ -457,7 +457,7 @@ export const TESLA_AT = 3;
 export const TESLA_R = 60;
 export const TESLA_DMG = 2;
 /** Spitter / Gatling: interval x this, live spat cap. Mortar: interval x this, blast radius (edge gap), damage, blasts a shot. Aimed: radius. Heavy Spit: damage. */
-export const GATLING_MULT = 0.6;
+export const GATLING_MULT = 0.8; // sweep: 0.6 trivialised w2s1
 export const SPIT_LIVE_CAP = 10;
 export const MORTAR_MULT = 1.5;
 export const MORTAR_R = 24;

@@ -532,9 +532,23 @@ function lootPull(s: RunState, bot: ProgBot, noise: Rng): { x: number; y: number
   return toward(g.x, g.y);
 }
 
+/**
+ * Anti-stall (v0.6 M3 sweep): the perfect bot's aim is deterministic, so a board it cannot change (Jump + Stomp
+ * hopping a cornered enemy every shot: stagger-locked, never hit) repeats until the shot cap. After STALL_AT shots
+ * with the board and the hero unchanged, the aim rotates by STALL_DEG per further stalled shot. STALL_AT is high on
+ * purpose: at 6 the noisy bot's ordinary miss streaks tripped it 86 times in the default gate; at 30 only a deadlock
+ * does. Counted and logged so a run says when it fired.
+ */
+const STALL_AT = 30;
+const STALL_DEG = 23;
+let stallFires = 0;
+let stallLogged = 0;
+
 function playForResult(stage: string, seed: number, stats: RunStats, bot: ProgBot = 'perfect', bestWave = 0, pulls?: number[]): RunResult {
   const s = createRun(stage, stats, seed, bestWave);
   const noise = new Rng(seed * 7919 + 17);
+  const boardKey = () => `${s.hp}|${s.wave}|` + s.targets.filter((t) => !t.dead).map((t) => `${t.id}:${t.hp}`).join(',');
+  let stall = 0;
   while (s.phase === 'aim' && s.shots < 600) {
     if (s.bossKilled) {
       // Loot phase: three pulls at the goblin.
@@ -565,8 +579,18 @@ function playForResult(stage: string, seed: number, stats: RunStats, bot: ProgBo
       ang = Math.atan2(tg.y - h.y, tg.x - h.x) + ((noise.range(-err, err) * Math.PI) / 180);
       power = noise.range(NOISE_POWER[0], NOISE_POWER[1]);
     }
+    if (stall >= STALL_AT) {
+      ang += ((stall - STALL_AT + 1) * STALL_DEG * Math.PI) / 180;
+      stallFires++;
+      if (stall === STALL_AT && stallLogged++ < 3) {
+        const live = s.targets.filter((t) => !t.dead).map((t) => `${t.kind}#${t.id} hp${t.hp} st${t.stagger}${t.held ? ` held${t.held}` : ''} @${Math.round(t.x)},${Math.round(t.y)}`);
+        console.warn(`anti-stall: ${stage} seed ${seed} (${bot}) shot ${s.shots}, cue ${s.stats.cue}, ball ${s.stats.ballType}, mods ${(s.stats.mods ?? []).join(',') || '-'}; hero ${Math.round(h.x)},${Math.round(h.y)} hp${s.hp}; ${live.join('; ')}`);
+      }
+    }
+    const key = boardKey();
     shoot(s, { x: Math.cos(ang) * MAX_PULL * power, y: Math.sin(ang) * MAX_PULL * power });
     while ((s.phase as string) === 'resolve' || (s.phase as string) === 'enemy' || (s.phase as string) === 'loot') step(s, SIM_DT * 8);
+    stall = boardKey() === key ? stall + 1 : 0;
   }
   expect(s.phase, `${stage} seed ${seed} (${bot}): progression run hit the shot cap`).toBe('over');
   return s.result!;
@@ -631,8 +655,17 @@ function baseCost(save: SaveData, id: string): number | null {
  * always [0] (break: slam, crack; heavy: anvil, wrecking; lantern: beacon, glare; ...). A card missing here, or an id not in
  * the catalogue, falls back to forks[0] / caps[0].
  */
-const SAFE_FORK = new Set(['break.crack', 'heavy.wrecking', 'ricochet.bank', 'momentum.streak', 'recall.blink', 'lantern.glare']);
-const SAFE_CAP = new Set(['break.steady', 'heavy.jugger', 'ricochet.ghost', 'momentum.unstop', 'recall.anchor', 'lantern.sunrise']);
+const SAFE_FORK = new Set([
+  'break.crack', 'heavy.wrecking', 'ricochet.bank', 'momentum.streak', 'recall.blink', 'lantern.glare',
+  // Worlds 2-3 (M3 parts 2-3 spec §4).
+  'jump.stomp', 'light.zip', 'chill.numb', 'mirror.absorb', 'split.rail', 'shockwave.pulse',
+  'draw.snap', 'sticky.glue', 'lightning.thunder', 'static.overload', 'spitter.mortar', 'timeStop.slow',
+]);
+const SAFE_CAP = new Set([
+  'break.steady', 'heavy.jugger', 'ricochet.ghost', 'momentum.unstop', 'recall.anchor', 'lantern.sunrise',
+  'jump.trample', 'light.blur', 'chill.frostbite', 'mirror.prism', 'split.mitosis', 'shockwave.epicentre',
+  'draw.masse', 'sticky.cling', 'lightning.surge', 'static.grounded', 'spitter.aimed', 'timeStop.clockwork',
+]);
 /**
  * Diagnostic (report only): PROG_SAFE=<card.choice>,... swaps that card's safe fork/cap for the named one (e.g.
  * break.slam); PROG_SAFE=none buys no fork or cap at all (base III stays locked: the pure gate-lock effect).
@@ -642,6 +675,8 @@ const PROG_NOMODS = ENV.PROG_NOMODS === '1';
 /** Diagnostic (report only): PROG_SKIP_CARD=<id>,... never unlocks those cards. */
 const PROG_SKIP_CARD = new Set((ENV.PROG_SKIP_CARD ?? '').split(',').filter(Boolean));
 const NO_CHOICES = PROG_SAFE === 'none';
+/** Diagnostic (report only): PROG_CHOICE_MAXW=<n> buys forks/caps only in worlds <= n (e.g. 1: the pre-M3-part-2 policy). */
+const CHOICE_MAXW = Number(ENV.PROG_CHOICE_MAXW ?? 99);
 for (const id of PROG_SAFE && !NO_CHOICES ? PROG_SAFE.split(',') : []) {
   const def = cardById(id.split('.')[0]);
   const set = def?.forks.some((f) => f.id === id) ? SAFE_FORK : def?.caps.some((f) => f.id === id) ? SAFE_CAP : null;
@@ -656,7 +691,7 @@ for (const id of PROG_SAFE && !NO_CHOICES ? PROG_SAFE.split(',') : []) {
  * check is load-bearing: setFork/setCap on an owned choice is a free switch (true, no spend), which would spin the loop.
  */
 function safeChoice(save: SaveData, w: number, row: 'fork' | 'cap'): { card: string; choice: string } | undefined {
-  if (NO_CHOICES) return undefined;
+  if (NO_CHOICES || w > CHOICE_MAXW) return undefined;
   const tok = TOKEN_OF_WORLD[w - 1];
   for (const id of CARD_PRIORITY[w - 1]) {
     const def = cardById(id);
@@ -935,8 +970,9 @@ describe('multi-stage progression bot (greedy cheapest-node shopper)', () => {
     const empty: BotReport = { table: {}, med: [], worst: [], dead: [], earned: 0, spent: 0 };
     const noisy = PROG_ONLY === 'perfect' ? empty : runBot('noisy');
     const perfect = PROG_ONLY === 'noisy' ? empty : runBot('perfect');
+    console.log(`anti-stall aim rotations (both bots): ${stallFires}`);
     // Diagnostic runs (forced loadouts, gear off, one bot) only report.
-    if (DIAG || PROG_FORK || PROG_SAFE || PROG_NOMODS || PROG_SKIP_CARD.size || !PROG_GEAR || !PROG_CARDS || PROG_ONLY) return;
+    if (DIAG || PROG_FORK || PROG_SAFE || ENV.PROG_CHOICE_MAXW || PROG_NOMODS || PROG_SKIP_CARD.size || !PROG_GEAR || !PROG_CARDS || PROG_ONLY) return;
     const fails: string[] = [];
     for (let n = 0; n < GATE_STAGES; n++) {
       const id = idFromIndex(n);

@@ -342,7 +342,8 @@ function ballHitsEnemy(s: RunState, b: Ball, t: Target, speed: number, fx: FxEve
     }
   }
   // Surge (lightning capstone): the hero's first contact of the shot always arcs.
-  chainLightning(s, t, fx, first && mod(s, 'lightning.surge'));
+  // Surge: the first hero contact always arcs; later contacts that shot do not roll (sweep: Surge on top of the roll trivialised w1s2).
+  if (!(mod(s, 'lightning.surge') && !first)) chainLightning(s, t, fx, first && mod(s, 'lightning.surge'));
 }
 
 /** Sticky ball forks/capstones, at the stick: Glue holds, Web staggers neighbours, Trap arms, Cling marks. */

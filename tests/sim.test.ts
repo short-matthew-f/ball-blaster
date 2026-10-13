@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FAST_FORWARD_MULT, MAX_LAUNCH_SPEED, MAX_PULL, MIN_POWER, SIM_DT, TABLE, type FxEvent, type RunState, type TargetKind, type Vec } from '../src/core/types';
-import { ATK_GROWTH, BASE_STATS, CASH_GROWTH, HARDY_MOD_HP, HP_GROWTH, RANGED_PHASE_CAP, SLOT_ATK_MULT, SLOT_HP_MULT, SPAWN_ZONE, TARGET_DEFS, WAVE_CASH, stageById } from '../src/core/tuning';
+import { ATK_GROWTH, BASE_STATS, CASH_GROWTH, HARDY_MOD_HP, HP_GROWTH, RANGED_PHASE_CAP, SLOT_ATK_MULT, SLOT_HP_MULT, SPAWN_ZONE, TARGET_DEFS, WAVE_CASH, stageById, MITOSIS_KIDS } from '../src/core/tuning';
 import { WORLDS, allStageIds, globalIndex, idFromIndex, makeStage, nextStageId, parseStageId, stageId } from '../src/core/worlds';
 import { rollIntent as rollIntentForTest } from '../src/sim/intents';
 import type { Modifier, TargetKind as TK } from '../src/core/types';
@@ -2542,7 +2542,7 @@ describe('v0.6 M3: split', () => {
     const g = untilFirstHit(t);
     expect(g.some((f) => f.t === 'split')).toBe(true);
   });
-  it('split.mitosis: the first child kill releases 2 more children, once a shot', () => {
+  it('split.mitosis: the first child kill releases MITOSIS_KIDS more children, once a shot', () => {
     const s = mlab(['split.mitosis'], SPLIT, 90, 260);
     stillShot(s);
     const kid = { id: s.nextId++, kind: 'split' as const, x: 90, y: 150, vx: 0, vy: -200, r: 2.5, mass: 0.5, life: Infinity, resting: false, banked: false };
@@ -2551,9 +2551,9 @@ describe('v0.6 M3: split', () => {
     const b = dummy(s, 'grunt', 140, 60, 1);
     const n0 = s.balls.length;
     kill(s, a, 'split', [], kid);
-    expect(s.balls.length).toBe(n0 + 2);
+    expect(s.balls.length).toBe(n0 + MITOSIS_KIDS);
     kill(s, b, 'split', [], kid);
-    expect(s.balls.length).toBe(n0 + 2);
+    expect(s.balls.length).toBe(n0 + MITOSIS_KIDS);
     // Without the capstone (or a hero kill): nothing.
     const t = mlab([], SPLIT, 90, 260);
     stillShot(t);
